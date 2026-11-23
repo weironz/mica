@@ -3103,7 +3103,7 @@ fn render_divider_block_view(env: &BlockRenderEnv, idx: usize) -> impl IntoEleme
     .child(view().w_full().h(px(1.5)).bg(move || palette(dark_mode.get()).quote_bar))
 }
 
-// ── 9. Fullscreen Zoom Lightbox Modal (Mermaid & Images) ─────────────────────
+// ── 9. Floating Zoom & Pan Lightbox Dialog (Mermaid & Images) ────────────────
 
 pub fn render_lightbox_modal(
   lightbox: Signal<Option<LightboxContent>>,
@@ -3111,6 +3111,11 @@ pub fn render_lightbox_modal(
   dark_mode: Signal<bool>,
 ) -> impl IntoElement {
   let zoom = signal(1.0_f32);
+  let pan = signal((0.0_f32, 0.0_f32));
+  let dragging = signal(false);
+  let drag_start_page = signal((0.0_f32, 0.0_f32));
+  let drag_start_pan = signal((0.0_f32, 0.0_f32));
+  let canvas_size = signal((960.0_f32, 580.0_f32));
   let show_source = signal(false);
 
   when(move || lightbox.get().is_some(), {
@@ -3126,162 +3131,326 @@ pub fn render_lightbox_modal(
         LightboxContent::Image { .. } => "图片预览",
       };
       let is_mermaid = matches!(content, LightboxContent::Mermaid { .. });
+      let base_size = signal((780.0_f32, 500.0_f32));
+      let apply_zoom = move |target: f32| {
+        let old_z = zoom.get_untracked().max(0.01);
+        let new_z = target.clamp(0.25, 6.0);
+        let ratio = new_z / old_z;
+        let (ox, oy) = pan.get_untracked();
+        zoom.set(new_z);
+        pan.set((ox * ratio, oy * ratio));
+      };
+      let close_dialog = move || {
+        zoom.set(1.0);
+        pan.set((0.0, 0.0));
+        dragging.set(false);
+        show_source.set(false);
+        lightbox.set(None);
+      };
+
+      // Interactive zoom/pan canvas shared by Mermaid diagrams and images.
+      let build_zoom_pan_stage = move |stage_content: AnyElement| {
+        view()
+          .test_id("lightbox-pan-stage")
+          .flex_1()
+          .w_full()
+          .min_h(px(0.0))
+          .relative()
+          .overflow_hidden()
+          .bg(move || palette(dark_mode.get()).surface_sunken)
+          .cursor(Cursor::Grab)
+          .on_layout(move |b: &Bounds<Points>| {
+            let (w, h) = (b.size.width.0, b.size.height.0);
+            if w > 10.0 && h > 10.0 {
+              let (pw, ph) = canvas_size.get_untracked();
+              if (pw - w).abs() > 2.0 || (ph - h).abs() > 2.0 {
+                canvas_size.set((w, h));
+              }
+            }
+          })
+          .on_wheel(move |ev: &WheelEvent| {
+            let dy = match ev.delta {
+              WheelDelta::Points(pt) => f32::from(pt.y),
+              WheelDelta::Lines(pt) => pt.y * 24.0,
+            };
+            if dy.abs() > 0.01 {
+              let factor = if dy < 0.0 { 1.12 } else { 1.0 / 1.12 };
+              apply_zoom(zoom.get_untracked() * factor);
+            }
+          })
+          .claim_touches(TouchClaim::on_start())
+          .keep_touches(true)
+          .on_responder_grant(move |e: &ResponderEvent| {
+            dragging.set(true);
+            drag_start_page.set((f32::from(e.page.x), f32::from(e.page.y)));
+            drag_start_pan.set(pan.get_untracked());
+          })
+          .on_responder_move(move |e: &ResponderEvent| {
+            if !dragging.get_untracked() {
+              return;
+            }
+            let (sx, sy) = drag_start_page.get_untracked();
+            let (px0, py0) = drag_start_pan.get_untracked();
+            pan.set((px0 + f32::from(e.page.x) - sx, py0 + f32::from(e.page.y) - sy));
+          })
+          .on_responder_release(move |_: &ResponderEvent| {
+            dragging.set(false);
+          })
+          .child(
+            view()
+              .absolute()
+              .left(move || {
+                let (cw, _) = canvas_size.get();
+                let (ox, _) = pan.get();
+                let (bw, _) = base_size.get();
+                px((cw - bw * zoom.get()) * 0.5 + ox)
+              })
+              .top(move || {
+                let (_, ch) = canvas_size.get();
+                let (_, oy) = pan.get();
+                let (_, bh) = base_size.get();
+                px((ch - bh * zoom.get()) * 0.5 + oy)
+              })
+              .pointer_events(PointerEvents::None)
+              .child(stage_content),
+          )
+          .child(
+            view()
+              .absolute()
+              .left(px(12.0))
+              .bottom(px(10.0))
+              .px_2()
+              .py_1()
+              .rounded(px(6.0))
+              .bg(move || palette(dark_mode.get()).surface_overlay)
+              .border_1()
+              .border_color(move || palette(dark_mode.get()).border_subtle)
+              .pointer_events(PointerEvents::None)
+              .child(
+                text("滚轮缩放 · 按住拖拽平移")
+                  .text_size(px(11.5))
+                  .text_color(move || palette(dark_mode.get()).text_faint),
+              ),
+          )
+      };
 
       view()
-        .test_id("mica-lightbox-modal")
+        .test_id("mica-lightbox-backdrop")
         .absolute()
-        .top(px(0.0))
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(px(0.0))
+        .inset_0()
         .z_index(65)
-        .bg(move || palette(dark_mode.get()).surface_base)
-        // Top control bar inside the editor viewport (cleanly below 34px Windows caption bar)
+        .items_center()
+        .justify_center()
+        .bg(move || palette(dark_mode.get()).backdrop)
+        .child(
+          button()
+            .test_id("lightbox-backdrop-dismiss")
+            .accessibility_label("关闭预览弹窗")
+            .absolute()
+            .inset_0()
+            .on_press(close_dialog),
+        )
         .child(
           view()
-            .w_full()
-            .h(px(46.0))
-            .px_4()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(move || palette(dark_mode.get()).border_subtle)
+            .test_id("mica-lightbox-modal")
+            .w(relative(0.86))
+            .max_w(px(1080.0))
+            .h(relative(0.82))
+            .max_h(px(740.0))
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(move || palette(dark_mode.get()).border_normal)
+            .bg(move || palette(dark_mode.get()).surface_overlay)
+            .overflow_hidden()
+            .shadow_md()
+            .z_index(66)
             .child(
-              text(title_text)
-                .text_size(px(14.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(move || palette(dark_mode.get()).text_primary),
-            )
-            .child(
-              view()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(mini_chip("−", dark_mode, move || {
-                  zoom.set((zoom.get_untracked() - 0.25).clamp(0.4, 4.0));
-                }))
-                .child(
-                  text(move || format!("{}%", (zoom.get() * 100.0).round() as i32))
-                    .text_size(px(12.5))
-                    .text_color(move || palette(dark_mode.get()).text_muted),
-                )
-                .child(mini_chip("+", dark_mode, move || {
-                  zoom.set((zoom.get_untracked() + 0.25).clamp(0.4, 4.0));
-                }))
-                .child(mini_chip("100%", dark_mode, move || zoom.set(1.0)))
-                .child(when(move || is_mermaid, move || {
-                  mini_chip("源码", dark_mode, move || {
-                    show_source.set(!show_source.get_untracked());
-                  })
-                }))
-                .child(
-                  button()
-                    .test_id("lightbox-close-btn")
-                    .px_3()
-                    .py_1()
-                    .rounded(px(6.0))
-                    .bg(move || palette(dark_mode.get()).accent)
-                    .on_press(move || {
-                      zoom.set(1.0);
-                      show_source.set(false);
-                      lightbox.set(None);
-                    })
-                    .child(text("关闭").text_size(px(12.5)).text_color(nsh_core::color::white())),
-                ),
-            ),
-        )
-        .child(match content {
-          LightboxContent::Mermaid { block_index, source } => {
-            let src_svg = source.clone();
-            let src_ed = source;
-            view()
-              .flex_1()
-              .w_full()
-              .min_h(px(0.0))
-              .child(
-                scroll()
-                  .flex_1()
-                  .w_full()
-                  .child(
-                    view()
-                      .w_full()
-                      .p_8()
-                      .items_center()
-                      .justify_center()
-                      .child(dynamic(move || {
-                        let z = zoom.get();
-                        if let Some(svg_markup) = render_mermaid_svg_for_theme(&src_svg, dark_mode.get()) {
-                          let (bw, bh) = parse_svg_aspect_size(&svg_markup, 1120.0, 640.0);
-                          image(ImageSrc::svg_markup(&svg_markup))
-                            .w(px(bw * z))
-                            .h(px(bh * z))
-                            .into_element()
-                        } else {
-                          text(src_svg.clone())
-                            .text_size(px(13.0))
-                            .text_color(move || palette(dark_mode.get()).text_primary)
-                            .into_element()
-                        }
-                      })),
-                  ),
-              )
-              .child(when(move || show_source.get(), move || {
-                let br_e = br_s.clone();
-                let se = src_ed.clone();
-                view()
-                  .w_full()
-                  .h(px(220.0))
-                  .p_3()
-                  .border_t_1()
-                  .border_color(move || palette(dark_mode.get()).border_normal)
-                  .bg(move || palette(dark_mode.get()).code_bg)
-                  .child(
-                    editor()
-                      .w_full()
-                      .h_full()
-                      .value(Some(SharedString::from(se)))
-                      .font_size(px(13.0))
-                      .line_height(px(20.0))
-                      .styles(move || code_editor_styles(dark_mode.get()))
-                      .on_change(move |v: &SharedString| {
-                        br_e.update_block_source_at(block_index, v.as_ref());
-                        lightbox.set(Some(LightboxContent::Mermaid {
-                          block_index,
-                          source: v.to_string(),
-                        }));
-                      }),
-                  )
-              }))
-              .into_element()
-          }
-          LightboxContent::Image { url, alt } => scroll()
-            .flex_1()
-            .w_full()
-            .child(
+              // Floating dialog header bar
               view()
                 .w_full()
-                .p_8()
-                .gap_3()
+                .h(px(46.0))
+                .flex_shrink_0()
+                .px_4()
+                .flex_row()
                 .items_center()
-                .justify_center()
-                .child(dynamic(move || {
-                  let z = zoom.get();
-                  image(ImageSrc::from(url.clone()))
-                    .w(px(820.0 * z))
-                    .h(px(540.0 * z))
-                }))
-                .child(when({ let has_a = !alt.trim().is_empty(); move || has_a }, {
-                  let a = alt.clone();
-                  move || {
-                    text(a.clone())
-                      .text_size(px(13.0))
-                      .text_color(move || palette(dark_mode.get()).text_muted)
-                  }
-                })),
+                .justify_between()
+                .border_b_1()
+                .border_color(move || palette(dark_mode.get()).border_subtle)
+                .child(
+                  text(title_text)
+                    .text_size(px(14.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(move || palette(dark_mode.get()).text_primary),
+                )
+                .child(
+                  view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                      button()
+                        .test_id("lightbox-zoom-out")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .on_press(move || apply_zoom(zoom.get_untracked() / 1.25))
+                        .child(
+                          text("−")
+                            .text_size(px(12.0))
+                            .text_color(move || palette(dark_mode.get()).text_primary),
+                        ),
+                    )
+                    .child(
+                      text(move || format!("{}%", (zoom.get() * 100.0).round() as i32))
+                        .text_size(px(12.5))
+                        .text_color(move || palette(dark_mode.get()).text_muted),
+                    )
+                    .child(
+                      button()
+                        .test_id("lightbox-zoom-in")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .on_press(move || apply_zoom(zoom.get_untracked() * 1.25))
+                        .child(
+                          text("+")
+                            .text_size(px(12.0))
+                            .text_color(move || palette(dark_mode.get()).text_primary),
+                        ),
+                    )
+                    .child(
+                      button()
+                        .test_id("lightbox-zoom-reset")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .on_press(move || {
+                          zoom.set(1.0);
+                          pan.set((0.0, 0.0));
+                        })
+                        .child(
+                          text("重置")
+                            .text_size(px(11.5))
+                            .text_color(move || palette(dark_mode.get()).text_primary),
+                        ),
+                    )
+                    .child(when(move || is_mermaid, move || {
+                      mini_chip("源码", dark_mode, move || {
+                        show_source.set(!show_source.get_untracked());
+                      })
+                    }))
+                    .child(
+                      button()
+                        .test_id("lightbox-close-btn")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(6.0))
+                        .bg(move || palette(dark_mode.get()).accent)
+                        .on_press(close_dialog)
+                        .child(text("关闭").text_size(px(12.5)).text_color(nsh_core::color::white())),
+                    ),
+                ),
             )
-            .into_element(),
-        })
+            .child(match content {
+              LightboxContent::Mermaid { block_index, source } => {
+                let live_source = signal(source.clone());
+                let init_svg = render_mermaid_svg_for_theme(&source, dark_mode.get_untracked());
+                let (init_w, init_h) = init_svg
+                  .as_deref()
+                  .map(|s| parse_svg_aspect_size(s, 960.0, 520.0))
+                  .unwrap_or((680.0, 320.0));
+                base_size.set((init_w, init_h));
+
+                let diagram_el = dynamic(move || {
+                  let current_src = live_source.get();
+                  if let Some(svg_markup) = render_mermaid_svg_for_theme(&current_src, dark_mode.get()) {
+                    let (w0, h0) = parse_svg_aspect_size(&svg_markup, 960.0, 520.0);
+                    let (pw, ph) = base_size.get_untracked();
+                    if (pw - w0).abs() > 1.0 || (ph - h0).abs() > 1.0 {
+                      base_size.set((w0, h0));
+                    }
+                    image(ImageSrc::svg_markup(&svg_markup))
+                      .w(move || px(w0 * zoom.get()))
+                      .h(move || px(h0 * zoom.get()))
+                      .into_element()
+                  } else {
+                    text(current_src)
+                      .text_size(px(13.0))
+                      .text_color(move || palette(dark_mode.get()).text_primary)
+                      .into_element()
+                  }
+                })
+                .into_element();
+
+                view()
+                  .flex_1()
+                  .w_full()
+                  .min_h(px(0.0))
+                  .child(build_zoom_pan_stage(diagram_el))
+                  .child(when(move || show_source.get(), move || {
+                    let br_e = br_s.clone();
+                    let se = live_source.get_untracked();
+                    view()
+                      .w_full()
+                      .h(px(200.0))
+                      .flex_shrink_0()
+                      .p_3()
+                      .border_t_1()
+                      .border_color(move || palette(dark_mode.get()).border_normal)
+                      .bg(move || palette(dark_mode.get()).code_bg)
+                      .child(
+                        editor()
+                          .w_full()
+                          .h_full()
+                          .value(Some(SharedString::from(se)))
+                          .font_size(px(13.0))
+                          .line_height(px(20.0))
+                          .styles(move || code_editor_styles(dark_mode.get()))
+                          .on_change(move |v: &SharedString| {
+                            br_e.update_block_source_at(block_index, v.as_ref());
+                            live_source.set(v.to_string());
+                          }),
+                      )
+                  }))
+                  .into_element()
+              }
+              LightboxContent::Image { url, alt } => {
+                let (bw, bh) = (780.0_f32, 500.0_f32);
+                base_size.set((bw, bh));
+                let img_el = image(ImageSrc::from(url))
+                  .w(move || px(bw * zoom.get()))
+                  .h(move || px(bh * zoom.get()))
+                  .into_element();
+                view()
+                  .flex_1()
+                  .w_full()
+                  .min_h(px(0.0))
+                  .child(build_zoom_pan_stage(img_el))
+                  .child(when({ let has_a = !alt.trim().is_empty(); move || has_a }, {
+                    let a = alt.clone();
+                    move || {
+                      view()
+                        .w_full()
+                        .flex_shrink_0()
+                        .px_4()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(move || palette(dark_mode.get()).border_subtle)
+                        .items_center()
+                        .child(
+                          text(a.clone())
+                            .text_size(px(12.5))
+                            .text_color(move || palette(dark_mode.get()).text_muted),
+                        )
+                    }
+                  }))
+                  .into_element()
+              }
+            }),
+        )
         .into_element()
     }
   })

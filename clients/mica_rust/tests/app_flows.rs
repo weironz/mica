@@ -314,12 +314,21 @@ fn virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch() {
   app.wait_for("id:code-lang-mermaid").unwrap();
   app.press("id:code-lang-mermaid").unwrap();
 
-  // Mermaid preview renders and clicking it opens fullscreen zoom Lightbox modal
+  // Mermaid preview renders and clicking it opens floating zoom/pan Lightbox dialog
   app.wait_for("id:mermaid-preview-btn").unwrap();
   app.press("id:mermaid-preview-btn").unwrap();
+  app.wait_for("id:mica-lightbox-modal").unwrap();
+  app.wait_for("id:lightbox-pan-stage").unwrap();
   app.wait_for("id:lightbox-close-btn").unwrap();
   app.wait_for("100%").unwrap();
+  app.press("id:lightbox-zoom-in").unwrap();
+  app.wait_for("125%").unwrap();
+  app.press("id:lightbox-zoom-reset").unwrap();
+  app.wait_for("100%").unwrap();
   app.press("id:lightbox-close-btn").unwrap();
+  app
+    .wait_for_gone("id:mica-lightbox-modal", std::time::Duration::from_millis(500))
+    .unwrap();
 }
 
 #[test]
