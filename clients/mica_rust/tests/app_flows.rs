@@ -101,8 +101,13 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.wait_for("常用快捷键").unwrap();
   app.press("id:settings-close-btn").unwrap();
 
-  // 12. Trash active page and restore from Settings -> 回收站 (sidebar footer hides Recycle Bin 1:1 with Flutter)
-  app.press("id:trash-page-btn").unwrap();
+  // 12. Trash active page via `⋯` page menu (header trash icon intentionally removed) and restore from Settings -> 回收站
+  app
+    .wait_for_gone("id:trash-page-btn", std::time::Duration::from_millis(200))
+    .unwrap();
+  app.press("id:ed-more").unwrap();
+  app.wait_for("id:page-menu-trash").unwrap();
+  app.press("id:page-menu-trash").unwrap();
   app.press("id:open-settings-btn").unwrap();
   app.press("id:settings-tab-trash").unwrap();
   app.wait_for("id:trash-restore-btn").unwrap();

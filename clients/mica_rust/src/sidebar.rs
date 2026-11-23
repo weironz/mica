@@ -394,26 +394,34 @@ fn workspace_header(
     )
     .child(
       view().flex_row().items_center().gap_1().flex_shrink_0()
-        .child(
+        .child(crate::tooltip::with_tooltip(
           button()
             .test_id("open-graph-btn").accessibility_label("关系图")
             .w(px(28.0)).h(px(28.0)).items_center().justify_center().rounded(px(6.0))
             .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-            .on_press(move || (cb_graph.on_open_graph)())
+            .on_press(move || {
+              crate::tooltip::hide_tooltip();
+              (cb_graph.on_open_graph)();
+            })
             .child(dynamic(move || {
               mica_icons::graph_nodes(palette(dark_mode.get()).text_muted_hex)
             })),
-        )
-        .child(
+          "关系图谱",
+        ))
+        .child(crate::tooltip::with_tooltip(
           button()
             .test_id("open-ws-settings-btn").accessibility_label("工作区设置")
             .w(px(28.0)).h(px(28.0)).items_center().justify_center().rounded(px(6.0))
             .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-            .on_press(move || (cb_ws_set.on_open_workspace_settings)())
+            .on_press(move || {
+              crate::tooltip::hide_tooltip();
+              (cb_ws_set.on_open_workspace_settings)();
+            })
             .child(dynamic(move || {
               mica_icons::settings_gear(palette(dark_mode.get()).text_muted_hex)
             })),
-        ),
+          "工作区设置",
+        )),
     )
 }
 
@@ -593,22 +601,30 @@ fn pages_section_header(
     )
     .child(
       view().flex_row().items_center().gap_1()
-        .child(
+        .child(crate::tooltip::with_tooltip(
           button()
             .test_id("new-page-btn").accessibility_label("新建页面")
             .w(px(24.0)).h(px(24.0)).items_center().justify_center().rounded(px(6.0))
             .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-            .on_press(move || (cb_p.on_new_page)())
+            .on_press(move || {
+              crate::tooltip::hide_tooltip();
+              (cb_p.on_new_page)();
+            })
             .child(dynamic(move || mica_icons::plus(palette(dark_mode.get()).text_faint_hex))),
-        )
-        .child(
+          "新建页面",
+        ))
+        .child(crate::tooltip::with_tooltip(
           button()
             .test_id("new-folder-btn").accessibility_label("新建文件夹")
             .w(px(24.0)).h(px(24.0)).items_center().justify_center().rounded(px(6.0))
             .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-            .on_press(move || (cb_f.on_new_folder)())
+            .on_press(move || {
+              crate::tooltip::hide_tooltip();
+              (cb_f.on_new_folder)();
+            })
             .child(dynamic(move || mica_icons::folder_plus(palette(dark_mode.get()).text_faint_hex))),
-        ),
+          "新建文件夹",
+        )),
     )
 }
 

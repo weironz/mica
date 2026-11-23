@@ -45,6 +45,7 @@ pub mod share_dialog;
 pub mod sidebar;
 pub mod storage;
 pub mod text_geometry;
+pub mod tooltip;
 pub mod touch_selection;
 pub mod transfer;
 pub mod transfer_dialog;
@@ -419,6 +420,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let right_panel_width = signal(right_sidebar::RIGHT_SIDEBAR_DEFAULT_WIDTH);
   let right_panel_tab = signal(ToolsTab::Outline);
   let viewport_width = signal(1280.0_f32);
+  let tooltip_host = tooltip::install_tooltip_host(viewport_width);
   let is_narrow = computed(move || viewport_width.get() < responsive_shell::NARROW_BREAKPOINT);
   let narrow_tabs_open = signal(false);
   {
@@ -3083,7 +3085,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             .window_drag(true)
             .child(
               // Clickable top-left M logo opening 1:1 Application Menu
-              view().window_drag(false).child(
+              view().window_drag(false).child(tooltip::with_tooltip(
                 button()
                   .test_id("app-menu-btn")
                   .accessibility_label("应用菜单")
@@ -3094,15 +3096,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                   .rounded(px(6.0))
                   .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                   .on_press(move || {
+                    tooltip::hide_tooltip();
                     workspace_menu_open.set(false);
                     account_menu_open.set(false);
                     app_menu_open.set(!app_menu_open.get_untracked());
                   })
                   .child(mica_icons::mica_logo()),
-              ),
+                "应用菜单",
+              )),
             )
             .child(
-              view().window_drag(false).child(
+              view().window_drag(false).child(tooltip::with_dynamic_tooltip(
                 button()
                   .test_id("toggle-sidebar-btn")
                   .accessibility_label("折叠或展开左侧边栏")
@@ -3112,11 +3116,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                   .justify_center()
                   .rounded(px(6.0))
                   .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                  .on_press(move || sidebar_open.set(!sidebar_open.get_untracked()))
+                  .on_press(move || {
+                    tooltip::hide_tooltip();
+                    sidebar_open.set(!sidebar_open.get_untracked());
+                  })
                   .child(dynamic(move || {
                     mica_icons::sidebar_toggle(palette(dark_mode.get()).text_muted_hex)
                   })),
-              ),
+                move || if sidebar_open.get_untracked() { "折叠侧边栏" } else { "展开侧边栏" },
+              )),
             ),
         )
         .child(
@@ -3142,7 +3150,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 .gap(px(2.0))
                 .pr_1()
                 .window_drag(false)
-                .child(
+                .child(tooltip::with_tooltip(
                   button()
                     .test_id("nav-back-btn")
                     .accessibility_label("后退")
@@ -3152,7 +3160,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                     .justify_center()
                     .rounded(px(6.0))
                     .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || on_nav_back())
+                    .on_press(move || {
+                      tooltip::hide_tooltip();
+                      on_nav_back();
+                    })
                     .child(dynamic(move || {
                       let p = palette(dark_mode.get());
                       mica_icons::chevron_left(if can_go_back.get() {
@@ -3161,8 +3172,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                         p.text_ghost_hex
                       })
                     })),
-                )
-                .child(
+                  "后退",
+                ))
+                .child(tooltip::with_tooltip(
                   button()
                     .test_id("nav-forward-btn")
                     .accessibility_label("前进")
@@ -3172,7 +3184,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                     .justify_center()
                     .rounded(px(6.0))
                     .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || on_nav_forward())
+                    .on_press(move || {
+                      tooltip::hide_tooltip();
+                      on_nav_forward();
+                    })
                     .child(dynamic(move || {
                       let p = palette(dark_mode.get());
                       mica_icons::chevron_right(if can_go_forward.get() {
@@ -3181,7 +3196,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                         p.text_ghost_hex
                       })
                     })),
-                ),
+                  "前进",
+                )),
             )
             .child(dynamic(move || {
               if is_narrow.get() {
@@ -3268,7 +3284,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 .justify_center()
                 .pl_1()
                 .window_drag(false)
-                .child(
+                .child(tooltip::with_tooltip(
                   button()
                     .test_id("tab-new-page-btn")
                     .accessibility_label("新建标签页")
@@ -3278,11 +3294,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                     .justify_center()
                     .rounded(px(6.0))
                     .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || new_tab_menu_open.set(!new_tab_menu_open.get_untracked()))
+                    .on_press(move || {
+                      tooltip::hide_tooltip();
+                      new_tab_menu_open.set(!new_tab_menu_open.get_untracked());
+                    })
                     .child(dynamic(move || {
                       mica_icons::plus(palette(dark_mode.get()).text_muted_hex)
                     })),
-                ),
+                  "新建标签页",
+                )),
             ),
         ),
     )
@@ -3703,6 +3723,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           .into_element()
       }
     }))
+    // 12. Global dark-pill hover tooltip overlay (never clipped by overflow_hidden)
+    .child(tooltip::tooltip_overlay(tooltip_host, dark_mode))
 }
 
 fn resolve_parent_folder_name(tree: &PageTreeModel, doc_id: Uuid) -> Option<String> {

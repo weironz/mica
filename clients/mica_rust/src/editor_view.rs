@@ -1101,7 +1101,6 @@ pub fn editor_view(
   let h_title_chg = header.clone();
   let h_board = header.clone();
   let h_share = header.clone();
-  let h_trash = header.clone();
   let h_fav = header.clone();
   let h_right = header.clone();
   let h_copy_id = header.clone();
@@ -1497,7 +1496,7 @@ pub fn editor_view(
                   .truncate()
                 }),
             )
-            .child(
+            .child(crate::tooltip::with_tooltip(
               button()
                 .test_id("ed-copy-path")
                 .accessibility_label("复制页面路径")
@@ -1509,6 +1508,7 @@ pub fn editor_view(
                 .rounded(px(5.0))
                 .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                 .on_press(move || {
+                  crate::tooltip::hide_tooltip();
                   // Match Flutter `_pagePath()`: copy human-readable containing path
                   // (`Workspace/Folder/...`, or full path segments joined with `/`),
                   // NOT `mica://page/<uuid>` (which belongs to the right-side copy-link button).
@@ -1547,7 +1547,8 @@ pub fn editor_view(
                     mica_icons::copy_icon(p.text_muted_hex)
                   }
                 })),
-            ),
+              "复制路径",
+            )),
         )
         .child(when(move || show_format_bar.get() && header_single_row.get(), {
           let fb = fmt_bar_inline.clone();
@@ -1567,7 +1568,7 @@ pub fn editor_view(
             }))
             .child(toolbar_btn(
               "toggle-right-panel-btn",
-              "切换右侧大纲与页面信息边栏",
+              "页面大纲与信息",
               dark_mode,
               right_open,
               move || (h_right.on_toggle_right_panel)(),
@@ -1575,7 +1576,7 @@ pub fn editor_view(
             ))
             .child(toolbar_btn(
               "ed-open-board",
-              "打开无限白板",
+              "无限白板",
               dark_mode,
               signal(false),
               move || (h_board.on_open_board)(),
@@ -1585,28 +1586,34 @@ pub fn editor_view(
               let hs = h_share.clone();
               move || {
                 let hs = hs.clone();
-                button()
-                  .test_id("ed-share-btn")
-                  .accessibility_label("共享页面")
-                  .h(px(26.0))
-                  .px_2()
-                  .flex_row()
-                  .items_center()
-                  .gap_1()
-                  .rounded(px(5.0))
-                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                  .on_press(move || (hs.on_share)())
-                  .child(dynamic(move || {
-                    lock_icon(palette(dark_mode.get()).text_muted_hex)
-                  }))
-                  .child(
-                    text("共享")
-                      .text_size(px(12.0))
-                      .text_color(move || palette(dark_mode.get()).text_primary),
-                  )
+                crate::tooltip::with_tooltip(
+                  button()
+                    .test_id("ed-share-btn")
+                    .accessibility_label("共享页面")
+                    .h(px(26.0))
+                    .px_2()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .rounded(px(5.0))
+                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                    .on_press(move || {
+                      crate::tooltip::hide_tooltip();
+                      (hs.on_share)();
+                    })
+                    .child(dynamic(move || {
+                      lock_icon(palette(dark_mode.get()).text_muted_hex)
+                    }))
+                    .child(
+                      text("共享")
+                        .text_size(px(12.0))
+                        .text_color(move || palette(dark_mode.get()).text_primary),
+                    ),
+                  "共享页面",
+                )
               }
             }))
-            .child(
+            .child(crate::tooltip::with_tooltip(
               button()
                 .test_id("ed-copy-link")
                 .accessibility_label("复制链接")
@@ -1617,6 +1624,7 @@ pub fn editor_view(
                 .rounded(px(5.0))
                 .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                 .on_press(move || {
+                  crate::tooltip::hide_tooltip();
                   let id = h_copy_link_id.page_id_str.get_untracked();
                   set_clipboard(format!("mica://page/{id}"));
                   copied_link.set(true);
@@ -1630,8 +1638,9 @@ pub fn editor_view(
                     mica_icons::link_icon(p.text_muted_hex)
                   }
                 })),
-            )
-            .child(
+              "复制页面链接",
+            ))
+            .child(crate::tooltip::with_dynamic_tooltip(
               button()
                 .test_id("ed-star")
                 .accessibility_label("收藏或取消收藏当前页面")
@@ -1641,7 +1650,10 @@ pub fn editor_view(
                 .justify_center()
                 .rounded(px(5.0))
                 .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                .on_press(move || (h_fav.on_toggle_favorite)())
+                .on_press(move || {
+                  crate::tooltip::hide_tooltip();
+                  (h_fav.on_toggle_favorite)();
+                })
                 .child(dynamic(move || {
                   let p = palette(dark_mode.get());
                   if is_fav.get() {
@@ -1650,18 +1662,11 @@ pub fn editor_view(
                     mica_icons::star_icon(p.text_muted_hex)
                   }
                 })),
-            )
-            .child(toolbar_btn(
-              "trash-page-btn",
-              "移入回收站",
-              dark_mode,
-              signal(false),
-              move || (h_trash.on_trash_page)(),
-              mica_icons::trash_icon,
+              move || if is_fav.get_untracked() { "取消收藏" } else { "收藏" },
             ))
             .child(toolbar_btn(
               "ed-more",
-              "页面菜单",
+              "更多操作",
               dark_mode,
               page_menu_open,
               move || page_menu_open.set(!page_menu_open.get_untracked()),
@@ -3841,32 +3846,38 @@ where
   F: Fn(&'static str) -> I + 'static,
   I: IntoElement + 'static,
 {
-  button()
-    .test_id(tid)
-    .accessibility_label(a11y)
-    .w(px(28.0))
-    .h(px(28.0))
-    .items_center()
-    .justify_center()
-    .rounded(px(5.0))
-    .bg(move || {
-      let p = palette(dark_mode.get());
-      if active.get() {
-        p.surface_hover
-      } else {
-        p.surface_base
-      }
-    })
-    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-    .on_press(on_click)
-    .child(dynamic(move || {
-      let p = palette(dark_mode.get());
-      icon_fn(if active.get() {
-        p.text_primary_hex
-      } else {
-        p.text_muted_hex
+  crate::tooltip::with_tooltip(
+    button()
+      .test_id(tid)
+      .accessibility_label(a11y)
+      .w(px(28.0))
+      .h(px(28.0))
+      .items_center()
+      .justify_center()
+      .rounded(px(5.0))
+      .bg(move || {
+        let p = palette(dark_mode.get());
+        if active.get() {
+          p.surface_hover
+        } else {
+          p.surface_base
+        }
       })
-    }))
+      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+      .on_press(move || {
+        crate::tooltip::hide_tooltip();
+        on_click();
+      })
+      .child(dynamic(move || {
+        let p = palette(dark_mode.get());
+        icon_fn(if active.get() {
+          p.text_primary_hex
+        } else {
+          p.text_muted_hex
+        })
+      })),
+    a11y,
+  )
 }
 
 fn toolbar_btn_active<F, I>(
@@ -3881,32 +3892,38 @@ where
   F: Fn(&'static str) -> I + 'static,
   I: IntoElement + 'static,
 {
-  button()
-    .test_id(tid)
-    .accessibility_label(a11y)
-    .w(px(28.0))
-    .h(px(28.0))
-    .items_center()
-    .justify_center()
-    .rounded(px(5.0))
-    .bg(move || {
-      let p = palette(dark_mode.get());
-      if active.get() {
-        p.surface_hover
-      } else {
-        p.surface_base
-      }
-    })
-    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-    .on_press(on_click)
-    .child(dynamic(move || {
-      let p = palette(dark_mode.get());
-      icon_fn(if active.get() {
-        p.text_primary_hex
-      } else {
-        p.text_muted_hex
+  crate::tooltip::with_tooltip(
+    button()
+      .test_id(tid)
+      .accessibility_label(a11y)
+      .w(px(28.0))
+      .h(px(28.0))
+      .items_center()
+      .justify_center()
+      .rounded(px(5.0))
+      .bg(move || {
+        let p = palette(dark_mode.get());
+        if active.get() {
+          p.surface_hover
+        } else {
+          p.surface_base
+        }
       })
-    }))
+      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+      .on_press(move || {
+        crate::tooltip::hide_tooltip();
+        on_click();
+      })
+      .child(dynamic(move || {
+        let p = palette(dark_mode.get());
+        icon_fn(if active.get() {
+          p.text_primary_hex
+        } else {
+          p.text_muted_hex
+        })
+      })),
+    a11y,
+  )
 }
 
 fn toolbar_btn_dim<F, I>(
@@ -3921,24 +3938,30 @@ where
   F: Fn(&'static str) -> I + 'static,
   I: IntoElement + 'static,
 {
-  button()
-    .test_id(tid)
-    .accessibility_label(a11y)
-    .w(px(28.0))
-    .h(px(28.0))
-    .items_center()
-    .justify_center()
-    .rounded(px(5.0))
-    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-    .on_press(on_click)
-    .child(dynamic(move || {
-      let p = palette(dark_mode.get());
-      icon_fn(if enabled.get() {
-        p.text_muted_hex
-      } else {
-        p.text_ghost_hex
+  crate::tooltip::with_tooltip(
+    button()
+      .test_id(tid)
+      .accessibility_label(a11y)
+      .w(px(28.0))
+      .h(px(28.0))
+      .items_center()
+      .justify_center()
+      .rounded(px(5.0))
+      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+      .on_press(move || {
+        crate::tooltip::hide_tooltip();
+        on_click();
       })
-    }))
+      .child(dynamic(move || {
+        let p = palette(dark_mode.get());
+        icon_fn(if enabled.get() {
+          p.text_muted_hex
+        } else {
+          p.text_ghost_hex
+        })
+      })),
+    a11y,
+  )
 }
 
 fn toolbar_sep(dark_mode: Signal<bool>) -> impl IntoElement {
