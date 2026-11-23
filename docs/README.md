@@ -43,7 +43,7 @@
 | [local-first-p2-design.md](architecture/local-first-p2-design.md) | P2:云文档离线编辑 |
 | [local-first-p3-design.md](architecture/local-first-p3-design.md) | P3:溶解双模式(本地 / 已连云共存) |
 | [fullstack-rust-architecture.md](architecture/fullstack-rust-architecture.md) | **全栈 Rust 三层标杆架构与分阶段开发计划**（L1/L2/L3、路线二-B 主权在我、Phase 0–3 路线图，分支 `feat/fullstack-rust-architecture`，跟踪 #172） |
-| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | 前期调研与验证记录（历史）：GPUI / gpui-kit / Native Shell 对比、四道进入关卡与 2026-11-10/11-11 实测 |
+| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | Rust UI 壳选型调研与复审记录：前期 GPUI / gpui-kit / Native Shell 四关实测，及 2026-11-23 在“桌面=Web+移动端偏阅读”约束下对 GPUI / Dioxus / Makepad / Slint / Xilem 的横向评估与留在 `nsh` 的拍板结论 |
 
 ## features — 功能设计
 
