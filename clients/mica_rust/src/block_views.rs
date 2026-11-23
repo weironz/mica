@@ -27,8 +27,8 @@ use nsh_core::{
   Color, PropertyValue, StyleDecl, StyleKey, SubmitBehavior,
   color::Rgba,
   element::{
-    Align, ElementRef, ImageSrc, Placement, Style, Svg, element_ref, overlay, set_clipboard, svg,
-    text_measurer,
+    Align, ElementRef, ImageSrc, Placement, Style, Svg, component_ref, element_ref, overlay,
+    set_clipboard, svg, text_measurer,
   },
   geometry::{Bounds, Points, px},
   prelude::*,
@@ -1109,8 +1109,11 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
           move || {
             let br_c = br_change.clone();
             let init_val = live_src.get_untracked();
+            let prev_lines = signal(init_val.bytes().filter(|&b| b == b'\n').count() + 1);
+            let ed_ref = component_ref::<nsh_base::editor::Editor>();
             let lang_ed = lang_for_ed.clone();
             editor()
+              .component_ref(&ed_ref)
               .test_id("code-block-editor")
               .accessibility_label("代码块编辑器")
               .w_full()
@@ -1126,7 +1129,8 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .font_size(px(14.0))
               .line_height(px(22.0))
               .min_rows(Some(1u32))
-              .max_rows(Some(32u32))
+              .max_rows(None)
+              .cursor_surrounding_lines(Some(0u32))
               .scroll_beyond_last_line(EditorScrollBeyond::None)
               .styles(move || code_editor_styles(dark_mode.get()))
               .on_focus({
@@ -1159,6 +1163,20 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                 if empty {
                   code_at_start.set(true);
                   code_key_rev.update(|v| *v = v.wrapping_add(1));
+                }
+                // Work around `nsh_base::editor()` calling `show_caret()` synchronously
+                // against the pre-layout `viewport.height` when `Enter` adds a new row
+                // (`grow_height` has not laid out the taller box yet, so `scroll_y` jumps
+                // up by 1 line!). Resetting `scroll_to_line(0)` in the immediate microtask
+                // restores `scroll_y = 0` before the frame commits -> zero upward caret jump!
+                let new_lines = val.bytes().filter(|&b| b == b'\n').count() + 1;
+                if new_lines != prev_lines.get_untracked() {
+                  prev_lines.set(new_lines);
+                  spawn(async move {
+                    if let Some(api) = ed_ref.api::<nsh_base::editor::EditorApi>() {
+                      api.scroll_to_line(0);
+                    }
+                  });
                 }
                 br_c.update_block_source_live(idx, val.as_ref());
               })

@@ -614,6 +614,16 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
   app.wait_for("id:code-block-editor").unwrap();
   app.press("id:code-block-editor").unwrap();
   app.wait_for("输入代码...").unwrap();
+  // Case 5: Pressing Enter inside the code block grows cleanly without scrolling line 0 out of view.
+  app.type_text("id:code-block-editor", "line1").unwrap();
+  app.press_key("enter").unwrap();
+  app.type_text("id:code-block-editor", "line2").unwrap();
+  app.wait_for("line1").unwrap();
+  app.wait_for("line2").unwrap();
+  // Clear all lines back to empty and delete the code block with Backspace.
+  app.press_key("mod+a").unwrap();
+  app.press_key("backspace").unwrap();
+  app.wait_for("输入代码...").unwrap();
   app.press_key("backspace").unwrap();
   app
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))

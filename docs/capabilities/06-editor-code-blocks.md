@@ -36,6 +36,7 @@
 - **反例 2（画板遮挡上方代码块的语言下拉菜单）**：下拉菜单作为代码块内部 `absolute` 子元素渲染，遇到下方紧邻的 `canvas` 内嵌画板（后绘制层叠序更高）时被画板拦腰截断。必须改用顶层 `overlay().anchor(...)`。
 - **反例 3（代码块内按 Backspace 误删正文）**：正文全局 `backspace` 绑定未在 `focused_code_block.is_some()` 时注销，导致代码块内按键被外层劫持。
 - **反例 4（`nsh_base::editor()` 获焦后 LIFO 键位表覆盖导致空代码块 Backspace/Delete 无效）**：`nsh-core::Keymap::find_with` 采用逆序查找（后注册者优先）。`editor_view.rs` 在设置 `focused_code_block` 时先注册了 `backspace`，一帧后子组件 `nsh_base::editor()` 收到 OS Focus 触发其内部 `effect` 在队尾追加了自身的 `backspace`/`delete`，彻底遮蔽了外层删块绑定，且空代码块未绑定 `delete`。根治方案：在 `editor().on_focus`（同步 + 微任务 `spawn`）、`on_change` 与 `on_selection_change` 中递增 `code_key_rev` 重新排到键位表队尾，`on_blur` 清空避免干扰标题/语言输入，并对空代码块同时绑定 `backspace` 与 `delete`（`app_flows::regression_code_block_backspace_and_delete_after_live_focus` 覆盖全路径）。
+- **反例 5（代码块内按回车光标向上跳动）**：`nsh_base::editor()` 在 `Command::Newline` 后同步调用 `show_caret()`，此时 `grow_height` 尚未完成新一帧布局，`viewport.height` 仍是旧高度（少 1 行），导致内部 `vscroll` 误判光标越界并将 `scroll_y` 向上推 1 行（文字与光标瞬间上跳 22px）。根治方案：取消 `max_rows` 内滚上限（改为随行自然增高，外层文档虚拟列表统一滚动）、`cursor_surrounding_lines(Some(0))`，并在 `on_change` 行数变化时于同帧微任务调用 `EditorApi::scroll_to_line(0)`，在帧提交前将内部 `scroll_y` 归零。
 
 ---
 
