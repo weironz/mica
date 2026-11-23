@@ -658,3 +658,51 @@ fn regression_workspace_settings_modal_body_is_visible() {
     .wait_for_gone("id:workspace-settings-modal", std::time::Duration::from_millis(800))
     .unwrap();
 }
+
+#[test]
+fn regression_code_block_progressive_ctrl_a_expands_to_page() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+
+  // Type an outer paragraph, then create a code block below it.
+  app.type_text("id:mica-editor-ime-sink", "OuterKeepLine").unwrap();
+  app.wait_for("OuterKeepLine").unwrap();
+  app.press_key("enter").unwrap();
+  app.press("id:ed-slash-open").unwrap();
+  app.wait_for("id:slash-code").unwrap();
+  app.press("id:slash-code").unwrap();
+  app.wait_for("输入代码...").unwrap();
+
+  app.type_text("id:code-block-editor", "alpha_code").unwrap();
+  app.press_key("enter").unwrap();
+  app.type_text("id:code-block-editor", "beta_code").unwrap();
+  app.wait_for("alpha_code").unwrap();
+  app.wait_for("beta_code").unwrap();
+
+  // 1st Ctrl+A inside code block selects ALL code inside the block ONLY
+  // (must NOT yet expand to full-page block selection overlay).
+  app.press_key("mod+a").unwrap();
+  assert!(
+    !app.shows("id:block-selection-overlay"),
+    "1st Ctrl+A inside a non-empty code block must select only the code inside the block"
+  );
+
+  // 2nd Ctrl+A (Ctrl+AA) expands selection to the entire page (highlighting the
+  // code block as part of whole-page selection) and Backspace deletes both!
+  app.press_key("mod+a").unwrap();
+  app.wait_for("id:block-selection-overlay").unwrap();
+  app.press_key("backspace").unwrap();
+  app
+    .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
+    .unwrap();
+  assert!(
+    !app.shows("OuterKeepLine"),
+    "Backspace after Ctrl+AA whole-page selection must delete outer prose as well"
+  );
+}

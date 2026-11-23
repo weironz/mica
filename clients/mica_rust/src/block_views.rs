@@ -101,6 +101,7 @@ pub struct BlockRenderEnv {
   pub focused_code_block: Signal<Option<String>>,
   pub code_caret_at_start: Signal<bool>,
   pub code_is_empty: Signal<bool>,
+  pub code_all_selected: Signal<bool>,
   pub code_key_rev: Signal<u64>,
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
   pub table_selection: Signal<Option<TableCellSelection>>,
@@ -1117,6 +1118,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let focused_code = env.focused_code_block;
   let code_at_start = env.code_caret_at_start;
   let code_is_empty = env.code_is_empty;
+  let code_all_selected = env.code_all_selected;
   let code_key_rev = env.code_key_rev;
   let block_id = block.id.clone();
   let ai_cb = use_context::<CodeAiCallback>();
@@ -1205,6 +1207,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                   let empty = live_src.get_untracked().is_empty();
                   code_is_empty.set(empty);
                   code_at_start.set(empty);
+                  code_all_selected.set(false);
                   focused_code.set(Some(bid_c.clone()));
                   code_key_rev.update(|v| *v = v.wrapping_add(1));
                 })
@@ -1271,11 +1274,12 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                   let empty = live_src.get_untracked().is_empty();
                   focused_code.set(Some(bid_f.clone()));
                   code_is_empty.set(empty);
+                  code_all_selected.set(false);
                   if empty {
                     code_at_start.set(true);
                   }
                   // Bump `code_key_rev` synchronously AND on the next microtask so
-                  // our Backspace/Delete boundary bindings ALWAYS register AFTER
+                  // our Backspace/Delete/Ctrl+AA bindings ALWAYS register AFTER
                   // `nsh_base::editor()`'s own `focused` keymap effect (LIFO wins!).
                   code_key_rev.update(|v| *v = v.wrapping_add(1));
                   spawn(async move {
@@ -1287,12 +1291,14 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                 ed_has_os_focus.set(false);
                 code_at_start.set(false);
                 code_is_empty.set(false);
+                code_all_selected.set(false);
               })
               .on_change(move |val: &SharedString| {
                 copied.set(false);
                 live_src.set(val.to_string());
                 let empty = val.is_empty();
                 code_is_empty.set(empty);
+                code_all_selected.set(false);
                 if empty {
                   code_at_start.set(true);
                   code_key_rev.update(|v| *v = v.wrapping_add(1));
@@ -1320,8 +1326,10 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                     && s.head.line == 0
                     && s.head.column == 0
                 });
+                let all_sel = selection_covers_all_text(&live_src.get_untracked(), sels);
                 code_at_start.set(at_start);
-                if at_start {
+                code_all_selected.set(all_sel);
+                if at_start || all_sel {
                   code_key_rev.update(|v| *v = v.wrapping_add(1));
                 }
               })
@@ -3615,6 +3623,30 @@ fn code_editor_styles(dark: bool) -> EditorStyles {
   styles
 }
 
+/// Returns `true` when `sels` selects the entire contents of `src` (using
+/// 0-based line and UTF-16 column coordinates matching `nsh_base::EditorPosition`).
+fn selection_covers_all_text(src: &str, sels: &[nsh_base::EditorSelection]) -> bool {
+  if src.is_empty() {
+    return true;
+  }
+  let Some(sel) = sels.last() else {
+    return false;
+  };
+  let (start, end) = if sel.anchor <= sel.head {
+    (sel.anchor, sel.head)
+  } else {
+    (sel.head, sel.anchor)
+  };
+  if start.line != 0 || start.column != 0 {
+    return false;
+  }
+  let normalized = src.replace("\r\n", "\n");
+  let last_line = normalized.bytes().filter(|&b| b == b'\n').count() as u32;
+  let tail = normalized.rsplit('\n').next().unwrap_or("");
+  let last_col = tail.encode_utf16().count() as u32;
+  end.line == last_line && end.column == last_col
+}
+
 fn copy_with_reset(text: String, copied: Signal<bool>, copy_gen: Signal<u64>) {
   set_clipboard(text);
   copied.set(true);
@@ -3706,5 +3738,46 @@ mod tests {
       raster.height,
       &svg[..svg.len().min(600)]
     );
+  }
+
+  #[test]
+  fn selection_covers_all_text_handles_single_multiline_cjk_and_reverse() {
+    use nsh_base::{EditorPosition, EditorSelection};
+    assert!(selection_covers_all_text("", &[]));
+    let src = "fn main() {\n  // 中文🚀\n}";
+    // Full forward selection: line 0 col 0 -> line 2 col 1
+    let full_fwd = [EditorSelection::new(
+      EditorPosition::new(0, 0),
+      EditorPosition::new(2, 1),
+    )];
+    assert!(selection_covers_all_text(src, &full_fwd));
+    // Full reverse selection
+    let full_rev = [EditorSelection::new(
+      EditorPosition::new(2, 1),
+      EditorPosition::new(0, 0),
+    )];
+    assert!(selection_covers_all_text(src, &full_rev));
+    // Partial selection (missing closing brace)
+    let partial = [EditorSelection::new(
+      EditorPosition::new(0, 0),
+      EditorPosition::new(2, 0),
+    )];
+    assert!(!selection_covers_all_text(src, &partial));
+    // Single-line CJK + surrogate pair ("中文🚀" = 4 UTF-16 units)
+    let cjk = "中文🚀";
+    assert!(selection_covers_all_text(
+      cjk,
+      &[EditorSelection::new(
+        EditorPosition::new(0, 0),
+        EditorPosition::new(0, 4),
+      )]
+    ));
+    assert!(!selection_covers_all_text(
+      cjk,
+      &[EditorSelection::new(
+        EditorPosition::new(0, 0),
+        EditorPosition::new(0, 3),
+      )]
+    ));
   }
 }

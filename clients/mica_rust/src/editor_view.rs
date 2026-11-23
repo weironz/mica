@@ -154,6 +154,7 @@ pub fn editor_view(
   let focused_code_block: Signal<Option<String>> = signal(None);
   let code_caret_at_start = signal(false);
   let code_is_empty = signal(false);
+  let code_all_selected = signal(false);
   let code_key_rev = signal(0u64);
   let focused_table_cell: Signal<Option<(String, usize, usize)>> = signal(None);
   let table_selection: Signal<Option<TableCellSelection>> = signal(None);
@@ -304,6 +305,7 @@ pub fn editor_view(
         focused_code_block.set(None);
         code_caret_at_start.set(false);
         code_is_empty.set(false);
+        code_all_selected.set(false);
       }
       if let Some((tid, _, _)) = focused_table_cell.get_untracked()
         && !live.contains(tid.as_str())
@@ -338,6 +340,7 @@ pub fn editor_view(
       };
       let at_start = code_caret_at_start.get();
       let is_empty = code_is_empty.get();
+      let all_selected = code_all_selected.get();
       if at_start || is_empty {
         let b_del = b_code_del.clone();
         let bid_bs = code_bid.clone();
@@ -353,6 +356,7 @@ pub fn editor_view(
               focused_code_block.set(None);
               code_caret_at_start.set(false);
               code_is_empty.set(false);
+              code_all_selected.set(false);
               b_del.delete_block_and_focus_neighbor(idx);
             }
           },
@@ -373,8 +377,32 @@ pub fn editor_view(
               focused_code_block.set(None);
               code_caret_at_start.set(false);
               code_is_empty.set(false);
+              code_all_selected.set(false);
               b_del.delete_block_and_focus_neighbor(idx);
             }
+          },
+        );
+      }
+      // Progressive Ctrl+A inside code blocks:
+      // 1st Ctrl+A runs `nsh_base::editor()`'s native SelectAll (selects code inside block);
+      // 2nd Ctrl+A (while all code is selected, or on an empty code block) expands
+      // selection to the entire page and returns focus to the document editor!
+      if all_selected || is_empty {
+        let b_all = b_code_del.clone();
+        on_key_with(
+          "mod+a",
+          KeyOptions {
+            when: When::Always,
+            for_focus: true,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            focused_code_block.set(None);
+            code_caret_at_start.set(false);
+            code_is_empty.set(false);
+            code_all_selected.set(false);
+            b_all.select_all();
+            b_all.request_focus();
           },
         );
       }
@@ -601,6 +629,7 @@ pub fn editor_view(
           .is_none_or(|b| b.text.is_empty());
         code_is_empty.set(empty);
         code_caret_at_start.set(empty);
+        code_all_selected.set(false);
         focused_code_block.set(Some(bid));
         code_key_rev.update(|v| *v = v.wrapping_add(1));
       }
@@ -1065,6 +1094,7 @@ pub fn editor_view(
     focused_code_block,
     code_caret_at_start,
     code_is_empty,
+    code_all_selected,
     code_key_rev,
     focused_table_cell,
     table_selection,
@@ -1870,6 +1900,7 @@ pub fn editor_view(
             focused_code_block.set(None);
             code_caret_at_start.set(false);
             code_is_empty.set(false);
+            code_all_selected.set(false);
             focused_table_cell.set(None);
             sink_ref.blur();
             editor_focused.set(false);
