@@ -40,7 +40,17 @@ pub fn read_windows_cf_html() -> Option<String> {
     if fmt == 0 || IsClipboardFormatAvailable(fmt) == 0 {
       return None;
     }
-    if OpenClipboard(std::ptr::null_mut()) == 0 {
+    // Retry briefly when Windows clipboard history (Win+V), antivirus, or the
+    // preceding `nsh-platform-windows` text/image read momentarily holds the lock.
+    let mut opened = false;
+    for _ in 0..8 {
+      if OpenClipboard(std::ptr::null_mut()) != 0 {
+        opened = true;
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    if !opened {
       return None;
     }
     let raw_bytes: Option<Vec<u8>> = {
@@ -67,7 +77,7 @@ pub fn read_windows_cf_html() -> Option<String> {
     };
     let _ = CloseClipboard();
     let bytes = raw_bytes?;
-    let text = String::from_utf8(bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
     extract_cf_html_fragment(&text)
   }
 }
@@ -118,7 +128,7 @@ pub fn extract_cf_html_fragment(raw: &str) -> Option<String> {
     && s < e
     && e <= bytes.len()
     && start_html.is_none_or(|sh| sh <= s)
-    && end_html.is_none_or(|eh| eh >= e && eh <= bytes.len())
+    && end_html.is_none_or(|eh| eh >= e)
     && let Ok(fragment) = std::str::from_utf8(&bytes[s..e])
   {
     return Some(fragment.to_owned());

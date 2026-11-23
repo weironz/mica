@@ -159,6 +159,7 @@ pub fn editor_view(
   let focused_table_cell: Signal<Option<(String, usize, usize)>> = signal(None);
   let table_selection: Signal<Option<TableCellSelection>> = signal(None);
   let table_drag_anchor: Signal<Option<(String, usize, usize)>> = signal(None);
+  let code_drag_anchor: Signal<Option<String>> = signal(None);
   let body_blank_marquee_ready = signal(false);
   let marquee_origin_page: Signal<Option<(f32, f32)>> = signal(None);
   let last_click: Signal<(usize, u32, f64, u8)> = signal((0, 0, 0.0, 0));
@@ -321,6 +322,11 @@ pub fn editor_view(
         && !live.contains(tid.as_str())
       {
         table_drag_anchor.set(None);
+      }
+      if let Some(cid) = code_drag_anchor.get_untracked()
+        && !live.contains(cid.as_str())
+      {
+        code_drag_anchor.set(None);
       }
     });
   }
@@ -997,6 +1003,7 @@ pub fn editor_view(
       body_blank_marquee_ready.set(false);
       table_selection.set(None);
       table_drag_anchor.set(None);
+      code_drag_anchor.set(None);
     },
   );
 
@@ -1099,6 +1106,7 @@ pub fn editor_view(
     focused_table_cell,
     table_selection,
     table_drag_anchor,
+    code_drag_anchor,
     body_blank_marquee_ready,
     marquee_origin_page,
     last_click,
@@ -1429,6 +1437,7 @@ pub fn editor_view(
       }
       body_blank_marquee_ready.set(false);
       table_drag_anchor.set(None);
+      code_drag_anchor.set(None);
     })
     .on_layout(move |b: &Bounds<Points>| {
       let w = b.size.width.0;
@@ -1896,6 +1905,7 @@ pub fn editor_view(
             inline_math_edit.set(None);
             table_selection.set(None);
             table_drag_anchor.set(None);
+            code_drag_anchor.set(None);
             drag_anchor.set(None);
             focused_code_block.set(None);
             code_caret_at_start.set(false);
@@ -1994,6 +2004,7 @@ pub fn editor_view(
           in_margin_press.set(false);
           body_blank_marquee_ready.set(false);
           table_drag_anchor.set(None);
+          code_drag_anchor.set(None);
         })
         .child(
           // Single hidden native IME proxy `input()` positioned beside the active
@@ -2160,6 +2171,17 @@ pub fn editor_view(
                     focused_table_cell.set(None);
                     drag_anchor.set(Some(DocPosition::new(t_idx, t_end)));
                   }
+                  if let Some(ref c_bid) = code_drag_anchor.get_untracked()
+                    && let Some(c_idx) = br_hdr_drag.index_of_block_id(c_bid)
+                  {
+                    let c_end = br_hdr_drag
+                      .block_at(c_idx)
+                      .map(|b| utf16_len(&b.text))
+                      .unwrap_or(0);
+                    code_drag_anchor.set(None);
+                    focused_code_block.set(None);
+                    drag_anchor.set(Some(DocPosition::new(c_idx, c_end)));
+                  }
                   if let Some(anchor) = drag_anchor.get_untracked() {
                     let next = DocSelection::from_positions(anchor, DocPosition::new(0, 0));
                     if br_hdr_drag.selection().as_ref() != Some(&next) {
@@ -2236,6 +2258,13 @@ pub fn editor_view(
                     table_selection.set(None);
                     focused_table_cell.set(None);
                     drag_anchor.set(Some(DocPosition::new(t_idx, 0)));
+                  }
+                  if let Some(ref c_bid) = code_drag_anchor.get_untracked()
+                    && let Some(c_idx) = br_ftr_drag.index_of_block_id(c_bid)
+                  {
+                    code_drag_anchor.set(None);
+                    focused_code_block.set(None);
+                    drag_anchor.set(Some(DocPosition::new(c_idx, 0)));
                   }
                   if let Some(anchor) = drag_anchor.get_untracked() {
                     let last = br_ftr_drag.block_len().saturating_sub(1);

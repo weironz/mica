@@ -106,6 +106,7 @@ pub struct BlockRenderEnv {
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
   pub table_selection: Signal<Option<TableCellSelection>>,
   pub table_drag_anchor: Signal<Option<(String, usize, usize)>>,
+  pub code_drag_anchor: Signal<Option<String>>,
   pub body_blank_marquee_ready: Signal<bool>,
   pub marquee_origin_page: Signal<Option<(f32, f32)>>,
   pub last_click: Signal<(usize, u32, f64, u8)>,
@@ -143,6 +144,7 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   let layouts_drag = env.layouts.clone();
   let drag_anchor = env.drag_anchor;
   let table_drag_guard = env.table_drag_anchor;
+  let code_drag_guard = env.code_drag_anchor;
   let blank_marquee_guard = env.body_blank_marquee_ready;
   let marquee_origin_page_row = env.marquee_origin_page;
   let br_row_clear = env.bridge.clone();
@@ -214,11 +216,13 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
     // stay in normal text/line selection mode.
     .on_press_down(move |e: &PressEvent| {
       br_row_clear.clear_selection();
+      marquee_selected.set(None);
       drag_anchor.set(None);
       focused_code_row.set(None);
       focused_cell_row.set(None);
       table_sel_row.set(None);
       table_drag_guard.set(None);
+      code_drag_guard.set(None);
       let rw = row_width.get_untracked();
       let eff = page_width.get_untracked();
       let col_w = if crate::page_width::is_full_width(eff) {
@@ -276,6 +280,30 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         table_drag_guard.set(None);
         table_sel_row.set(None);
         focused_cell_row.set(None);
+        drag_anchor.set(Some(upgraded_anchor));
+      }
+      // Seamless code-block-to-document drag upgrade: when mouse-down began on a
+      // code block and the pointer drags upward or downward into a neighboring
+      // block without releasing, upgrade cleanly to cross-block document selection!
+      if let Some(ref c_bid) = code_drag_guard.get_untracked() {
+        if c_bid == &block.id {
+          return;
+        }
+        let Some(code_idx) = bridge_drag.index_of_block_id(c_bid) else {
+          code_drag_guard.set(None);
+          return;
+        };
+        let code_end = bridge_drag
+          .block_at(code_idx)
+          .map(|b| utf16_len(&b.text))
+          .unwrap_or(0);
+        let upgraded_anchor = if idx < code_idx {
+          DocPosition::new(code_idx, code_end)
+        } else {
+          DocPosition::new(code_idx, 0)
+        };
+        code_drag_guard.set(None);
+        focused_code_row.set(None);
         drag_anchor.set(Some(upgraded_anchor));
       }
       let Some(anchor) = drag_anchor.get_untracked() else {
@@ -459,6 +487,8 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     let focused_cell = env.focused_table_cell;
     let table_sel = env.table_selection;
     let table_drag = env.table_drag_anchor;
+    let code_drag = env.code_drag_anchor;
+    let marquee_sel_click = env.marquee_selected;
     let blank_marquee_ready = env.body_blank_marquee_ready;
     let marquee_origin_page = env.marquee_origin_page;
     let editor_focused = env.editor_focused;
@@ -503,6 +533,8 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         focused_cell.set(None);
         table_sel.set(None);
         table_drag.set(None);
+        code_drag.set(None);
+        marquee_sel_click.set(None);
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
 
         // Pressing inside any prose row always performs normal text/line
@@ -1117,8 +1149,17 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let code_is_empty = env.code_is_empty;
   let code_all_selected = env.code_all_selected;
   let code_key_rev = env.code_key_rev;
+  let code_drag_anchor = env.code_drag_anchor;
+  let drag_anchor = env.drag_anchor;
+  let marquee_selected = env.marquee_selected;
+  let table_sel = env.table_selection;
+  let table_drag = env.table_drag_anchor;
+  let focused_cell = env.focused_table_cell;
+  let blank_marquee_ready = env.body_blank_marquee_ready;
+  let marquee_origin_page = env.marquee_origin_page;
   let block_id = block.id.clone();
   let ai_cb = use_context::<CodeAiCallback>();
+  let pending_caret: Signal<Option<nsh_base::EditorPosition>> = signal(None);
 
   let hovered = signal(false);
   let lang_open = signal(false);
@@ -1158,9 +1199,14 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
 
   let bid_focus_chk = block_id.clone();
   let bid_focus_click = block_id.clone();
+  let bid_card_down = block_id.clone();
+  let bid_prev_down = block_id.clone();
   let is_editing = computed(move || focused_code.get().as_deref() == Some(bid_focus_chk.as_str()));
 
   let br_change = bridge.clone();
+  let br_card_down = bridge.clone();
+  let br_prev_down = bridge.clone();
+  let br_prev_press = bridge.clone();
   let br_lang = bridge.clone();
   let br_wrap = bridge.clone();
   let br_ln = bridge.clone();
@@ -1185,25 +1231,80 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         .py(px(12.0))
         .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
         .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
+        .on_press_down(move |_: &PressEvent| {
+          marquee_selected.set(None);
+          table_sel.set(None);
+          table_drag.set(None);
+          focused_cell.set(None);
+          blank_marquee_ready.set(false);
+          marquee_origin_page.set(None);
+          drag_anchor.set(None);
+          br_card_down.clear_selection();
+          code_drag_anchor.set(Some(bid_card_down.clone()));
+        })
         // Lazy mount: lightweight `md-core` syntax-highlighted text when unfocused
         // (instant on 141KB docs, CAP-06-10), full `nsh_base::editor()` on click!
         .child(when(
           move || !is_editing.get(),
           {
             let lang_hl = lang_for_hl.clone();
+            let bid_pd = bid_prev_down.clone();
+            let br_pd = br_prev_down.clone();
+            let br_pp = br_prev_press.clone();
             move || {
               let bid_c = bid_focus_click.clone();
+              let bid_d = bid_pd.clone();
+              let br_d = br_pd.clone();
+              let br_p = br_pp.clone();
               let lang_hl2 = lang_hl.clone();
-              button()
+              let measure_code: TextMeasureFn = Rc::new(text_measurer());
+              view()
                 .test_id("code-block-editor")
-                .accessibility_label("点击编辑代码块")
+                .role(AccessibilityRole::Button)
+                .label("点击编辑代码块")
                 .w_full()
                 .items_start()
                 .cursor(Cursor::Text)
+                .on_press_down(move |e: &PressEvent| {
+                  marquee_selected.set(None);
+                  table_sel.set(None);
+                  table_drag.set(None);
+                  focused_cell.set(None);
+                  blank_marquee_ready.set(false);
+                  marquee_origin_page.set(None);
+                  drag_anchor.set(None);
+                  br_d.clear_selection();
+                  let src_now = live_src.get_untracked();
+                  let pos = code_position_from_point(
+                    &src_now,
+                    e.position.x.0,
+                    e.position.y.0,
+                    line_numbers,
+                    &|f, t| measure_code(f, t),
+                  );
+                  pending_caret.set(Some(pos));
+                  code_drag_anchor.set(Some(bid_d.clone()));
+                })
+                .on_mouse_up(move |_: &MouseEvent| {
+                  code_drag_anchor.set(None);
+                })
                 .on_press(move || {
-                  let empty = live_src.get_untracked().is_empty();
+                  code_drag_anchor.set(None);
+                  marquee_selected.set(None);
+                  // If the press already upgraded to a cross-block page drag, do
+                  // NOT enter code-block live edit mode on release.
+                  if drag_anchor.get_untracked().is_some() {
+                    return;
+                  }
+                  br_p.clear_selection();
+                  let src_now = live_src.get_untracked();
+                  let empty = src_now.is_empty();
+                  let target = pending_caret
+                    .get_untracked()
+                    .unwrap_or_else(|| code_end_position(&src_now));
+                  pending_caret.set(Some(target));
                   code_is_empty.set(empty);
-                  code_at_start.set(empty);
+                  code_at_start.set(empty || (target.line == 0 && target.column == 0));
                   code_all_selected.set(false);
                   focused_code.set(Some(bid_c.clone()));
                   code_key_rev.update(|v| *v = v.wrapping_add(1));
@@ -1220,26 +1321,37 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           move || {
             let br_c = br_change.clone();
             let init_val = live_src.get_untracked();
+            let target_pos = pending_caret
+              .get_untracked()
+              .unwrap_or_else(|| code_end_position(&init_val));
             let prev_lines = signal(init_val.bytes().filter(|&b| b == b'\n').count() + 1);
             let ed_ref = component_ref::<nsh_base::editor::Editor>();
             let ed_has_os_focus = signal(false);
+            let applied_initial_caret = signal(false);
             let lang_ed = lang_for_ed.clone();
-            // Post-mount OS focus guarantee: `nsh_base::editor()` runs its own
-            // `auto_focus` effect inside `Ed::new` before `view::render` mounts
-            // the native input, and toolbar/slash button clicks can briefly hold
-            // focus one frame later. Re-focusing via `EditorApi::focus()` right
-            // after mount ensures the blinking cursor appears immediately!
+            // Post-mount OS focus + caret placement guarantee:
+            // `nsh_base::editor()` defaults its caret to `(0, 0)` on mount, so we
+            // focus it and immediately place the caret at the clicked position (or
+            // end of the code block when clicking past text / via keyboard).
             {
               let ed_ref_f = ed_ref;
               spawn(async move {
                 if let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>() {
                   api.focus();
+                  if !applied_initial_caret.get_untracked() {
+                    applied_initial_caret.set(true);
+                    api.set_selections(vec![nsh_base::EditorSelection::caret(target_pos)]);
+                  }
                 }
                 timer(Duration::from_millis(24)).await;
-                if !ed_has_os_focus.get_untracked()
-                  && let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>()
-                {
-                  api.focus();
+                if let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>() {
+                  if !ed_has_os_focus.get_untracked() {
+                    api.focus();
+                  }
+                  if !applied_initial_caret.get_untracked() {
+                    applied_initial_caret.set(true);
+                    api.set_selections(vec![nsh_base::EditorSelection::caret(target_pos)]);
+                  }
                 }
               });
             }
@@ -1266,13 +1378,20 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
               .styles(move || code_editor_styles(dark_mode.get()))
               .on_focus({
                 let bid_f = block_id.clone();
+                let ed_ref_on = ed_ref;
                 move || {
                   ed_has_os_focus.set(true);
                   let empty = live_src.get_untracked().is_empty();
                   focused_code.set(Some(bid_f.clone()));
                   code_is_empty.set(empty);
                   code_all_selected.set(false);
-                  if empty {
+                  if !applied_initial_caret.get_untracked()
+                    && let Some(api) = ed_ref_on.api::<nsh_base::editor::EditorApi>()
+                  {
+                    applied_initial_caret.set(true);
+                    api.set_selections(vec![nsh_base::EditorSelection::caret(target_pos)]);
+                    code_at_start.set(empty || (target_pos.line == 0 && target_pos.column == 0));
+                  } else if empty {
                     code_at_start.set(true);
                   }
                   // Bump `code_key_rev` synchronously AND on the next microtask so
@@ -1289,6 +1408,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                 code_at_start.set(false);
                 code_is_empty.set(false);
                 code_all_selected.set(false);
+                pending_caret.set(None);
               })
               .on_change(move |val: &SharedString| {
                 copied.set(false);
@@ -2788,6 +2908,8 @@ fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
   let focused_cell = env.focused_table_cell;
   let table_selection = env.table_selection;
   let table_drag_anchor = env.table_drag_anchor;
+  let code_drag_anchor = env.code_drag_anchor;
+  let marquee_selected = env.marquee_selected;
   let drag_anchor = env.drag_anchor;
   let editor_focused = env.editor_focused;
   let block_id = block.id.clone();
@@ -2905,6 +3027,8 @@ fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
       })
       .on_press_down(move |_: &PressEvent| {
         drag_anchor.set(None);
+        code_drag_anchor.set(None);
+        marquee_selected.set(None);
         br_down.clear_selection();
         editor_focused.set(false);
         table_selection.set(None);
@@ -3182,12 +3306,16 @@ fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
 fn render_divider_block_view(env: &BlockRenderEnv, at: Position) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let br = env.bridge.clone();
+  let marquee_selected = env.marquee_selected;
   button()
     .test_id("node-view-divider")
     .w_full()
     .py_4()
     .justify_center()
-    .on_press(move || br.focus_block(live_index(at), 0))
+    .on_press(move || {
+      marquee_selected.set(None);
+      br.focus_block(live_index(at), 0);
+    })
     .child(view().w_full().h(px(1.5)).bg(move || palette(dark_mode.get()).quote_bar))
 }
 
@@ -3620,6 +3748,67 @@ fn code_editor_styles(dark: bool) -> EditorStyles {
   styles
 }
 
+/// Returns the end position `(last_line, last_utf16_col)` of `src`.
+fn code_end_position(src: &str) -> nsh_base::EditorPosition {
+  if src.is_empty() {
+    return nsh_base::EditorPosition::new(0, 0);
+  }
+  let normalized = src.replace("\r\n", "\n");
+  let last_line = normalized.bytes().filter(|&b| b == b'\n').count() as u32;
+  let tail = normalized.rsplit('\n').next().unwrap_or("");
+  nsh_base::EditorPosition::new(last_line, tail.encode_utf16().count() as u32)
+}
+
+/// Maps a click point `(x, y)` inside the unfocused code block preview to the
+/// closest 0-based `(line, utf16_column)` caret position. Clicking past a line's
+/// right edge lands at that line's end; clicking below the last line lands at
+/// the end of the code block.
+fn code_position_from_point<F>(
+  src: &str,
+  x: f32,
+  y: f32,
+  has_line_numbers: bool,
+  measure: &F,
+) -> nsh_base::EditorPosition
+where
+  F: Fn(&str, &str) -> Points,
+{
+  if src.is_empty() {
+    return nsh_base::EditorPosition::new(0, 0);
+  }
+  let normalized = src.replace("\r\n", "\n");
+  let lines: Vec<&str> = normalized.split('\n').collect();
+  let line_h = 22.0_f32;
+  let line_idx = (y.max(0.0) / line_h).floor() as usize;
+  if line_idx >= lines.len() {
+    return code_end_position(&normalized);
+  }
+  let line = lines[line_idx];
+  if line.is_empty() {
+    return nsh_base::EditorPosition::new(line_idx as u32, 0);
+  }
+  let gutter_w = if has_line_numbers { 38.0 } else { 0.0 };
+  let target_x = (x - gutter_w).max(0.0);
+  let font = "14px monospace";
+  let full_w = measure(font, line).0;
+  if target_x >= full_w {
+    return nsh_base::EditorPosition::new(line_idx as u32, line.encode_utf16().count() as u32);
+  }
+  let mut best_u16 = 0u32;
+  let mut prev_w = 0.0_f32;
+  for (byte_idx, ch) in line.char_indices() {
+    let next_byte = byte_idx + ch.len_utf8();
+    let w = measure(font, &line[..next_byte]).0;
+    let mid = (prev_w + w) * 0.5;
+    if target_x < mid {
+      return nsh_base::EditorPosition::new(line_idx as u32, best_u16);
+    }
+    best_u16 += ch.len_utf16() as u32;
+    prev_w = w;
+  }
+  nsh_base::EditorPosition::new(line_idx as u32, best_u16)
+}
+
 /// Returns `true` when `sels` selects the entire contents of `src` (using
 /// 0-based line and UTF-16 column coordinates matching `nsh_base::EditorPosition`).
 fn selection_covers_all_text(src: &str, sels: &[nsh_base::EditorSelection]) -> bool {
@@ -3776,5 +3965,33 @@ mod tests {
         EditorPosition::new(0, 3),
       )]
     ));
+  }
+
+  #[test]
+  fn code_click_position_lands_at_end_when_clicking_right_or_below_code() {
+    use nsh_base::EditorPosition;
+    let measure = |_font: &str, text: &str| px(text.chars().count() as f32 * 8.4);
+    assert_eq!(code_end_position("ddasf"), EditorPosition::new(0, 5));
+    assert_eq!(code_end_position("line1\nline2"), EditorPosition::new(1, 5));
+    // Clicking past the right edge of "ddasf" lands at end (0, 5), NOT (0, 0)
+    assert_eq!(
+      code_position_from_point("ddasf", 180.0, 10.0, false, &measure),
+      EditorPosition::new(0, 5)
+    );
+    // Clicking below the last line lands at the end of the code block
+    assert_eq!(
+      code_position_from_point("test\ntetes", 12.0, 90.0, false, &measure),
+      EditorPosition::new(1, 5)
+    );
+    // Clicking near the start of line 0 lands at (0, 0)
+    assert_eq!(
+      code_position_from_point("ddasf", 1.0, 8.0, false, &measure),
+      EditorPosition::new(0, 0)
+    );
+    // Clicking mid-line on line 1 lands on the exact character column
+    assert_eq!(
+      code_position_from_point("test\ntetes", 25.0, 30.0, false, &measure),
+      EditorPosition::new(1, 3)
+    );
   }
 }

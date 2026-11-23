@@ -1117,32 +1117,28 @@ impl MicaDocumentBridge {
 
     let normalized = normalize_pasted_text(text);
     let text_is_md = looks_like_mica_markdown(&normalized);
+    let text_has_explicit_fence = normalized.lines().any(|l| {
+      let t = l.trim_start();
+      t.starts_with("```") || t.starts_with("~~~")
+    });
     let html_frag = crate::clipboard_platform::extract_cf_html_fragment(html)
       .unwrap_or_default();
     let html_has_semantics = !html_frag.trim().is_empty() && has_semantic_html_tags(&html_frag);
+    let html_has_pre = html_frag.to_ascii_lowercase().contains("<pre");
     let html_is_table = crate::clipboard_platform::clipboard_html_is_data_table(&html_frag);
 
-    // 1. Prefer canonical Markdown text directly when the plain clipboard flavor
-    // already carries explicit Markdown syntax (e.g. copied from Mica itself,
-    // VS Code, Typora, or Obsidian) unless HTML has a richer data <table> that
-    // plain text lacks. This guarantees 100% lossless round-trip for code
-    // languages, Mermaid, boards, callouts, todos, marks, and tables.
-    if text_is_md && !(html_is_table && !normalized.contains("---")) {
-      let patch = self.dispatch(EditorCommand::Paste {
-        input: PasteInput::Markdown {
-          markdown: normalized.clone(),
-          plain: text.to_owned(),
-          rich: true,
-        },
-      });
-      if patch.content_changed {
-        return true;
-      }
-    }
-
-    // 2. Convert semantic HTML (e.g. Windows CF_HTML copied from v0.14.11
-    // Flutter Mica, browsers, Word, Feishu, Excel) through `crates/md-core`.
-    if html_has_semantics {
+    // 1. Prefer semantic HTML (Windows CF_HTML / text/html copied from v0.14.11
+    // Flutter Mica, Notion, Typora, browsers, Word, Feishu, Excel) BEFORE plain
+    // text heuristics! Old Flutter Mica intentionally strips Markdown fences from
+    // plain text while keeping full `<h3>`, `<pre><code>`, `<ul><li>`, `<code>`
+    // structure in `CF_HTML`; preferring `looks_like_mica_markdown` over HTML
+    // would false-positive on shell `# comments` / `- flags` / `1. items` inside
+    // plain text and throw away all HTML structure.
+    // Only skip HTML when plain text itself carries explicit Markdown fences
+    // (` ``` `) while HTML lacks `<pre>` and `<table>` (raw Markdown source).
+    let prefer_plain_fenced_md =
+      text_has_explicit_fence && !html_has_pre && !html_is_table;
+    if html_has_semantics && !prefer_plain_fenced_md {
       let body = parse_html_fragment_to_node(&html_frag);
       let md = html_to_markdown(&body);
       let trimmed = md.trim();
@@ -1160,17 +1156,26 @@ impl MicaDocumentBridge {
       }
     }
 
-    // 3. Fallback: Markdown-normalized plain text or plain paste.
-    let input = if text_is_md {
-      PasteInput::Markdown {
-        markdown: normalized,
-        plain: text.to_owned(),
-        rich: true,
+    // 2. Canonical Markdown plain text (copied from Mica Rust, VS Code, Typora
+    // source mode, Obsidian, or Notepad where no semantic HTML is present).
+    if text_is_md {
+      let patch = self.dispatch(EditorCommand::Paste {
+        input: PasteInput::Markdown {
+          markdown: normalized.clone(),
+          plain: text.to_owned(),
+          rich: true,
+        },
+      });
+      if patch.content_changed {
+        return true;
       }
-    } else {
-      PasteInput::Plain { text: text.to_owned() }
-    };
-    let patch = self.dispatch(EditorCommand::Paste { input });
+    }
+
+    // 3. Plain-text fallback: preserve literal text cleanly without corrupting
+    // shell `~` / `*` characters when no Markdown syntax was detected.
+    let patch = self.dispatch(EditorCommand::Paste {
+      input: PasteInput::Plain { text: text.to_owned() },
+    });
     patch.content_changed
   }
 
@@ -2069,6 +2074,66 @@ mod tests {
       assert!(
         elapsed < std::time::Duration::from_millis(500),
         "60 structural Enter/Backspace ops should stay snappy, took {elapsed:?}"
+      );
+    });
+  }
+
+  #[test]
+  fn flutter_cf_html_paste_preserves_headings_code_blocks_and_lists_over_plain_shell_text() {
+    with_runtime(|| {
+      let bridge = MicaDocumentBridge::from_markdown("");
+      // Mirrors old Flutter Mica (v0.14.11) clipboard flavors from CX8 inspection doc:
+      // plain text strips Markdown fences while containing shell `# comments` & `~`/`*`,
+      // while CF_HTML carries authoritative `<h3>`, `<pre><code>`, `<ul><li>`, `<code>`.
+      let plain = concat!(
+        "查看网卡设备\n",
+        "# 检查IB设备\n",
+        "root@B300-10:~# lspci -d 15b3: | grep \"Infiniband controller.*ConnectX-8\"\n",
+        "root@B300-10:~#\n",
+        "参数说明\n",
+        "-d 15b3: — 只看厂商 ID = 15b3 的设备。\n",
+        "grep — 精确挑出 CX-8\n",
+      );
+      let html = concat!(
+        "Version:0.9\r\n",
+        "StartHTML:0000000097\r\n",
+        "EndHTML:0000000510\r\n",
+        "StartFragment:0000000131\r\n",
+        "EndFragment:0000000476\r\n",
+        "<html><body><!--StartFragment-->",
+        "<h3>查看网卡设备</h3>",
+        "<pre><code class=\"language-bash\"># 检查IB设备\n",
+        "root@B300-10:~# lspci -d 15b3: | grep \"Infiniband controller.*ConnectX-8\"\n",
+        "root@B300-10:~#</code></pre>",
+        "<h3>参数说明</h3>",
+        "<ul><li><code>-d 15b3:</code> — 只看厂商 ID = 15b3 的设备。</li>",
+        "<li><code>grep</code> — 精确挑出 CX-8</li></ul>",
+        "<!--EndFragment--></body></html>"
+      );
+      assert!(bridge.paste_clipboard(plain, html, false));
+      let blocks = bridge.with_blocks(|bs| bs.to_vec());
+      assert!(
+        blocks.iter().any(|b| b.kind == "heading" && b.text == "查看网卡设备"),
+        "expected heading '查看网卡设备', got {blocks:?}"
+      );
+      assert!(
+        blocks
+          .iter()
+          .any(|b| b.kind == "code_block" && b.text.contains("root@B300-10:~# lspci")),
+        "expected verbatim code_block without strikethrough corruption, got {blocks:?}"
+      );
+      assert!(
+        blocks
+          .iter()
+          .any(|b| b.kind == "bulleted_list" && b.text.contains("-d 15b3:")),
+        "expected bulleted_list item, got {blocks:?}"
+      );
+      let has_strikethrough = blocks
+        .iter()
+        .any(|b| block_marks(b).iter().any(|m| m.kind == "strikethrough"));
+      assert!(
+        !has_strikethrough,
+        "shell tildes inside copied code block must NEVER turn into strikethrough marks"
       );
     });
   }
