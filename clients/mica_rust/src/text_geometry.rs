@@ -144,17 +144,18 @@ fn measure_line_prefix<F>(line: &TextLine, offset_in_line_u16: u32, font: &str, 
 where
   F: Fn(&str, &str) -> Points,
 {
-  if offset_in_line_u16 == 0 || line.text.is_empty() {
+  let visible = line.text.trim_end_matches(['\n', '\r', '\u{200B}']);
+  if offset_in_line_u16 == 0 || visible.is_empty() {
     return 0.0;
   }
-  let line_u16_len = utf16_len(&line.text);
+  let line_u16_len = utf16_len(visible);
   if offset_in_line_u16 >= line_u16_len {
     return line.width.0.max(0.0);
   }
-  let sub = utf16_slice(&line.text, 0, offset_in_line_u16);
+  let sub = utf16_slice(visible, 0, offset_in_line_u16);
   let measured = measure(font, sub).0.max(0.0);
   if line.width.0 > 0.0 {
-    let full_measured = measure(font, &line.text).0;
+    let full_measured = measure(font, visible).0;
     if full_measured > 0.5 {
       (measured * (line.width.0 / full_measured)).clamp(0.0, line.width.0)
     } else {
@@ -281,19 +282,21 @@ where
     }
   }
   let line = &lines[target_idx];
+  let visible = line.text.trim_end_matches(['\n', '\r', '\u{200B}']);
+  let visual_end = line.start + utf16_len(visible);
   let rel_x = local_x - line.x.0;
-  if rel_x <= 0.0 || line.text.is_empty() {
+  if rel_x <= 0.0 || visible.is_empty() {
     return line.start;
   }
   if line.width.0 > 0.0 && rel_x >= line.width.0 {
-    return line.end;
+    return visual_end;
   }
 
-  // 2. Walk Unicode scalar / UTF-16 boundaries in `line.text` to find the nearest character edge.
+  // 2. Walk Unicode scalar / UTF-16 boundaries in `visible` to find the nearest character edge.
   let mut best_u16 = 0u32;
   let mut prev_x = 0.0_f32;
   let mut cur_u16 = 0u32;
-  for ch in line.text.chars() {
+  for ch in visible.chars() {
     let next_u16 = cur_u16 + ch.len_utf16() as u32;
     let next_x = measure_line_prefix(line, next_u16, font, measure);
     let mid = (prev_x + next_x) * 0.5;
@@ -304,7 +307,7 @@ where
     prev_x = next_x;
     cur_u16 = next_u16;
   }
-  (line.start + best_u16).min(line.end)
+  (line.start + best_u16).min(visual_end)
 }
 
 /// Move vertically by `delta_lines` (`-1` up, `+1` down) within a wrapped multi-line block.
@@ -413,5 +416,22 @@ mod tests {
     assert_eq!(rects.len(), 2);
     assert_eq!(rects[0].1, 0.0);
     assert_eq!(rects[1].1, 24.0);
+  }
+
+  #[test]
+  fn multi_line_code_trailing_newline_and_zwsp_caret_and_hit_test() {
+    // Code text `"line1\nline2\n"` rendered with trailing `"\u{200B}"` so line 2 has real geometry.
+    let lines = vec![
+      mk_line("line1\n", 0, 0.0),
+      mk_line("line2\n", 6, 22.0),
+      mk_line("\u{200B}", 12, 44.0),
+    ];
+    // Clicking past right edge of line 0 must land at offset 5 (before '\n'), NOT 6.
+    assert_eq!(offset_at_point(&lines, 999.0, 10.0, "", &fixed_measure), 5);
+    // Clicking past right edge of line 1 must land at offset 11 (before '\n'), NOT 12.
+    assert_eq!(offset_at_point(&lines, 999.0, 30.0, "", &fixed_measure), 11);
+    // Caret at end of `"line1\nline2\n"` (u16=12) lands on trailing empty line 2 at x=0, y=44.
+    let (cx, cy, _) = caret_rect_for_offset(&lines, 12, "", 22.0, &fixed_measure);
+    assert_eq!((cx, cy), (0.0, 44.0));
   }
 }

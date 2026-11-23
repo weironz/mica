@@ -151,16 +151,16 @@ fn rich_editor_keyboard_enter_ctrl_a_and_editable_code_block() {
     app.screen().texts()
   );
 
-  // 3. Insert an editable code block: it immediately mounts & focuses `nsh_base::editor()`
-  //    so typing multi-line code + Enter works with zero extra click!
+  // 3. Insert an editable code block: unified native mica-editor pipeline receives
+  //    multi-line code + Enter directly via `mica-editor-ime-sink` with zero extra click!
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
   app.wait_for("输入代码...").unwrap();
-  app.type_text("id:code-block-editor", "let x = 42;").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "let x = 42;").unwrap();
   app.wait_for("let x = 42;").unwrap();
   app.press_key("enter").unwrap();
-  app.type_text("id:code-block-editor", "let y = 99;").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "let y = 99;").unwrap();
   app.wait_for("let y = 99;").unwrap();
 
   // 4. Right sidebar version history: save snapshot, then click Restore
@@ -306,7 +306,7 @@ fn virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch() {
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
   app.wait_for("输入代码...").unwrap();
-  app.type_text("id:code-block-editor", "graph LR\n  A[Start] --> B[End]").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "graph LR\n  A[Start] --> B[End]").unwrap();
   app.wait_for("id:code-lang-btn").unwrap();
   app.press("id:code-lang-btn").unwrap();
   app.wait_for("id:code-lang-picker").unwrap();
@@ -359,17 +359,15 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
   );
 
   // 3. Insert a code block and verify:
-  //    a) Prose caret hides when code block editor takes focus.
-  //    b) Typing + Backspace inside `code-block-editor` genuinely deletes code chars!
+  //    a) Unified native caret stays visible right inside the code block (zero renderer swap).
+  //    b) Typing + Backspace inside the code block genuinely deletes code chars!
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
   app.wait_for("输入代码...").unwrap();
-  app.type_text("id:code-block-editor", "hello_world").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "hello_world").unwrap();
   app.wait_for("hello_world").unwrap();
-  app
-    .wait_for_gone("id:mica-active-caret", std::time::Duration::from_millis(500))
-    .unwrap();
+  app.wait_for("id:mica-active-caret").unwrap();
   // Press Backspace 6 times to delete "_world" -> "hello"
   for _ in 0..6 {
     app.press_key("backspace").unwrap();
@@ -381,14 +379,14 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
   );
 
   // 4. Typing triple backticks ```` ``` ```` in a fresh paragraph auto-converts to a
-  //    code block AND hands focus directly to `code-block-editor` so typing + Backspace work immediately!
+  //    code block AND keeps focus seamlessly in the unified IME sink so typing + Backspace work immediately!
   app.press("id:new-page-btn").unwrap();
   app.wait_for("未命名页面 3").unwrap();
   for ch in ["`", "`", "`"] {
     app.type_text("id:mica-editor-ime-sink", ch).unwrap();
   }
   app.wait_for("id:code-block-editor").unwrap();
-  app.type_text("id:code-block-editor", "fn_xyz").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "fn_xyz").unwrap();
   app.wait_for("fn_xyz").unwrap();
   for _ in 0..4 {
     app.press_key("backspace").unwrap();
@@ -582,9 +580,9 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
   app.wait_for("未命名页面 2").unwrap();
   app.press("id:ed-code-block").unwrap();
   app.wait_for("输入代码...").unwrap();
-  app.type_text("id:code-block-editor", "xy").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "xy").unwrap();
   app.wait_for("xy").unwrap();
-  // First 2 Backspaces delete 'y' and 'x' inside `nsh_base::editor()` -> placeholder returns!
+  // First 2 Backspaces delete 'y' and 'x' -> placeholder returns!
   app.press_key("backspace").unwrap();
   app.press_key("backspace").unwrap();
   app.wait_for("输入代码...").unwrap();
@@ -594,11 +592,10 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
     .unwrap();
 
-  // Case 2: Empty code block focused inside `nsh_base::editor()` -> pressing `Delete`
-  // MUST ALSO delete the code block!
+  // Case 2: Empty code block -> pressing `Delete` MUST ALSO delete the code block!
   app.press("id:ed-code-block").unwrap();
   app.wait_for("输入代码...").unwrap();
-  app.type_text("id:code-block-editor", "q").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "q").unwrap();
   app.wait_for("q").unwrap();
   app.press_key("backspace").unwrap();
   app.wait_for("输入代码...").unwrap();
@@ -616,18 +613,17 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
     .unwrap();
 
-  // Case 4: Code block inserted via slash menu IMMEDIATELY mounts & focuses `nsh_base::editor()`
+  // Case 4: Code block inserted via slash menu stays focused in the unified editor
   // (no extra click required!) -> Enter grows cleanly, Ctrl+A + Backspace clears, next Backspace deletes block!
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
   app.wait_for("输入代码...").unwrap();
   // Case 5: Pressing Enter inside the code block grows cleanly without scrolling line 0 out of view.
-  app.type_text("id:code-block-editor", "line1").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "line1").unwrap();
   app.press_key("enter").unwrap();
-  app.type_text("id:code-block-editor", "line2").unwrap();
-  app.wait_for("line1").unwrap();
-  app.wait_for("line2").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "line2").unwrap();
+  app.wait_for("line1\nline2").unwrap();
   // Clear all lines back to empty and delete the code block with Backspace.
   app.press_key("mod+a").unwrap();
   app.press_key("backspace").unwrap();
@@ -679,24 +675,27 @@ fn regression_code_block_progressive_ctrl_a_expands_to_page() {
   app.press("id:slash-code").unwrap();
   app.wait_for("输入代码...").unwrap();
 
-  app.type_text("id:code-block-editor", "alpha_code").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "alpha_code").unwrap();
   app.press_key("enter").unwrap();
-  app.type_text("id:code-block-editor", "beta_code").unwrap();
-  app.wait_for("alpha_code").unwrap();
-  app.wait_for("beta_code").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "beta_code").unwrap();
+  app.wait_for("alpha_code\nbeta_code").unwrap();
 
-  // 1st Ctrl+A inside code block selects ALL code inside the block ONLY
-  // (must NOT yet expand to full-page block selection overlay).
+  // 1st Ctrl+A inside code block selects ALL code inside the block ONLY:
+  // Backspace clears the code block while leaving `OuterKeepLine` intact!
   app.press_key("mod+a").unwrap();
+  app.press_key("backspace").unwrap();
+  app.wait_for("输入代码...").unwrap();
   assert!(
-    !app.shows("id:block-selection-overlay"),
-    "1st Ctrl+A inside a non-empty code block must select only the code inside the block"
+    app.shows("OuterKeepLine"),
+    "1st Ctrl+A + Backspace inside a non-empty code block must NOT delete outer prose"
   );
 
-  // 2nd Ctrl+A (Ctrl+AA) expands selection to the entire page (highlighting the
-  // code block as part of whole-page selection) and Backspace deletes both!
+  // Type code again, then press Ctrl+A twice (Ctrl+AA) -> expands to the ENTIRE page!
+  // Backspace now deletes BOTH the code block AND `OuterKeepLine`.
+  app.type_text("id:mica-editor-ime-sink", "gamma_code").unwrap();
+  app.wait_for("gamma_code").unwrap();
   app.press_key("mod+a").unwrap();
-  app.wait_for("id:block-selection-overlay").unwrap();
+  app.press_key("mod+a").unwrap();
   app.press_key("backspace").unwrap();
   app
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))

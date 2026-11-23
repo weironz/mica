@@ -152,14 +152,9 @@ pub fn editor_view(
   let drag_anchor: Signal<Option<DocPosition>> = signal(None);
   let lightbox: Signal<Option<LightboxContent>> = signal(None);
   let focused_code_block: Signal<Option<String>> = signal(None);
-  let code_caret_at_start = signal(false);
-  let code_is_empty = signal(false);
-  let code_all_selected = signal(false);
-  let code_key_rev = signal(0u64);
   let focused_table_cell: Signal<Option<(String, usize, usize)>> = signal(None);
   let table_selection: Signal<Option<TableCellSelection>> = signal(None);
   let table_drag_anchor: Signal<Option<(String, usize, usize)>> = signal(None);
-  let code_drag_anchor: Signal<Option<String>> = signal(None);
   let body_blank_marquee_ready = signal(false);
   let marquee_origin_page: Signal<Option<(f32, f32)>> = signal(None);
   let last_click: Signal<(usize, u32, f64, u8)> = signal((0, 0, 0.0, 0));
@@ -304,9 +299,6 @@ pub fn editor_view(
         && !live.contains(fid.as_str())
       {
         focused_code_block.set(None);
-        code_caret_at_start.set(false);
-        code_is_empty.set(false);
-        code_all_selected.set(false);
       }
       if let Some((tid, _, _)) = focused_table_cell.get_untracked()
         && !live.contains(tid.as_str())
@@ -322,95 +314,6 @@ pub fn editor_view(
         && !live.contains(tid.as_str())
       {
         table_drag_anchor.set(None);
-      }
-      if let Some(cid) = code_drag_anchor.get_untracked()
-        && !live.contains(cid.as_str())
-      {
-        code_drag_anchor.set(None);
-      }
-    });
-  }
-
-  // Code block boundary deletion handler:
-  // - `Backspace` when caret sits at (0, 0) OR the code block is empty
-  // - `Delete` when the code block is empty
-  // Subscribes to `code_key_rev` (bumped inside `nsh_base::editor().on_focus` + next microtask)
-  // so these bindings ALWAYS register AFTER `nsh_base::editor()`'s own LIFO `backspace`/`delete`
-  // bindings and are never shadowed on desktop!
-  {
-    let b_code_del = bridge.clone();
-    effect(move || {
-      let _rev = code_key_rev.get();
-      let Some(code_bid) = focused_code_block.get() else {
-        return;
-      };
-      let at_start = code_caret_at_start.get();
-      let is_empty = code_is_empty.get();
-      let all_selected = code_all_selected.get();
-      if at_start || is_empty {
-        let b_del = b_code_del.clone();
-        let bid_bs = code_bid.clone();
-        on_key_with(
-          "backspace",
-          KeyOptions {
-            when: When::Always,
-            for_focus: true,
-            ..KeyOptions::default()
-          },
-          move |_| {
-            if let Some(idx) = b_del.index_of_block_id(&bid_bs) {
-              focused_code_block.set(None);
-              code_caret_at_start.set(false);
-              code_is_empty.set(false);
-              code_all_selected.set(false);
-              b_del.delete_block_and_focus_neighbor(idx);
-            }
-          },
-        );
-      }
-      if is_empty {
-        let b_del = b_code_del.clone();
-        let bid_del = code_bid;
-        on_key_with(
-          "delete",
-          KeyOptions {
-            when: When::Always,
-            for_focus: true,
-            ..KeyOptions::default()
-          },
-          move |_| {
-            if let Some(idx) = b_del.index_of_block_id(&bid_del) {
-              focused_code_block.set(None);
-              code_caret_at_start.set(false);
-              code_is_empty.set(false);
-              code_all_selected.set(false);
-              b_del.delete_block_and_focus_neighbor(idx);
-            }
-          },
-        );
-      }
-      // Progressive Ctrl+A inside code blocks:
-      // 1st Ctrl+A runs `nsh_base::editor()`'s native SelectAll (selects code inside block);
-      // 2nd Ctrl+A (while all code is selected, or on an empty code block) expands
-      // selection to the entire page and returns focus to the document editor!
-      if all_selected || is_empty {
-        let b_all = b_code_del.clone();
-        on_key_with(
-          "mod+a",
-          KeyOptions {
-            when: When::Always,
-            for_focus: true,
-            ..KeyOptions::default()
-          },
-          move |_| {
-            focused_code_block.set(None);
-            code_caret_at_start.set(false);
-            code_is_empty.set(false);
-            code_all_selected.set(false);
-            b_all.select_all();
-            b_all.request_focus();
-          },
-        );
       }
     });
   }
@@ -611,33 +514,6 @@ pub fn editor_view(
         focused_table_cell.set(None);
         empty_ime_sink(&st_focus, sink_value);
         sref.focus();
-      }
-    });
-  }
-
-  // Immediately mount & focus the live code editor whenever ANY path creates a
-  // new code block (toolbar `>_`, slash `/code`, `+` menu, bubble toolbar, or ```` ``` ````).
-  {
-    let code_req = bridge.code_focus_request_signal();
-    let b_cf = bridge.clone();
-    let sref = sink_ref;
-    let st_cf = sink_state.clone();
-    effect(move || {
-      if let Some((bid, _seq)) = code_req.get() {
-        empty_ime_sink(&st_cf, sink_value);
-        sref.blur();
-        editor_focused.set(false);
-        focused_table_cell.set(None);
-        table_selection.set(None);
-        let empty = b_cf
-          .index_of_block_id(&bid)
-          .and_then(|i| b_cf.block_at(i))
-          .is_none_or(|b| b.text.is_empty());
-        code_is_empty.set(empty);
-        code_caret_at_start.set(empty);
-        code_all_selected.set(false);
-        focused_code_block.set(Some(bid));
-        code_key_rev.update(|v| *v = v.wrapping_add(1));
       }
     });
   }
@@ -1003,7 +879,6 @@ pub fn editor_view(
       body_blank_marquee_ready.set(false);
       table_selection.set(None);
       table_drag_anchor.set(None);
-      code_drag_anchor.set(None);
     },
   );
 
@@ -1099,14 +974,9 @@ pub fn editor_view(
     drag_anchor,
     lightbox,
     focused_code_block,
-    code_caret_at_start,
-    code_is_empty,
-    code_all_selected,
-    code_key_rev,
     focused_table_cell,
     table_selection,
     table_drag_anchor,
-    code_drag_anchor,
     body_blank_marquee_ready,
     marquee_origin_page,
     last_click,
@@ -1437,7 +1307,6 @@ pub fn editor_view(
       }
       body_blank_marquee_ready.set(false);
       table_drag_anchor.set(None);
-      code_drag_anchor.set(None);
     })
     .on_layout(move |b: &Bounds<Points>| {
       let w = b.size.width.0;
@@ -1905,12 +1774,8 @@ pub fn editor_view(
             inline_math_edit.set(None);
             table_selection.set(None);
             table_drag_anchor.set(None);
-            code_drag_anchor.set(None);
             drag_anchor.set(None);
             focused_code_block.set(None);
-            code_caret_at_start.set(false);
-            code_is_empty.set(false);
-            code_all_selected.set(false);
             focused_table_cell.set(None);
             sink_ref.blur();
             editor_focused.set(false);
@@ -2004,7 +1869,6 @@ pub fn editor_view(
           in_margin_press.set(false);
           body_blank_marquee_ready.set(false);
           table_drag_anchor.set(None);
-          code_drag_anchor.set(None);
         })
         .child(
           // Single hidden native IME proxy `input()` positioned beside the active
@@ -2053,9 +1917,6 @@ pub fn editor_view(
                 &br_chg,
                 slash,
                 ai_enabled,
-                focused_code_block,
-                code_caret_at_start,
-                code_is_empty,
               );
             })
             .on_composition_change(move |c: &Composition| {
@@ -2080,9 +1941,6 @@ pub fn editor_view(
                   &br_comp,
                   slash,
                   ai_enabled,
-                  focused_code_block,
-                  code_caret_at_start,
-                  code_is_empty,
                 );
               }
             })
@@ -2109,7 +1967,6 @@ pub fn editor_view(
                 copied_link.set(false);
               }
               focused_code_block.set(None);
-              code_caret_at_start.set(false);
               focused_table_cell.set(None);
               table_selection.set(None);
               empty_ime_sink(&st_paste, sink_value);
@@ -2170,17 +2027,6 @@ pub fn editor_view(
                     table_selection.set(None);
                     focused_table_cell.set(None);
                     drag_anchor.set(Some(DocPosition::new(t_idx, t_end)));
-                  }
-                  if let Some(ref c_bid) = code_drag_anchor.get_untracked()
-                    && let Some(c_idx) = br_hdr_drag.index_of_block_id(c_bid)
-                  {
-                    let c_end = br_hdr_drag
-                      .block_at(c_idx)
-                      .map(|b| utf16_len(&b.text))
-                      .unwrap_or(0);
-                    code_drag_anchor.set(None);
-                    focused_code_block.set(None);
-                    drag_anchor.set(Some(DocPosition::new(c_idx, c_end)));
                   }
                   if let Some(anchor) = drag_anchor.get_untracked() {
                     let next = DocSelection::from_positions(anchor, DocPosition::new(0, 0));
@@ -2259,13 +2105,6 @@ pub fn editor_view(
                     focused_table_cell.set(None);
                     drag_anchor.set(Some(DocPosition::new(t_idx, 0)));
                   }
-                  if let Some(ref c_bid) = code_drag_anchor.get_untracked()
-                    && let Some(c_idx) = br_ftr_drag.index_of_block_id(c_bid)
-                  {
-                    code_drag_anchor.set(None);
-                    focused_code_block.set(None);
-                    drag_anchor.set(Some(DocPosition::new(c_idx, 0)));
-                  }
                   if let Some(anchor) = drag_anchor.get_untracked() {
                     let last = br_ftr_drag.block_len().saturating_sub(1);
                     let end_off = br_ftr_drag
@@ -2313,7 +2152,6 @@ pub fn editor_view(
                         move || {
                           if !m_chk.is_active_untracked() {
                             focused_code_block.set(None);
-                            code_caret_at_start.set(false);
                             focused_table_cell.set(None);
                             table_selection.set(None);
                             br_click.append_empty_paragraph_and_focus();
@@ -2475,7 +2313,6 @@ fn empty_ime_sink(sink_state: &Rc<RefCell<ImeSinkState>>, sink_value: Signal<Str
   sink_value.set(String::new());
 }
 
-#[allow(clippy::too_many_arguments)]
 fn apply_sink_text_diff(
   text: &str,
   sink_state: &Rc<RefCell<ImeSinkState>>,
@@ -2483,9 +2320,6 @@ fn apply_sink_text_diff(
   bridge: &MicaDocumentBridge,
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
-  focused_code_block: Signal<Option<String>>,
-  code_caret_at_start: Signal<bool>,
-  code_is_empty: Signal<bool>,
 ) {
   let (deleted, inserted) = {
     let mut st = sink_state.borrow_mut();
@@ -2512,11 +2346,6 @@ fn apply_sink_text_diff(
     bridge.set_selection(DocSelection::caret(last, end_off));
   }
 
-  let prev_focus_kind = bridge
-    .selection()
-    .and_then(|s| bridge.block_at(s.focus_pos().node))
-    .map(|b| b.kind);
-
   for _ in 0..deleted {
     bridge.dispatch(EditorCommand::DeleteBackward);
   }
@@ -2535,20 +2364,6 @@ fn apply_sink_text_diff(
   }
   if sink_state.borrow().text.len() > SINK_LIMIT {
     empty_ime_sink(sink_state, sink_value);
-  }
-
-  // If a markdown input rule (e.g. typing ```` ``` ````) just converted the focused
-  // prose block into a `code_block`, hand focus straight to its live code editor.
-  if prev_focus_kind.as_deref() != Some("code_block")
-    && let Some(sel) = bridge.selection()
-    && let Some(blk) = bridge.block_at(sel.focus_pos().node)
-    && blk.kind == "code_block"
-  {
-    empty_ime_sink(sink_state, sink_value);
-    let empty = blk.text.is_empty();
-    code_is_empty.set(empty);
-    code_caret_at_start.set(empty);
-    focused_code_block.set(Some(blk.id));
   }
 
   sync_slash_palette_from_caret(bridge, slash, ai_enabled);
@@ -2730,9 +2545,17 @@ fn handle_editor_key(
       sync_slash_palette_from_caret(bridge, slash, ai_enabled);
     }
     EditorKeyAction::SoftBreak => {
-      bridge.dispatch(EditorCommand::InsertText {
-        text: "\\\n".to_owned(),
-      });
+      let in_code_block = bridge
+        .selection()
+        .and_then(|s| bridge.block_at(s.focus_pos().node))
+        .is_some_and(|b| crate::editor_bridge::effective_block_kind(&b) == "code_block");
+      if in_code_block {
+        bridge.dispatch(EditorCommand::SplitBlock);
+      } else {
+        bridge.dispatch(EditorCommand::InsertText {
+          text: "\\\n".to_owned(),
+        });
+      }
     }
     EditorKeyAction::Backspace => {
       if try_backspace_to_title(bridge, show_page_title, title_ref, sink_ref, editor_focused) {
@@ -2742,6 +2565,16 @@ fn handle_editor_key(
       sync_slash_palette_from_caret(bridge, slash, ai_enabled);
     }
     EditorKeyAction::Delete => {
+      if let Some(sel) = bridge.selection()
+        && sel.is_collapsed()
+        && let Some(blk) = bridge.block_at(sel.focus_pos().node)
+        && crate::editor_bridge::effective_block_kind(&blk) == "code_block"
+        && blk.text.is_empty()
+      {
+        bridge.delete_block_and_focus_neighbor(sel.focus_pos().node);
+        sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+        return;
+      }
       bridge.dispatch(EditorCommand::DeleteForward);
       sync_slash_palette_from_caret(bridge, slash, ai_enabled);
     }
@@ -2749,6 +2582,22 @@ fn handle_editor_key(
       bridge.dispatch(EditorCommand::Indent { delta });
     }
     EditorKeyAction::SelectAll => {
+      if let Some(sel) = bridge.selection()
+        && !sel.is_multi_node()
+        && let Some(blk) = bridge.block_at(sel.focus_pos().node)
+        && crate::editor_bridge::effective_block_kind(&blk) == "code_block"
+      {
+        let end = utf16_len(&blk.text);
+        let covers_all = sel.start_pos().offset == 0 && sel.end_pos().offset >= end;
+        if end > 0 && !covers_all {
+          let idx = sel.focus_pos().node;
+          bridge.set_selection(DocSelection::from_positions(
+            DocPosition::new(idx, 0),
+            DocPosition::new(idx, end),
+          ));
+          return;
+        }
+      }
       bridge.select_all();
     }
     EditorKeyAction::Copy => {

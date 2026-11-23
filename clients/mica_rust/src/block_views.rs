@@ -27,7 +27,7 @@ use nsh_core::{
   Color, PropertyValue, StyleDecl, StyleKey, SubmitBehavior,
   color::Rgba,
   element::{
-    Align, ElementRef, ImageSrc, Placement, Style, Svg, component_ref, element_ref, overlay,
+    Align, ElementRef, ImageSrc, Placement, Style, Svg, element_ref, overlay,
     set_clipboard, svg, text_measurer,
   },
   geometry::{Bounds, Points, px},
@@ -99,14 +99,9 @@ pub struct BlockRenderEnv {
   pub drag_anchor: Signal<Option<DocPosition>>,
   pub lightbox: Signal<Option<LightboxContent>>,
   pub focused_code_block: Signal<Option<String>>,
-  pub code_caret_at_start: Signal<bool>,
-  pub code_is_empty: Signal<bool>,
-  pub code_all_selected: Signal<bool>,
-  pub code_key_rev: Signal<u64>,
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
   pub table_selection: Signal<Option<TableCellSelection>>,
   pub table_drag_anchor: Signal<Option<(String, usize, usize)>>,
-  pub code_drag_anchor: Signal<Option<String>>,
   pub body_blank_marquee_ready: Signal<bool>,
   pub marquee_origin_page: Signal<Option<(f32, f32)>>,
   pub last_click: Signal<(usize, u32, f64, u8)>,
@@ -121,7 +116,7 @@ pub struct BlockRenderEnv {
 fn is_non_prose_block(block: &EditorBlock) -> bool {
   matches!(
     effective_block_kind(block),
-    "code_block" | "board" | "mermaid" | "math" | "math_block" | "image" | "table" | "divider"
+    "board" | "mermaid" | "math" | "math_block" | "image" | "table" | "divider"
   )
 }
 
@@ -144,7 +139,6 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   let layouts_drag = env.layouts.clone();
   let drag_anchor = env.drag_anchor;
   let table_drag_guard = env.table_drag_anchor;
-  let code_drag_guard = env.code_drag_anchor;
   let blank_marquee_guard = env.body_blank_marquee_ready;
   let marquee_origin_page_row = env.marquee_origin_page;
   let br_row_clear = env.bridge.clone();
@@ -222,7 +216,6 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
       focused_cell_row.set(None);
       table_sel_row.set(None);
       table_drag_guard.set(None);
-      code_drag_guard.set(None);
       let rw = row_width.get_untracked();
       let eff = page_width.get_untracked();
       let col_w = if crate::page_width::is_full_width(eff) {
@@ -280,30 +273,6 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         table_drag_guard.set(None);
         table_sel_row.set(None);
         focused_cell_row.set(None);
-        drag_anchor.set(Some(upgraded_anchor));
-      }
-      // Seamless code-block-to-document drag upgrade: when mouse-down began on a
-      // code block and the pointer drags upward or downward into a neighboring
-      // block without releasing, upgrade cleanly to cross-block document selection!
-      if let Some(ref c_bid) = code_drag_guard.get_untracked() {
-        if c_bid == &block.id {
-          return;
-        }
-        let Some(code_idx) = bridge_drag.index_of_block_id(c_bid) else {
-          code_drag_guard.set(None);
-          return;
-        };
-        let code_end = bridge_drag
-          .block_at(code_idx)
-          .map(|b| utf16_len(&b.text))
-          .unwrap_or(0);
-        let upgraded_anchor = if idx < code_idx {
-          DocPosition::new(code_idx, code_end)
-        } else {
-          DocPosition::new(code_idx, 0)
-        };
-        code_drag_guard.set(None);
-        focused_code_row.set(None);
         drag_anchor.set(Some(upgraded_anchor));
       }
       let Some(anchor) = drag_anchor.get_untracked() else {
@@ -487,7 +456,6 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     let focused_cell = env.focused_table_cell;
     let table_sel = env.table_selection;
     let table_drag = env.table_drag_anchor;
-    let code_drag = env.code_drag_anchor;
     let marquee_sel_click = env.marquee_selected;
     let blank_marquee_ready = env.body_blank_marquee_ready;
     let marquee_origin_page = env.marquee_origin_page;
@@ -533,7 +501,6 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         focused_cell.set(None);
         table_sel.set(None);
         table_drag.set(None);
-        code_drag.set(None);
         marquee_sel_click.set(None);
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
 
@@ -1144,12 +1111,8 @@ const CODE_LANGUAGES: &[&str] = &[
 fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
+  let layouts = env.layouts.clone();
   let focused_code = env.focused_code_block;
-  let code_at_start = env.code_caret_at_start;
-  let code_is_empty = env.code_is_empty;
-  let code_all_selected = env.code_all_selected;
-  let code_key_rev = env.code_key_rev;
-  let code_drag_anchor = env.code_drag_anchor;
   let drag_anchor = env.drag_anchor;
   let marquee_selected = env.marquee_selected;
   let table_sel = env.table_selection;
@@ -1157,9 +1120,11 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let focused_cell = env.focused_table_cell;
   let blank_marquee_ready = env.body_blank_marquee_ready;
   let marquee_origin_page = env.marquee_origin_page;
+  let editor_focused = env.editor_focused;
+  let caret_blink_on = env.caret_blink_on;
+  let sink_clear_rev = env.sink_clear_rev;
   let block_id = block.id.clone();
   let ai_cb = use_context::<CodeAiCallback>();
-  let pending_caret: Signal<Option<nsh_base::EditorPosition>> = signal(None);
 
   let hovered = signal(false);
   let lang_open = signal(false);
@@ -1170,10 +1135,13 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let copy_gen = signal(0u64);
   let ai_notice: Signal<Option<String>> = signal(None);
   let ai_notice_gen = signal(0u64);
+  let layout_rev = signal(0u64);
 
   let lang_btn_ref: ElementRef = element_ref();
   let ai_btn_ref: ElementRef = element_ref();
   let more_btn_ref: ElementRef = element_ref();
+  let text_ref = element_ref();
+  layouts.borrow_mut().register_text_ref(&block_id, text_ref);
 
   let raw_lang = block
     .data
@@ -1197,30 +1165,401 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let live_src = signal(source.clone());
   let src_ai = source.clone();
 
-  let bid_focus_chk = block_id.clone();
-  let bid_focus_click = block_id.clone();
-  let bid_card_down = block_id.clone();
-  let bid_prev_down = block_id.clone();
-  let is_editing = computed(move || focused_code.get().as_deref() == Some(bid_focus_chk.as_str()));
+  let br_caret_chk = bridge.clone();
+  let is_caret_in_block = computed(move || {
+    let idx = at.index();
+    br_caret_chk
+      .selection_signal()
+      .get()
+      .is_some_and(|s| s.focus_node() == idx)
+  });
 
-  let br_change = bridge.clone();
-  let br_card_down = bridge.clone();
-  let br_prev_down = bridge.clone();
-  let br_prev_press = bridge.clone();
   let br_lang = bridge.clone();
   let br_wrap = bridge.clone();
   let br_ln = bridge.clone();
   let br_title = bridge.clone();
   let br_del = bridge.clone();
-  let lang_for_ed = editor_language_for(&raw_lang).to_string();
   let lang_for_hl = raw_lang.clone();
   let lang_for_picker = lang_label.clone();
+
+  let code_font = "14px monospace";
+  let code_line_h = 22.0_f32;
+  let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
+  let text_u16_len = utf16_len(&source);
+
+  let code_text_box = {
+    let layouts_f = layouts.clone();
+    let layouts_l = layouts.clone();
+    let layouts_sel = layouts.clone();
+    let layouts_click = layouts.clone();
+    let layouts_move = layouts.clone();
+    let bid_f = block_id.clone();
+    let bid_l = block_id.clone();
+    let bid_sel = block_id.clone();
+    let bid_click = block_id.clone();
+    let bid_move = block_id.clone();
+    let br_click = bridge.clone();
+    let br_press = bridge.clone();
+    let br_move = bridge.clone();
+    let br_sel = bridge.clone();
+    let br_find = bridge.clone();
+    let preedit_overlay_sig = bridge.ime_preedit_signal();
+    let text_click = source.clone();
+    let text_render = source.clone();
+    let lang_hl = lang_for_hl.clone();
+    let measure: TextMeasureFn = Rc::new(text_measurer());
+    let measure_sel = measure.clone();
+    let measure_click = measure.clone();
+    let measure_move = measure;
+
+    let hit_code_offset = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
+                                bid: &str,
+                                meas: &TextMeasureFn,
+                                lx: f32,
+                                ly: f32|
+          -> u32 {
+      let cache = layouts_ref.borrow();
+      if let Some(info) = cache.blocks.get(bid) {
+        offset_at_point(&info.lines, lx, ly, code_font, &|f, t| meas(f, t)).min(text_u16_len)
+      } else {
+        text_u16_len
+      }
+    };
+
+    view()
+      .element_ref(&text_ref)
+      .test_id("code-block-editor")
+      .role(AccessibilityRole::Button)
+      .label("代码块编辑器")
+      .flex_1()
+      .min_w(px(0.0))
+      .min_h(px(code_line_h))
+      .relative()
+      .cursor(Cursor::Text)
+      .on_layout(move |b: &Bounds<Points>| {
+        // Account for `my_2()` (8px) on `node-view-code-block` so row-level
+        // cross-block mouse dragging aligns with the exact code line coordinates.
+        let adjusted = Bounds {
+          origin: point(b.origin.x, px(b.origin.y.0 + 8.0)),
+          size: b.size,
+        };
+        layouts_f.borrow_mut().update_text_frame(&bid_f, adjusted);
+      })
+      .on_press_down(move |e: &PressEvent| {
+        focused_code.set(None);
+        focused_cell.set(None);
+        table_sel.set(None);
+        table_drag.set(None);
+        marquee_selected.set(None);
+        blank_marquee_ready.set(false);
+        marquee_origin_page.set(None);
+        sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+
+        let off = hit_code_offset(&layouts_click, &bid_click, &measure_click, e.position.x.0, e.position.y.0);
+        let click_count = e.clicks.clamp(1, 3);
+        let idx = live_index(at);
+        if click_count == 3 {
+          let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, text_u16_len));
+          drag_anchor.set(Some(sel.anchor_pos()));
+          br_click.set_selection(sel);
+        } else if click_count == 2 {
+          let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
+          let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
+          drag_anchor.set(Some(sel.anchor_pos()));
+          br_click.set_selection(sel);
+        } else {
+          let pos = DocPosition::new(idx, off);
+          drag_anchor.set(Some(pos));
+          br_click.set_selection(DocSelection::caret(idx, off));
+        }
+        br_click.request_focus();
+      })
+      .on_press(move || {
+        // Accessibility / headless test press fallback when `on_press_down` wasn't synthesized.
+        let idx = live_index(at);
+        if br_press.selection().is_none_or(|s| s.focus_node() != idx) {
+          marquee_selected.set(None);
+          focused_code.set(None);
+          focused_cell.set(None);
+          br_press.set_selection(DocSelection::caret(idx, text_u16_len));
+          br_press.request_focus();
+        }
+      })
+      .on_mouse_move(move |e: &MouseEvent| {
+        if e.pressed_button != Some(MouseButton::Left) || blank_marquee_ready.get_untracked() {
+          return;
+        }
+        let Some(anchor) = drag_anchor.get_untracked() else {
+          return;
+        };
+        let idx = live_index(at);
+        let off = hit_code_offset(&layouts_move, &bid_move, &measure_move, e.position.x.0, e.position.y.0);
+        let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
+        if br_move.selection().as_ref() != Some(&next) {
+          br_move.set_selection(next);
+        }
+      })
+      // 1. Scoped selection highlight, find matches, IME preedit, and blinking caret
+      .child({
+        let br_ov_sel = br_sel.clone();
+        let br_ov_find = br_find.clone();
+        let local_overlay = computed(move || {
+          let idx = at.index();
+          let in_marquee = marquee_selected
+            .get()
+            .is_some_and(|(lo, hi)| idx >= lo && idx <= hi);
+          let sel_relevant = if in_marquee {
+            None
+          } else {
+            br_ov_sel.selection_signal().get().and_then(|sel| {
+              let start_p = sel.start_pos();
+              let end_p = sel.end_pos();
+              let focus_p = sel.focus_pos();
+              let has_range = !sel.is_collapsed() && idx >= start_p.node && idx <= end_p.node;
+              let has_caret = sel.is_collapsed() && focus_p.node == idx;
+              if has_range || has_caret {
+                let focused = if has_caret { editor_focused.get() } else { false };
+                let preedit = if has_caret && focused {
+                  preedit_overlay_sig.get().filter(|(bi, _, comp)| *bi == idx && !comp.is_empty())
+                } else {
+                  None
+                };
+                if has_range || focused {
+                  Some((sel, focused, preedit))
+                } else {
+                  None
+                }
+              } else {
+                None
+              }
+            })
+          };
+          let find_all = br_ov_find.find_matches_signal().get();
+          let has_find = find_all.iter().any(|fm| fm.block_index == idx);
+          let find_active = if has_find { br_ov_find.find_active_idx_signal().get() } else { 0 };
+          if sel_relevant.is_none() && !has_find {
+            None
+          } else {
+            Some((idx, layout_rev.get(), dark_mode.get(), sel_relevant, has_find, find_active))
+          }
+        });
+        dynamic(move || {
+          let Some((idx, _lrev, dark, sel_relevant, has_find, find_active)) = local_overlay.get() else {
+            return view()
+              .absolute()
+              .inset_0()
+              .pointer_events(PointerEvents::None);
+          };
+          let p = palette(dark);
+          let cache = layouts_sel.borrow();
+          let lines = cache
+            .blocks
+            .get(&bid_sel)
+            .map(|i| i.lines.as_slice())
+            .unwrap_or(&[]);
+
+          let mut layer = view()
+            .absolute()
+            .inset_0()
+            .pointer_events(PointerEvents::None);
+
+          if has_find {
+            let find_all = br_find.find_matches_signal().get_untracked();
+            for (mi, fm) in find_all.iter().enumerate() {
+              if fm.block_index != idx {
+                continue;
+              }
+              let bg = if mi == find_active {
+                Rgba { r: 0.96, g: 0.62, b: 0.04, a: 0.42 }
+              } else {
+                Rgba { r: 0.98, g: 0.80, b: 0.08, a: 0.28 }
+              };
+              for (rx, ry, rw, rh) in selection_rects_for_range(
+                lines,
+                fm.start,
+                fm.end,
+                code_font,
+                code_line_h,
+                &|f, t| measure_sel(f, t),
+              ) {
+                layer = layer.child(
+                  view()
+                    .absolute()
+                    .left(px(rx))
+                    .top(px(ry + 1.5))
+                    .w(px(rw))
+                    .h(px((rh - 3.0).max(14.0)))
+                    .rounded(px(3.0))
+                    .bg(bg),
+                );
+              }
+            }
+          }
+
+          if let Some((sel, focused, active_preedit)) = sel_relevant {
+            let start_p = sel.start_pos();
+            let end_p = sel.end_pos();
+            let focus_p = sel.focus_pos();
+            if !sel.is_collapsed() && idx >= start_p.node && idx <= end_p.node {
+              let s_u16 = if idx == start_p.node { start_p.offset } else { 0 };
+              let e_u16 = if idx == end_p.node { end_p.offset } else { text_u16_len.max(1) };
+              for (rx, ry, rw, rh) in selection_rects_for_range(
+                lines,
+                s_u16,
+                e_u16,
+                code_font,
+                code_line_h,
+                &|f, t| measure_sel(f, t),
+              ) {
+                layer = layer.child(
+                  view()
+                    .absolute()
+                    .left(px(rx))
+                    .top(px(ry + 1.5))
+                    .w(px(rw))
+                    .h(px((rh - 3.0).max(14.0)))
+                    .rounded(px(3.0))
+                    .bg(p.selection_bg),
+                );
+              }
+            }
+            if sel.is_collapsed() && focus_p.node == idx && focused {
+              let (cx, cy, ch) = caret_rect_for_offset(
+                lines,
+                focus_p.offset,
+                code_font,
+                code_line_h,
+                &|f, t| measure_sel(f, t),
+              );
+              if let Some((_, _, comp)) = active_preedit {
+                layer = layer.child(
+                  view()
+                    .test_id("mica-ime-preedit")
+                    .absolute()
+                    .left(px(cx))
+                    .top(px(cy))
+                    .h(px(ch.max(code_line_h)))
+                    .px(px(2.0))
+                    .rounded(px(2.0))
+                    .bg(p.surface_raised)
+                    .border_b_1()
+                    .border_color(p.accent)
+                    .justify_center()
+                    .child(
+                      text(comp)
+                        .text_size(px(14.0))
+                        .line_height(px(code_line_h))
+                        .font_family("monospace")
+                        .text_color(p.text_primary),
+                    ),
+                );
+              } else {
+                layer = layer.child(
+                  view()
+                    .test_id("mica-active-caret")
+                    .absolute()
+                    .left(px(cx))
+                    .top(px(cy + 1.5))
+                    .w(px(2.0))
+                    .h(px((ch - 3.0).max(14.0)))
+                    .rounded(px(1.0))
+                    .bg(move || {
+                      if caret_blink_on.get() {
+                        palette(dark_mode.get()).accent
+                      } else {
+                        TRANSPARENT_RGBA
+                      }
+                    }),
+                );
+              }
+            }
+          }
+          layer
+        })
+      })
+      // 2. Ghost placeholder when empty (pointer-events none so caret stays at (0, 0))
+      .child(when(
+        {
+          let is_empty = text_render.is_empty();
+          move || is_empty
+        },
+        move || {
+          view()
+            .absolute()
+            .left_0()
+            .top_0()
+            .pointer_events(PointerEvents::None)
+            .child(
+              text("输入代码...")
+                .text_size(px(14.0))
+                .line_height(px(code_line_h))
+                .font_family("monospace")
+                .text_color(move || palette(dark_mode.get()).text_ghost),
+            )
+        },
+      ))
+      // 3. Single unified syntax-highlighted code text (identical whether focused or unfocused,
+      //    zero theme jump, zero indent guide lines, native `EventKind::TextLayout`!)
+      .child(dynamic(move || {
+        render_highlighted_code_text(&text_render, &lang_hl, dark_mode)
+          .on(EventKind::TextLayout, {
+            let layouts_tl = layouts_l.clone();
+            let bid_tl = bid_l.clone();
+            move |p: &EventPayload| {
+              if let EventPayload::TextLayout(lines) = p
+                && layouts_tl.borrow_mut().update_lines(
+                  &bid_tl,
+                  lines.clone(),
+                  code_font.to_owned(),
+                  code_line_h,
+                )
+              {
+                layout_rev.update(|v| *v = v.wrapping_add(1));
+              }
+            }
+          })
+      }))
+  };
+
+  let br_card_down = bridge.clone();
+  let mut code_row = view()
+    .w_full()
+    .flex_row()
+    .items_start();
+  if line_numbers {
+    let nums: String = (1..=line_count)
+      .map(|n| n.to_string())
+      .collect::<Vec<_>>()
+      .join("\n");
+    code_row = code_row.child(
+      view()
+        .min_w(px(28.0))
+        .pr(px(12.0))
+        .flex_shrink_0()
+        .items_end()
+        .pointer_events(PointerEvents::None)
+        .child(
+          text(nums)
+            .text_size(px(13.0))
+            .line_height(px(code_line_h))
+            .font_family("monospace")
+            .text_color(move || palette(dark_mode.get()).text_faint),
+        ),
+    );
+  }
+  code_row = code_row.child(code_text_box);
+
+  let layouts_row = layouts;
+  let bid_row = block_id;
 
   view()
     .test_id("node-view-code-block")
     .relative()
     .w_full()
     .my_2()
+    .on_layout(move |b: &Bounds<Points>| {
+      layouts_row.borrow_mut().update_row_frame(&bid_row, *b);
+    })
     .child(
       view()
         .relative()
@@ -1231,230 +1570,26 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         .py(px(12.0))
         .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
         .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
-        .on_press_down(move |_: &PressEvent| {
-          marquee_selected.set(None);
+        .on_press_down(move |e: &PressEvent| {
+          focused_code.set(None);
+          focused_cell.set(None);
           table_sel.set(None);
           table_drag.set(None);
-          focused_cell.set(None);
+          marquee_selected.set(None);
           blank_marquee_ready.set(false);
           marquee_origin_page.set(None);
-          drag_anchor.set(None);
-          br_card_down.clear_selection();
-          code_drag_anchor.set(Some(bid_card_down.clone()));
+          sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+          let idx = live_index(at);
+          let off = if e.position.x.0 < 14.0 { 0 } else { text_u16_len };
+          let pos = DocPosition::new(idx, off);
+          drag_anchor.set(Some(pos));
+          br_card_down.set_selection(DocSelection::caret(idx, off));
+          br_card_down.request_focus();
         })
-        // Lazy mount: lightweight `md-core` syntax-highlighted text when unfocused
-        // (instant on 141KB docs, CAP-06-10), full `nsh_base::editor()` on click!
+        .child(code_row)
+        // Floating top-right hover/active toolbar
         .child(when(
-          move || !is_editing.get(),
-          {
-            let lang_hl = lang_for_hl.clone();
-            let bid_pd = bid_prev_down.clone();
-            let br_pd = br_prev_down.clone();
-            let br_pp = br_prev_press.clone();
-            move || {
-              let bid_c = bid_focus_click.clone();
-              let bid_d = bid_pd.clone();
-              let br_d = br_pd.clone();
-              let br_p = br_pp.clone();
-              let lang_hl2 = lang_hl.clone();
-              let measure_code: TextMeasureFn = Rc::new(text_measurer());
-              view()
-                .test_id("code-block-editor")
-                .role(AccessibilityRole::Button)
-                .label("点击编辑代码块")
-                .w_full()
-                .items_start()
-                .cursor(Cursor::Text)
-                .on_press_down(move |e: &PressEvent| {
-                  marquee_selected.set(None);
-                  table_sel.set(None);
-                  table_drag.set(None);
-                  focused_cell.set(None);
-                  blank_marquee_ready.set(false);
-                  marquee_origin_page.set(None);
-                  drag_anchor.set(None);
-                  br_d.clear_selection();
-                  let src_now = live_src.get_untracked();
-                  let pos = code_position_from_point(
-                    &src_now,
-                    e.position.x.0,
-                    e.position.y.0,
-                    line_numbers,
-                    &|f, t| measure_code(f, t),
-                  );
-                  pending_caret.set(Some(pos));
-                  code_drag_anchor.set(Some(bid_d.clone()));
-                })
-                .on_mouse_up(move |_: &MouseEvent| {
-                  code_drag_anchor.set(None);
-                })
-                .on_press(move || {
-                  code_drag_anchor.set(None);
-                  marquee_selected.set(None);
-                  // If the press already upgraded to a cross-block page drag, do
-                  // NOT enter code-block live edit mode on release.
-                  if drag_anchor.get_untracked().is_some() {
-                    return;
-                  }
-                  br_p.clear_selection();
-                  let src_now = live_src.get_untracked();
-                  let empty = src_now.is_empty();
-                  let target = pending_caret
-                    .get_untracked()
-                    .unwrap_or_else(|| code_end_position(&src_now));
-                  pending_caret.set(Some(target));
-                  code_is_empty.set(empty);
-                  code_at_start.set(empty || (target.line == 0 && target.column == 0));
-                  code_all_selected.set(false);
-                  focused_code.set(Some(bid_c.clone()));
-                  code_key_rev.update(|v| *v = v.wrapping_add(1));
-                })
-                .child(dynamic(move || {
-                  let cur = live_src.get();
-                  render_highlighted_code_preview(&cur, &lang_hl2, dark_mode)
-                }))
-            }
-          },
-        ))
-        .child(when(
-          move || is_editing.get(),
-          move || {
-            let br_c = br_change.clone();
-            let init_val = live_src.get_untracked();
-            let target_pos = pending_caret
-              .get_untracked()
-              .unwrap_or_else(|| code_end_position(&init_val));
-            let prev_lines = signal(init_val.bytes().filter(|&b| b == b'\n').count() + 1);
-            let ed_ref = component_ref::<nsh_base::editor::Editor>();
-            let ed_has_os_focus = signal(false);
-            let applied_initial_caret = signal(false);
-            let lang_ed = lang_for_ed.clone();
-            // Post-mount OS focus + caret placement guarantee:
-            // `nsh_base::editor()` defaults its caret to `(0, 0)` on mount, so we
-            // focus it and immediately place the caret at the clicked position (or
-            // end of the code block when clicking past text / via keyboard).
-            {
-              let ed_ref_f = ed_ref;
-              spawn(async move {
-                if let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>() {
-                  api.focus();
-                  if !applied_initial_caret.get_untracked() {
-                    applied_initial_caret.set(true);
-                    api.set_selections(vec![nsh_base::EditorSelection::caret(target_pos)]);
-                  }
-                }
-                timer(Duration::from_millis(24)).await;
-                if let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>() {
-                  if !ed_has_os_focus.get_untracked() {
-                    api.focus();
-                  }
-                  if !applied_initial_caret.get_untracked() {
-                    applied_initial_caret.set(true);
-                    api.set_selections(vec![nsh_base::EditorSelection::caret(target_pos)]);
-                  }
-                }
-              });
-            }
-            editor()
-              .component_ref(&ed_ref)
-              .test_id("code-block-editor")
-              .accessibility_label("代码块编辑器")
-              .w_full()
-              .default_value(Some(SharedString::from(init_val)))
-              .auto_focus(true)
-              .language(Some(SharedString::from(lang_ed)))
-              .placeholder("输入代码...")
-              .line_numbers(line_numbers)
-              .soft_wrap(wrap)
-              .folding(false)
-              .auto_indent(true)
-              .auto_close(true)
-              .font_size(px(14.0))
-              .line_height(px(22.0))
-              .min_rows(Some(1u32))
-              .max_rows(None)
-              .cursor_surrounding_lines(Some(0u32))
-              .scroll_beyond_last_line(EditorScrollBeyond::None)
-              .styles(move || code_editor_styles(dark_mode.get()))
-              .on_focus({
-                let bid_f = block_id.clone();
-                let ed_ref_on = ed_ref;
-                move || {
-                  ed_has_os_focus.set(true);
-                  let empty = live_src.get_untracked().is_empty();
-                  focused_code.set(Some(bid_f.clone()));
-                  code_is_empty.set(empty);
-                  code_all_selected.set(false);
-                  if !applied_initial_caret.get_untracked()
-                    && let Some(api) = ed_ref_on.api::<nsh_base::editor::EditorApi>()
-                  {
-                    applied_initial_caret.set(true);
-                    api.set_selections(vec![nsh_base::EditorSelection::caret(target_pos)]);
-                    code_at_start.set(empty || (target_pos.line == 0 && target_pos.column == 0));
-                  } else if empty {
-                    code_at_start.set(true);
-                  }
-                  // Bump `code_key_rev` synchronously AND on the next microtask so
-                  // our Backspace/Delete/Ctrl+AA bindings ALWAYS register AFTER
-                  // `nsh_base::editor()`'s own `focused` keymap effect (LIFO wins!).
-                  code_key_rev.update(|v| *v = v.wrapping_add(1));
-                  spawn(async move {
-                    code_key_rev.update(|v| *v = v.wrapping_add(1));
-                  });
-                }
-              })
-              .on_blur(move || {
-                ed_has_os_focus.set(false);
-                code_at_start.set(false);
-                code_is_empty.set(false);
-                code_all_selected.set(false);
-                pending_caret.set(None);
-              })
-              .on_change(move |val: &SharedString| {
-                copied.set(false);
-                live_src.set(val.to_string());
-                let empty = val.is_empty();
-                code_is_empty.set(empty);
-                code_all_selected.set(false);
-                if empty {
-                  code_at_start.set(true);
-                  code_key_rev.update(|v| *v = v.wrapping_add(1));
-                }
-                // Work around `nsh_base::editor()` calling `show_caret()` synchronously
-                // against the pre-layout `viewport.height` when `Enter` adds a new row
-                // (`grow_height` has not laid out the taller box yet, so `scroll_y` jumps
-                // up by 1 line!). Resetting `scroll_to_line(0)` in the immediate microtask
-                // restores `scroll_y = 0` before the frame commits -> zero upward caret jump!
-                let new_lines = val.bytes().filter(|&b| b == b'\n').count() + 1;
-                if new_lines != prev_lines.get_untracked() {
-                  prev_lines.set(new_lines);
-                  spawn(async move {
-                    if let Some(api) = ed_ref.api::<nsh_base::editor::EditorApi>() {
-                      api.scroll_to_line(0);
-                    }
-                  });
-                }
-                br_c.update_block_source_live(live_index(at), val.as_ref());
-              })
-              .on_selection_change(move |sels: &Vec<nsh_base::EditorSelection>| {
-                let at_start = sels.last().is_some_and(|s| {
-                  s.anchor.line == 0
-                    && s.anchor.column == 0
-                    && s.head.line == 0
-                    && s.head.column == 0
-                });
-                let all_sel = selection_covers_all_text(&live_src.get_untracked(), sels);
-                code_at_start.set(at_start);
-                code_all_selected.set(all_sel);
-                if at_start || all_sel {
-                  code_key_rev.update(|v| *v = v.wrapping_add(1));
-                }
-              })
-          },
-        ))
-        // Floating top-right hover toolbar
-        .child(when(
-          move || hovered.get() || is_editing.get() || lang_open.get() || ai_open.get() || more_open.get() || copied.get(),
+          move || hovered.get() || is_caret_in_block.get() || lang_open.get() || ai_open.get() || more_open.get() || copied.get(),
           move || {
             let lbl = lang_label.clone();
             view()
@@ -1916,30 +2051,32 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
     ))
 }
 
-fn render_highlighted_code_preview(code: &str, lang: &str, dark_mode: Signal<bool>) -> AnyElement {
+fn render_highlighted_code_text(code: &str, lang: &str, dark_mode: Signal<bool>) -> Text {
   let p = palette(dark_mode.get());
-  if code.is_empty() {
-    return text("输入代码...")
-      .w_full()
-      .text_size(px(14.0))
-      .line_height(px(22.0))
-      .font_family("monospace")
-      .text_color(p.text_ghost)
-      .into_element();
-  }
   let mut root = text("")
     .w_full()
     .text_size(px(14.0))
     .line_height(px(22.0))
     .font_family("monospace")
     .text_color(p.text_primary);
-  // Skip tokenizing gigantic snippets (>12KB) in preview to keep 60fps virtual scrolling.
+  if code.is_empty() {
+    return root;
+  }
+  // Skip tokenizing gigantic snippets (>12KB) to keep 60fps virtual scrolling.
   if code.len() > 12_000 {
-    return root.child(text(code.to_owned())).into_element();
+    root = root.child(text(code.to_owned()));
+    if code.ends_with('\n') {
+      root = root.child(text("\u{200B}"));
+    }
+    return root;
   }
   let tokens = mica_md::highlight::highlight_code(code, lang);
   if tokens.is_empty() {
-    return root.child(text(code.to_owned())).into_element();
+    root = root.child(text(code.to_owned()));
+    if code.ends_with('\n') {
+      root = root.child(text("\u{200B}"));
+    }
+    return root;
   }
   let total_u16 = utf16_len(code);
   let mut cursor = 0u32;
@@ -1974,7 +2111,10 @@ fn render_highlighted_code_preview(code: &str, lang: &str, dark_mode: Signal<boo
       root = root.child(text(tail.to_owned()));
     }
   }
-  root.into_element()
+  if code.ends_with('\n') {
+    root = root.child(text("\u{200B}"));
+  }
+  root
 }
 
 // ── 3. Embedded Board (Single-Layer, Snug Auto-Fit, Draggable Resize Handles) ─
@@ -2908,7 +3048,6 @@ fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
   let focused_cell = env.focused_table_cell;
   let table_selection = env.table_selection;
   let table_drag_anchor = env.table_drag_anchor;
-  let code_drag_anchor = env.code_drag_anchor;
   let marquee_selected = env.marquee_selected;
   let drag_anchor = env.drag_anchor;
   let editor_focused = env.editor_focused;
@@ -3027,7 +3166,6 @@ fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
       })
       .on_press_down(move |_: &PressEvent| {
         drag_anchor.set(None);
-        code_drag_anchor.set(None);
         marquee_selected.set(None);
         br_down.clear_selection();
         editor_focused.set(false);
@@ -3717,20 +3855,6 @@ impl CalloutKind {
   }
 }
 
-fn editor_language_for(lang: &str) -> String {
-  match lang.trim().to_ascii_lowercase().as_str() {
-    "" | "auto" | "plain" | "text" | "txt" => "plain".to_owned(),
-    "rs" | "rust" => "rust".to_owned(),
-    "ts" | "tsx" | "typescript" => "typescript".to_owned(),
-    "js" | "jsx" | "javascript" => "javascript".to_owned(),
-    "py" | "python" => "python".to_owned(),
-    "sh" | "bash" | "zsh" | "shell" => "bash".to_owned(),
-    "yml" | "yaml" => "yaml".to_owned(),
-    "md" | "markdown" => "markdown".to_owned(),
-    other => other.to_owned(),
-  }
-}
-
 fn code_editor_styles(dark: bool) -> EditorStyles {
   let p = palette(dark);
   let mut styles = EditorStyles::default();
@@ -3746,91 +3870,6 @@ fn code_editor_styles(dark: bool) -> EditorStyles {
     StyleDecl::Set(StyleKey::BackgroundColor, PropertyValue::Color(Some(Color::from(p.selection_bg)))),
   ])));
   styles
-}
-
-/// Returns the end position `(last_line, last_utf16_col)` of `src`.
-fn code_end_position(src: &str) -> nsh_base::EditorPosition {
-  if src.is_empty() {
-    return nsh_base::EditorPosition::new(0, 0);
-  }
-  let normalized = src.replace("\r\n", "\n");
-  let last_line = normalized.bytes().filter(|&b| b == b'\n').count() as u32;
-  let tail = normalized.rsplit('\n').next().unwrap_or("");
-  nsh_base::EditorPosition::new(last_line, tail.encode_utf16().count() as u32)
-}
-
-/// Maps a click point `(x, y)` inside the unfocused code block preview to the
-/// closest 0-based `(line, utf16_column)` caret position. Clicking past a line's
-/// right edge lands at that line's end; clicking below the last line lands at
-/// the end of the code block.
-fn code_position_from_point<F>(
-  src: &str,
-  x: f32,
-  y: f32,
-  has_line_numbers: bool,
-  measure: &F,
-) -> nsh_base::EditorPosition
-where
-  F: Fn(&str, &str) -> Points,
-{
-  if src.is_empty() {
-    return nsh_base::EditorPosition::new(0, 0);
-  }
-  let normalized = src.replace("\r\n", "\n");
-  let lines: Vec<&str> = normalized.split('\n').collect();
-  let line_h = 22.0_f32;
-  let line_idx = (y.max(0.0) / line_h).floor() as usize;
-  if line_idx >= lines.len() {
-    return code_end_position(&normalized);
-  }
-  let line = lines[line_idx];
-  if line.is_empty() {
-    return nsh_base::EditorPosition::new(line_idx as u32, 0);
-  }
-  let gutter_w = if has_line_numbers { 38.0 } else { 0.0 };
-  let target_x = (x - gutter_w).max(0.0);
-  let font = "14px monospace";
-  let full_w = measure(font, line).0;
-  if target_x >= full_w {
-    return nsh_base::EditorPosition::new(line_idx as u32, line.encode_utf16().count() as u32);
-  }
-  let mut best_u16 = 0u32;
-  let mut prev_w = 0.0_f32;
-  for (byte_idx, ch) in line.char_indices() {
-    let next_byte = byte_idx + ch.len_utf8();
-    let w = measure(font, &line[..next_byte]).0;
-    let mid = (prev_w + w) * 0.5;
-    if target_x < mid {
-      return nsh_base::EditorPosition::new(line_idx as u32, best_u16);
-    }
-    best_u16 += ch.len_utf16() as u32;
-    prev_w = w;
-  }
-  nsh_base::EditorPosition::new(line_idx as u32, best_u16)
-}
-
-/// Returns `true` when `sels` selects the entire contents of `src` (using
-/// 0-based line and UTF-16 column coordinates matching `nsh_base::EditorPosition`).
-fn selection_covers_all_text(src: &str, sels: &[nsh_base::EditorSelection]) -> bool {
-  if src.is_empty() {
-    return true;
-  }
-  let Some(sel) = sels.last() else {
-    return false;
-  };
-  let (start, end) = if sel.anchor <= sel.head {
-    (sel.anchor, sel.head)
-  } else {
-    (sel.head, sel.anchor)
-  };
-  if start.line != 0 || start.column != 0 {
-    return false;
-  }
-  let normalized = src.replace("\r\n", "\n");
-  let last_line = normalized.bytes().filter(|&b| b == b'\n').count() as u32;
-  let tail = normalized.rsplit('\n').next().unwrap_or("");
-  let last_col = tail.encode_utf16().count() as u32;
-  end.line == last_line && end.column == last_col
 }
 
 fn copy_with_reset(text: String, copied: Signal<bool>, copy_gen: Signal<u64>) {
@@ -3923,75 +3962,6 @@ mod tests {
       raster.width,
       raster.height,
       &svg[..svg.len().min(600)]
-    );
-  }
-
-  #[test]
-  fn selection_covers_all_text_handles_single_multiline_cjk_and_reverse() {
-    use nsh_base::{EditorPosition, EditorSelection};
-    assert!(selection_covers_all_text("", &[]));
-    let src = "fn main() {\n  // 中文🚀\n}";
-    // Full forward selection: line 0 col 0 -> line 2 col 1
-    let full_fwd = [EditorSelection::new(
-      EditorPosition::new(0, 0),
-      EditorPosition::new(2, 1),
-    )];
-    assert!(selection_covers_all_text(src, &full_fwd));
-    // Full reverse selection
-    let full_rev = [EditorSelection::new(
-      EditorPosition::new(2, 1),
-      EditorPosition::new(0, 0),
-    )];
-    assert!(selection_covers_all_text(src, &full_rev));
-    // Partial selection (missing closing brace)
-    let partial = [EditorSelection::new(
-      EditorPosition::new(0, 0),
-      EditorPosition::new(2, 0),
-    )];
-    assert!(!selection_covers_all_text(src, &partial));
-    // Single-line CJK + surrogate pair ("中文🚀" = 4 UTF-16 units)
-    let cjk = "中文🚀";
-    assert!(selection_covers_all_text(
-      cjk,
-      &[EditorSelection::new(
-        EditorPosition::new(0, 0),
-        EditorPosition::new(0, 4),
-      )]
-    ));
-    assert!(!selection_covers_all_text(
-      cjk,
-      &[EditorSelection::new(
-        EditorPosition::new(0, 0),
-        EditorPosition::new(0, 3),
-      )]
-    ));
-  }
-
-  #[test]
-  fn code_click_position_lands_at_end_when_clicking_right_or_below_code() {
-    use nsh_base::EditorPosition;
-    let measure = |_font: &str, text: &str| px(text.chars().count() as f32 * 8.4);
-    assert_eq!(code_end_position("ddasf"), EditorPosition::new(0, 5));
-    assert_eq!(code_end_position("line1\nline2"), EditorPosition::new(1, 5));
-    // Clicking past the right edge of "ddasf" lands at end (0, 5), NOT (0, 0)
-    assert_eq!(
-      code_position_from_point("ddasf", 180.0, 10.0, false, &measure),
-      EditorPosition::new(0, 5)
-    );
-    // Clicking below the last line lands at the end of the code block
-    assert_eq!(
-      code_position_from_point("test\ntetes", 12.0, 90.0, false, &measure),
-      EditorPosition::new(1, 5)
-    );
-    // Clicking near the start of line 0 lands at (0, 0)
-    assert_eq!(
-      code_position_from_point("ddasf", 1.0, 8.0, false, &measure),
-      EditorPosition::new(0, 0)
-    );
-    // Clicking mid-line on line 1 lands on the exact character column
-    assert_eq!(
-      code_position_from_point("test\ntetes", 25.0, 30.0, false, &measure),
-      EditorPosition::new(1, 3)
     );
   }
 }

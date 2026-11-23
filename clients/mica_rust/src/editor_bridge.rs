@@ -77,8 +77,6 @@ pub struct MicaDocumentBridge {
   selection_sig: Signal<Option<DocSelection>>,
   /// Monotonic counter bumped when the editor body IME sink should focus & sync.
   focus_sink_rev: Signal<u64>,
-  /// Request `(block_id, seq)` to immediately mount & focus a live code block editor.
-  code_focus_request: Signal<Option<(String, u64)>>,
   /// Scroll-to-block request `(block_index, mode, seq)` consumed by `virtual_list`.
   scroll_request: Signal<Option<(usize, ScrollMode, u64)>>,
   /// Active CJK IME composition preedit `(block_index, start_u16, preedit_text)`.
@@ -141,7 +139,6 @@ impl MicaDocumentBridge {
       structure_rev: signal(0u64),
       selection_sig: signal(sel),
       focus_sink_rev: signal(0u64),
-      code_focus_request: signal(None),
       scroll_request: signal(None),
       ime_preedit: signal(None),
       find_matches_sig: signal(Vec::new()),
@@ -197,19 +194,6 @@ impl MicaDocumentBridge {
   /// Signal bumped ONLY on structural block changes (`virtual_list` `count` & `keys`).
   pub fn structure_rev_signal(&self) -> Signal<u64> {
     self.structure_rev
-  }
-
-  pub fn code_focus_request_signal(&self) -> Signal<Option<(String, u64)>> {
-    self.code_focus_request
-  }
-
-  pub fn request_focus_code_block(&self, block_id: String) {
-    let seq = self
-      .code_focus_request
-      .get_untracked()
-      .map(|(_, s)| s.wrapping_add(1))
-      .unwrap_or(1);
-    self.code_focus_request.set(Some((block_id, seq)));
   }
 
   /// Fine-grained per-block revision signal (`Signal<u64>`) bumped ONLY when
@@ -641,12 +625,8 @@ impl MicaDocumentBridge {
         data,
       });
     }
-    if canonical == "code_block"
-      && let Some(sel) = self.selection()
-      && let Some(blk) = self.block_at(sel.focus_pos().node)
-      && effective_block_kind(&blk) == "code_block"
-    {
-      self.request_focus_code_block(blk.id);
+    if canonical == "code_block" {
+      self.request_focus();
     }
   }
 
@@ -705,12 +685,7 @@ impl MicaDocumentBridge {
       "code_block" | "code" => {
         let lang = language.unwrap_or_default();
         self.insert_block_after_caret("code_block", text, json!({ "language": lang }));
-        if let Some(sel) = self.selection()
-          && let Some(blk) = self.block_at(sel.focus_pos().node)
-          && effective_block_kind(&blk) == "code_block"
-        {
-          self.request_focus_code_block(blk.id);
-        }
+        self.request_focus();
       }
       other => {
         self.insert_block_after_caret(other, text, Value::Null);
