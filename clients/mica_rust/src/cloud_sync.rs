@@ -327,6 +327,7 @@ impl CloudSessionHandles {
     initial_doc: Option<(Uuid, String)>,
     mirror_to_vault: bool,
   ) {
+    self.bridge.flush_pending_persist();
     if mirror_to_vault {
       let _ = self.vault.replace_workspace_views(&origin, ws_id, &views);
       if let Some((did, ref md)) = initial_doc {

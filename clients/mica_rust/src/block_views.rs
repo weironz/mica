@@ -123,11 +123,16 @@ fn is_non_prose_block(block: &EditorBlock) -> bool {
   )
 }
 
+#[inline]
+fn live_index(at: Position) -> usize {
+  nsh_core::element::untracked(|| at.index())
+}
+
 // ── Virtual List Row Entry Point ─────────────────────────────────────────────
 
 /// Renders one recycled `virtual_list` row cell for block position `at`.
-/// Subscribes ONLY to `at.index()` and that single block's `block_rev` signal
-/// (never to global document typing or sibling edits).
+/// Subscribes ONLY to `cell_block_id` (short-circuits when a block merely shifts
+/// index on Enter/Backspace!) and that single block's `block_rev` signal.
 pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoElement {
   let bridge = env.bridge.clone();
   let bridge_id = env.bridge.clone();
@@ -152,11 +157,46 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   let drag_measure: TextMeasureFn = Rc::new(text_measurer());
 
   // Memoized cell identity: NEVER runs on typing (`structure_rev` stays flat);
-  // on page switch or splice, short-circuits unchanged cells and immediately
-  // re-renders recycled cells whose `block_id` actually changed!
+  // on Enter/Backspace/splice, unchanged rows that merely shift index keep the
+  // exact same `block_id`, so `cell_block_id` short-circuits and NEVER rebuilds
+  // sibling Mermaid diagrams, tables, code blocks, or paragraphs!
   let cell_block_id = computed(move || {
     structure_rev.get();
     bridge_id.block_id_at(at.index())
+  });
+
+  // Lightweight zero-DOM index sync so `layouts.row_refs` stays current across
+  // Enter/Backspace shifts without triggering any element tree rebuild.
+  {
+    let layouts_sync = layouts_reg.clone();
+    effect(move || {
+      let idx = at.index();
+      if let Some(bid) = cell_block_id.get() {
+        layouts_sync.borrow_mut().register_row_ref(&bid, idx, row_ref);
+      }
+    });
+  }
+
+  // Memoized boolean gate for the non-prose block selection highlight overlay.
+  // Short-circuits to `false` on every collapsed caret move, Enter, or Backspace.
+  let show_block_overlay = computed(move || {
+    let idx = at.index();
+    let in_marquee = marquee_selected
+      .get()
+      .is_some_and(|(lo, hi)| idx >= lo && idx <= hi);
+    if in_marquee {
+      return true;
+    }
+    if let Some(sel) = bridge_sel.selection_signal().get() {
+      !sel.is_collapsed()
+        && idx >= sel.start_pos().node
+        && idx <= sel.end_pos().node
+        && bridge_sel
+          .block_at(idx)
+          .is_some_and(|b| is_non_prose_block(&b))
+    } else {
+      false
+    }
   });
 
   view()
@@ -282,40 +322,17 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
           };
           let rev_sig = bridge.block_rev_signal(&block_id);
           rev_sig.get();
-          let idx = at.index();
-          layouts_reg.borrow_mut().register_row_ref(&block_id, idx, row_ref);
-          let Some(block) = bridge.block_at(idx) else {
+          let Some(block) = bridge.block_by_id(&block_id) else {
             return view().h(px(1.0)).into_element();
           };
-          render_block_body(&env, idx, block)
+          let idx_now = live_index(at);
+          layouts_reg.borrow_mut().register_row_ref(&block_id, idx_now, row_ref);
+          render_block_body(&env, at, block)
         }))
         // Scoped non-interactive selection highlight for marquee block selection
         // AND cross-block range selections spanning non-prose blocks (tables,
         // dividers, code blocks, images, boards, Mermaid, math).
-        .child(dynamic(move || {
-          let idx = at.index();
-          let in_marquee = marquee_selected
-            .get()
-            .is_some_and(|(lo, hi)| idx >= lo && idx <= hi);
-          let in_non_prose_range = if in_marquee {
-            false
-          } else if let Some(sel) = bridge_sel.selection_signal().get() {
-            !sel.is_collapsed()
-              && idx >= sel.start_pos().node
-              && idx <= sel.end_pos().node
-              && bridge_sel
-                .block_at(idx)
-                .is_some_and(|b| is_non_prose_block(&b))
-          } else {
-            false
-          };
-          if !in_marquee && !in_non_prose_range {
-            return view()
-              .absolute()
-              .pointer_events(PointerEvents::None)
-              .into_element();
-          }
-          let p = palette(dark_mode.get());
+        .child(when(move || show_block_overlay.get(), move || {
           view()
             .test_id("block-selection-overlay")
             .absolute()
@@ -324,34 +341,34 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
             .top(px(1.0))
             .bottom(px(1.0))
             .rounded(px(6.0))
-            .bg(p.selection_bg)
+            .bg(move || palette(dark_mode.get()).selection_bg)
             .pointer_events(PointerEvents::None)
-            .into_element()
         })),
     )
 }
 
-fn render_block_body(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> AnyElement {
+fn render_block_body(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> AnyElement {
   match effective_block_kind(&block) {
-    "code_block" => render_code_block_view(env, idx, block).into_element(),
-    "board" => render_board_block_view(env, idx, block).into_element(),
-    "mermaid" => render_mermaid_block_view(env, idx, block).into_element(),
-    "math" | "math_block" => render_math_block_view(env, idx, block).into_element(),
-    "image" => render_image_block_view(env, idx, block).into_element(),
-    "table" => render_table_block_view(env, idx, block).into_element(),
-    "divider" => render_divider_block_view(env, idx).into_element(),
-    _ => render_prose_block_view(env, idx, block).into_element(),
+    "code_block" => render_code_block_view(env, at, block).into_element(),
+    "board" => render_board_block_view(env, at, block).into_element(),
+    "mermaid" => render_mermaid_block_view(env, at, block).into_element(),
+    "math" | "math_block" => render_math_block_view(env, at, block).into_element(),
+    "image" => render_image_block_view(env, at, block).into_element(),
+    "table" => render_table_block_view(env, at, block).into_element(),
+    "divider" => render_divider_block_view(env, at).into_element(),
+    _ => render_prose_block_view(env, at, block).into_element(),
   }
 }
 
 // ── 1. Prose Blocks (paragraph / heading / lists / todo / single-layer quote) ─
 
-fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let layouts = env.layouts.clone();
   let block_id = block.id.clone();
   let kind = block.kind.clone();
+  let init_idx = live_index(at);
   let indent = block.data.get("indent").and_then(Value::as_u64).unwrap_or(0).min(8) as f32;
   let heading_level = if kind == "heading" {
     block.data.get("level").and_then(Value::as_u64).unwrap_or(1).clamp(1, 6)
@@ -364,11 +381,6 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     None
   };
   let todo_checked = block.data.get("checked").and_then(Value::as_bool).unwrap_or(false);
-  let ordinal = if kind == "numbered_list" {
-    bridge.visible_ordinal_at(idx)
-  } else {
-    0
-  };
 
   let (base_px, font_family) = use_context::<crate::mica_theme::UiAppearance>()
     .map(|a| (a.editor_font_px.get() as f32, a.editor_font_family.get()))
@@ -391,8 +403,6 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     "bulleted_list" | "numbered_list" | "todo" => (2.0, 2.0),
     _ => (3.0, 4.0),
   };
-  // Keep block 0 snug directly beneath the page title without an extra heading gap.
-  let mt = if idx == 0 { 2.0 } else { raw_mt };
 
   let marks = block_marks(&block);
   let text_str = block.text.clone();
@@ -506,6 +516,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
         let click_count = e.clicks.clamp(1, 3);
         let _ = last_click;
+        let idx = live_index(at);
 
         if click_count == 3 {
           inline_math_edit.set(None);
@@ -547,137 +558,173 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         let Some(anchor) = drag_anchor_m.get_untracked() else {
           return;
         };
+        let idx = live_index(at);
         let off = hit_offset(&layouts_move, &bid_move, &font_move, &measure_move, e.position.x.0, e.position.y.0);
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
         if br_move.selection().as_ref() != Some(&next) {
           br_move.set_selection(next);
         }
       })
-      // 1. Scoped selection highlight & primary caret layer (NEVER rebuilds text spans!)
-      .child(dynamic(move || {
-        // Recompute caret/selection geometry whenever TextLayout updates line metrics!
-        let _ = layout_rev.get();
-        let sel_opt = br_sel.selection_signal().get();
-        let find_all = br_find.find_matches_signal().get();
-        let find_active = br_find.find_active_idx_signal().get();
-        let focused = editor_focused.get();
-        let preedit = preedit_overlay_sig.get();
-        let p = palette(dark_mode.get());
-        let cache = layouts_sel.borrow();
-        let lines = cache
-          .blocks
-          .get(&bid_sel)
-          .map(|i| i.lines.as_slice())
-          .unwrap_or(&[]);
-
-        let mut layer = view()
-          .absolute()
-          .inset_0()
-          .pointer_events(PointerEvents::None);
-
-        // Find match highlights in this block
-        for (mi, fm) in find_all.iter().enumerate() {
-          if fm.block_index != idx {
-            continue;
-          }
-          let bg = if mi == find_active {
-            Rgba { r: 0.96, g: 0.62, b: 0.04, a: 0.42 }
+      // 1. Scoped selection highlight & primary caret layer (NEVER rebuilds text spans!
+      // Memoized `local_overlay` short-circuits all ~25 non-active visible rows to `None`.)
+      .child({
+        let br_ov_sel = br_sel.clone();
+        let br_ov_find = br_find.clone();
+        let local_overlay = computed(move || {
+          let idx = at.index();
+          let sel_relevant = br_ov_sel.selection_signal().get().and_then(|sel| {
+            let start_p = sel.start_pos();
+            let end_p = sel.end_pos();
+            let focus_p = sel.focus_pos();
+            let has_range = !sel.is_collapsed() && idx >= start_p.node && idx <= end_p.node;
+            let has_caret = sel.is_collapsed() && focus_p.node == idx;
+            if has_range || has_caret {
+              let focused = if has_caret { editor_focused.get() } else { false };
+              let preedit = if has_caret && focused {
+                preedit_overlay_sig.get().filter(|(bi, _, comp)| *bi == idx && !comp.is_empty())
+              } else {
+                None
+              };
+              if has_range || focused {
+                Some((sel, focused, preedit))
+              } else {
+                None
+              }
+            } else {
+              None
+            }
+          });
+          let find_all = br_ov_find.find_matches_signal().get();
+          let has_find = find_all.iter().any(|fm| fm.block_index == idx);
+          let find_active = if has_find { br_ov_find.find_active_idx_signal().get() } else { 0 };
+          if sel_relevant.is_none() && !has_find {
+            None
           } else {
-            Rgba { r: 0.98, g: 0.80, b: 0.08, a: 0.28 }
-          };
-          for (rx, ry, rw, rh) in selection_rects_for_range(
-            lines,
-            fm.start,
-            fm.end,
-            &font_sel,
-            line_h,
-            &|f, t| measure_sel(f, t),
-          ) {
-            layer = layer.child(
-              view()
-                .absolute()
-                .left(px(rx))
-                .top(px(ry))
-                .w(px(rw))
-                .h(px(rh))
-                .rounded(px(2.0))
-                .bg(bg),
-            );
+            Some((idx, layout_rev.get(), dark_mode.get(), sel_relevant, has_find, find_active))
           }
-        }
+        });
+        dynamic(move || {
+          let Some((idx, _lrev, dark, sel_relevant, has_find, find_active)) = local_overlay.get() else {
+            return view()
+              .absolute()
+              .inset_0()
+              .pointer_events(PointerEvents::None);
+          };
+          let p = palette(dark);
+          let cache = layouts_sel.borrow();
+          let lines = cache
+            .blocks
+            .get(&bid_sel)
+            .map(|i| i.lines.as_slice())
+            .unwrap_or(&[]);
 
-        // Selection range & blinking caret (hidden when unfocused; zero-rebuild blink via reactive bg)
-        if let Some(sel) = sel_opt {
-          let start_p = sel.start_pos();
-          let end_p = sel.end_pos();
-          let focus_p = sel.focus_pos();
-          if !sel.is_collapsed()
-            && idx >= start_p.node
-            && idx <= end_p.node
-          {
-            let b_len = br_sel
-              .block_at(idx)
-              .map(|b| utf16_len(&b.text))
-              .unwrap_or(0);
-            let s_u16 = if idx == start_p.node { start_p.offset } else { 0 };
-            let e_u16 = if idx == end_p.node { end_p.offset } else { b_len.max(1) };
-            for (rx, ry, rw, rh) in selection_rects_for_range(
-              lines,
-              s_u16,
-              e_u16,
-              &font_sel,
-              line_h,
-              &|f, t| measure_sel(f, t),
-            ) {
-              layer = layer.child(
-                view()
-                  .absolute()
-                  .left(px(rx))
-                  .top(px(ry))
-                  .w(px(rw))
-                  .h(px(rh))
-                  .rounded(px(2.0))
-                  .bg(p.selection_bg),
-              );
+          let mut layer = view()
+            .absolute()
+            .inset_0()
+            .pointer_events(PointerEvents::None);
+
+          // Find match highlights in this block
+          if has_find {
+            let find_all = br_find.find_matches_signal().get_untracked();
+            for (mi, fm) in find_all.iter().enumerate() {
+              if fm.block_index != idx {
+                continue;
+              }
+              let bg = if mi == find_active {
+                Rgba { r: 0.96, g: 0.62, b: 0.04, a: 0.42 }
+              } else {
+                Rgba { r: 0.98, g: 0.80, b: 0.08, a: 0.28 }
+              };
+              for (rx, ry, rw, rh) in selection_rects_for_range(
+                lines,
+                fm.start,
+                fm.end,
+                &font_sel,
+                line_h,
+                &|f, t| measure_sel(f, t),
+              ) {
+                layer = layer.child(
+                  view()
+                    .absolute()
+                    .left(px(rx))
+                    .top(px(ry))
+                    .w(px(rw))
+                    .h(px(rh))
+                    .rounded(px(2.0))
+                    .bg(bg),
+                );
+              }
             }
           }
-          if sel.is_collapsed() && focus_p.node == idx && focused {
-            let (cx, cy, ch) = caret_rect_for_offset(
-              lines,
-              focus_p.offset,
-              &font_sel,
-              line_h,
-              &|f, t| measure_sel(f, t),
-            );
-            let active_preedit = preedit
-              .as_ref()
-              .filter(|(bi, _, comp)| *bi == idx && !comp.is_empty());
-            if let Some((_, _, comp)) = active_preedit {
-              let comp_str = comp.clone();
-              layer = layer.child(
-                view()
-                  .test_id("mica-ime-preedit")
-                  .absolute()
-                  .left(px(cx))
-                  .top(px(cy))
-                  .h(px(ch.max(line_h)))
-                  .px(px(2.0))
-                  .rounded(px(2.0))
-                  .bg(p.surface_raised)
-                  .border_b_1()
-                  .border_color(p.accent)
-                  .justify_center()
-                  .child(
-                    text(comp_str)
-                      .text_size(px(font_px))
-                      .line_height(px(line_h))
-                      .text_color(p.text_primary),
-                  ),
+
+          // Selection range & blinking caret (hidden when unfocused; zero-rebuild blink via reactive bg)
+          if let Some((sel, focused, active_preedit)) = sel_relevant {
+            let start_p = sel.start_pos();
+            let end_p = sel.end_pos();
+            let focus_p = sel.focus_pos();
+            if !sel.is_collapsed()
+              && idx >= start_p.node
+              && idx <= end_p.node
+            {
+              let b_len = br_sel
+                .block_at(idx)
+                .map(|b| utf16_len(&b.text))
+                .unwrap_or(0);
+              let s_u16 = if idx == start_p.node { start_p.offset } else { 0 };
+              let e_u16 = if idx == end_p.node { end_p.offset } else { b_len.max(1) };
+              for (rx, ry, rw, rh) in selection_rects_for_range(
+                lines,
+                s_u16,
+                e_u16,
+                &font_sel,
+                line_h,
+                &|f, t| measure_sel(f, t),
+              ) {
+                layer = layer.child(
+                  view()
+                    .absolute()
+                    .left(px(rx))
+                    .top(px(ry))
+                    .w(px(rw))
+                    .h(px(rh))
+                    .rounded(px(2.0))
+                    .bg(p.selection_bg),
+                );
+              }
+            }
+            if sel.is_collapsed() && focus_p.node == idx && focused {
+              let (cx, cy, ch) = caret_rect_for_offset(
+                lines,
+                focus_p.offset,
+                &font_sel,
+                line_h,
+                &|f, t| measure_sel(f, t),
               );
-            } else {
-              layer = layer.child(
-                view()
-                  .test_id("mica-active-caret")
+              if let Some((_, _, comp)) = active_preedit {
+                layer = layer.child(
+                  view()
+                    .test_id("mica-ime-preedit")
+                    .absolute()
+                    .left(px(cx))
+                    .top(px(cy))
+                    .h(px(ch.max(line_h)))
+                    .px(px(2.0))
+                    .rounded(px(2.0))
+                    .bg(p.surface_raised)
+                    .border_b_1()
+                    .border_color(p.accent)
+                    .justify_center()
+                    .child(
+                      text(comp)
+                        .text_size(px(font_px))
+                        .line_height(px(line_h))
+                        .text_color(p.text_primary),
+                    ),
+                );
+              } else {
+                layer = layer.child(
+                  view()
+                    .test_id("mica-active-caret")
                   .absolute()
                   .left(px(cx))
                   .top(px(cy + 1.0))
@@ -692,11 +739,12 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
                     }
                   }),
               );
+              }
             }
           }
-        }
-        layer
-      }))
+          layer
+        })
+      })
       // 2. Native rich inline spans with `EventKind::TextLayout`
       .child({
         let base_color_kind = kind_color;
@@ -767,26 +815,33 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         .child(text_box)
         .into_element()
     }
-    "numbered_list" => view()
-      .w_full()
-      .flex_row()
-      .items_start()
-      .gap(px(6.0))
-      .child(
-        view()
-          .min_w(px(22.0))
-          .h(px(line_h))
-          .flex_shrink_0()
-          .items_end()
-          .justify_center()
-          .child(
-            text(format!("{ordinal}."))
+    "numbered_list" => {
+      let br_ord = bridge.clone();
+      let struct_rev_ord = bridge.structure_rev_signal();
+      view()
+        .w_full()
+        .flex_row()
+        .items_start()
+        .gap(px(6.0))
+        .child(
+          view()
+            .min_w(px(22.0))
+            .h(px(line_h))
+            .flex_shrink_0()
+            .items_end()
+            .justify_center()
+            .child(
+              text(move || {
+                struct_rev_ord.get();
+                format!("{}.", br_ord.visible_ordinal_at(at.index()))
+              })
               .text_size(px((font_px - 1.0).max(12.0)))
               .text_color(move || palette(dark_mode.get()).text_muted),
-          ),
-      )
-      .child(text_box)
-      .into_element(),
+            ),
+        )
+        .child(text_box)
+        .into_element()
+    }
     "todo" => {
       let br_todo = bridge.clone();
       view()
@@ -802,7 +857,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
             .justify_center()
             .child(
               button()
-                .test_id(&format!("todo-checkbox-{idx}"))
+                .test_id(&format!("todo-checkbox-{init_idx}"))
                 .accessibility_label("切换待办完成状态")
                 .w(px(16.0))
                 .h(px(16.0))
@@ -818,7 +873,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
                 })
                 .items_center()
                 .justify_center()
-                .on_press(move || br_todo.toggle_todo_at(idx))
+                .on_press(move || br_todo.toggle_todo_at(live_index(at)))
                 .child(when(move || todo_checked, move || mica_icons::check_icon("#FFFFFF"))),
             ),
         )
@@ -887,9 +942,9 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
   let layouts_row = layouts;
   let bid_row = block_id;
   view()
-    .test_id(&format!("block-row-{idx}"))
+    .test_id(&format!("block-row-{init_idx}"))
     .w_full()
-    .mt(px(mt))
+    .mt(move || if at.index() == 0 { px(2.0) } else { px(raw_mt) })
     .mb(px(mb))
     .pl(px(indent * 24.0))
     .on_layout(move |b: &Bounds<Points>| {
@@ -1046,7 +1101,7 @@ const CODE_LANGUAGES: &[&str] = &[
   "xml", "yaml",
 ];
 
-fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let focused_code = env.focused_code_block;
@@ -1246,7 +1301,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                     }
                   });
                 }
-                br_c.update_block_source_live(idx, val.as_ref());
+                br_c.update_block_source_live(live_index(at), val.as_ref());
               })
               .on_selection_change(move |sels: &Vec<nsh_base::EditorSelection>| {
                 let at_start = sels.last().is_some_and(|s| {
@@ -1432,7 +1487,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                             } else {
                               Value::String(lang_owned.clone())
                             };
-                            br_item.update_block_data_attr_at(idx, "language", val);
+                            br_item.update_block_data_attr_at(live_index(at), "language", val);
                             lang_open.set(false);
                           })
                           .child(
@@ -1502,7 +1557,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                   .on_press(move || {
                     ai_open.set(false);
                     if let Some(c) = &cb {
-                      (c.0)(action, idx, src.clone());
+                      (c.0)(action, live_index(at), src.clone());
                     } else {
                       ai_notice.set(Some("请先在设置中配置 AI 模型".to_string()));
                       let g = ai_notice_gen.get_untracked().wrapping_add(1);
@@ -1560,7 +1615,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                       .items_center()
                       .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                       .on_press(move || {
-                        bw.update_block_data_attr_at(idx, "wrap", Value::Bool(!wrap));
+                        bw.update_block_data_attr_at(live_index(at), "wrap", Value::Bool(!wrap));
                         more_open.set(false);
                       })
                       .child(
@@ -1580,7 +1635,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                       .items_center()
                       .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                       .on_press(move || {
-                        bl.update_block_data_attr_at(idx, "lineNumbers", Value::Bool(!line_numbers));
+                        bl.update_block_data_attr_at(live_index(at), "lineNumbers", Value::Bool(!line_numbers));
                         more_open.set(false);
                       })
                       .child(
@@ -1625,7 +1680,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                       .hover(move |s| s.bg(palette(dark_mode.get_untracked()).danger_wash))
                       .on_press(move || {
                         more_open.set(false);
-                        bd.delete_block_at(idx);
+                        bd.delete_block_at(live_index(at));
                       })
                       .child(text("删除代码块").text_size(px(12.5)).text_color(move || palette(dark_mode.get()).danger)),
                   ),
@@ -1684,7 +1739,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .on_submit(move |v: &str| {
                 let clean = v.trim();
                 let val = if clean.is_empty() { Value::Null } else { Value::String(clean.to_owned()) };
-                br_sub.update_block_data_attr_at(idx, "title", val);
+                br_sub.update_block_data_attr_at(live_index(at), "title", val);
                 title_editing.set(false);
               }),
           )
@@ -1692,12 +1747,12 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
             let cur = title_draft.get_untracked();
             let clean = cur.trim();
             let val = if clean.is_empty() { Value::Null } else { Value::String(clean.to_owned()) };
-            br_save.update_block_data_attr_at(idx, "title", val);
+            br_save.update_block_data_attr_at(live_index(at), "title", val);
             title_editing.set(false);
           }))
           .child(mini_chip("移除", dark_mode, move || {
             title_draft.set(String::new());
-            br_rm.update_block_data_attr_at(idx, "title", Value::Null);
+            br_rm.update_block_data_attr_at(live_index(at), "title", Value::Null);
             title_editing.set(false);
           }))
       }
@@ -1789,7 +1844,7 @@ fn render_highlighted_code_preview(code: &str, lang: &str, dark_mode: Signal<boo
 
 // ── 3. Embedded Board (Single-Layer, Snug Auto-Fit, Draggable Resize Handles) ─
 
-fn render_board_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_board_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let open_board = use_context::<OpenBoardCallback>();
@@ -1832,7 +1887,7 @@ fn render_board_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     let src = source.clone();
     Rc::new(move || {
       if let Some(cb) = &obb {
-        (cb.0)(idx, src.clone());
+        (cb.0)(live_index(at), src.clone());
       } else if let Some(cb) = &ob {
         (cb.0)();
       }
@@ -1843,13 +1898,14 @@ fn render_board_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
   let commit_size: Rc<dyn Fn(Option<f32>, Option<f32>)> = {
     let br = bridge.clone();
     Rc::new(move |w_opt, h_opt| {
+      let cur_idx = live_index(at);
       br.update_block_data_attr_at(
-        idx,
+        cur_idx,
         "width",
         w_opt.map(|v| Value::from(v.round() as i64)).unwrap_or(Value::Null),
       );
       br.update_block_data_attr_at(
-        idx,
+        cur_idx,
         "height",
         h_opt.map(|v| Value::from(v.round() as i64)).unwrap_or(Value::Null),
       );
@@ -2163,7 +2219,7 @@ fn render_board_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
 
 // ── 4. Mermaid Block (Click-to-Zoom Fullscreen Lightbox + Source Toggle) ─────
 
-fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_mermaid_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let lightbox = env.lightbox;
@@ -2212,7 +2268,7 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
         .cursor(Cursor::ZoomIn)
         .on_press(move || {
           lightbox.set(Some(LightboxContent::Mermaid {
-            block_index: idx,
+            block_index: live_index(at),
             source: src_zoom.clone(),
           }));
         })
@@ -2256,7 +2312,7 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
               .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
               .on_press(move || {
                 lightbox.set(Some(LightboxContent::Mermaid {
-                  block_index: idx,
+                  block_index: live_index(at),
                   source: sz2.clone(),
                 }));
               })
@@ -2346,18 +2402,26 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
               .max_rows(Some(18u32))
               .scroll_beyond_last_line(EditorScrollBeyond::None)
               .styles(move || code_editor_styles(dark_mode.get()))
-              .on_change(move |v: &SharedString| br_m2.update_block_source_at(idx, v.as_ref())),
+              .on_change(move |v: &SharedString| br_m2.update_block_source_at(live_index(at), v.as_ref())),
           )
       }
     }))
 }
 
 pub fn render_mermaid_svg_for_theme(src: &str, dark_mode: bool) -> Option<String> {
+  thread_local! {
+    static SVG_CACHE: RefCell<std::collections::HashMap<(bool, String), Option<String>>> =
+      RefCell::new(std::collections::HashMap::new());
+  }
   let clean = if src.trim().is_empty() {
     "graph LR\n  A[Mica] --> B[Pure Rust]"
   } else {
     src.trim()
   };
+  let key = (dark_mode, clean.to_owned());
+  if let Some(cached) = SVG_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+    return cached;
+  }
   let host_theme = mica_md::MermaidHostTheme {
     dark: dark_mode,
     canvas: if dark_mode { "#18181b" } else { "#ffffff" }.into(),
@@ -2371,7 +2435,15 @@ pub fn render_mermaid_svg_for_theme(src: &str, dark_mode: bool) -> Option<String
     warning: "#f59e0b".into(),
     success: "#22c55e".into(),
   };
-  mica_md::render_mermaid_svg(clean, Some(&host_theme))
+  let rendered = mica_md::render_mermaid_svg(clean, Some(&host_theme));
+  SVG_CACHE.with(|c| {
+    let mut map = c.borrow_mut();
+    if map.len() >= 64 {
+      map.clear();
+    }
+    map.insert(key, rendered.clone());
+  });
+  rendered
 }
 
 pub fn parse_svg_aspect_size(svg_markup: &str, max_w: f32, max_h: f32) -> (f32, f32) {
@@ -2396,7 +2468,7 @@ pub fn parse_svg_aspect_size(svg_markup: &str, max_w: f32, max_h: f32) -> (f32, 
 
 // ── 5. Math Block (RaTeX SVG + Click-to-Edit LaTeX) ──────────────────────────
 
-fn render_math_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_math_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let source = block.text.clone();
@@ -2456,7 +2528,7 @@ fn render_math_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .value(move || draft.get())
               .on_change(move |v: &str| {
                 draft.set(v.to_owned());
-                br_m2.update_block_source_at(idx, v);
+                br_m2.update_block_source_at(live_index(at), v);
               })
               .on_submit(move |_: &str| editing.set(false)),
           )
@@ -2466,7 +2538,7 @@ fn render_math_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
 
 // ── 6. Image Block (Inline Preview + Click-to-Zoom Lightbox + Alignment) ─────
 
-fn render_image_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_image_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let lightbox = env.lightbox;
@@ -2564,10 +2636,10 @@ fn render_image_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
             .bg(move || palette(dark_mode.get()).surface_overlay)
             .border_1()
             .border_color(move || palette(dark_mode.get()).border_normal)
-            .child(mini_chip("左", dark_mode, move || b1.update_block_data_attr_at(idx, "align", Value::String("left".into()))))
-            .child(mini_chip("中", dark_mode, move || b2.update_block_data_attr_at(idx, "align", Value::String("center".into()))))
-            .child(mini_chip("右", dark_mode, move || b3.update_block_data_attr_at(idx, "align", Value::String("right".into()))))
-            .child(mini_chip("删除", dark_mode, move || b4.delete_block_at(idx)))
+            .child(mini_chip("左", dark_mode, move || b1.update_block_data_attr_at(live_index(at), "align", Value::String("left".into()))))
+            .child(mini_chip("中", dark_mode, move || b2.update_block_data_attr_at(live_index(at), "align", Value::String("center".into()))))
+            .child(mini_chip("右", dark_mode, move || b3.update_block_data_attr_at(live_index(at), "align", Value::String("right".into()))))
+            .child(mini_chip("删除", dark_mode, move || b4.delete_block_at(live_index(at))))
         })),
     )
     .child(when(move || !alt_cap.trim().is_empty(), {
@@ -2694,7 +2766,8 @@ pub fn compute_adaptive_table_layout(model: &TableModel) -> (bool, Vec<f32>, Vec
   (wide_table, shares, col_pixels)
 }
 
-fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
+fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
+  let init_idx = live_index(at);
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let focused_cell = env.focused_table_cell;
@@ -2806,7 +2879,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
           .px_3()
           .py_2()
       }
-      .test_id(&format!("table-cell-{idx}-{r}-{c}"))
+      .test_id(&format!("table-cell-{init_idx}-{r}-{c}"))
       .cursor(Cursor::Text)
       .bg(move || {
         if is_in_multi_sel.get() {
@@ -2871,7 +2944,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
           let br_r = br_col_resize.clone();
           cell_box = cell_box.child(
             view()
-              .test_id(&format!("table-col-resize-{idx}-{c}"))
+              .test_id(&format!("table-col-resize-{init_idx}-{c}"))
               .absolute()
               .top_0()
               .bottom_0()
@@ -2897,7 +2970,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
                 let left_w = (next[c - 1] + delta_frac as f64).clamp(min_w, (pair - min_w).max(min_w));
                 next[c - 1] = left_w;
                 next[c] = (pair - left_w).max(min_w);
-                br_r.table_op(idx, TableOp::SetColumnWidths { widths: next });
+                br_r.table_op(live_index(at), TableOp::SetColumnWidths { widths: next });
               }),
           );
         }
@@ -2947,7 +3020,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
             let draft = signal(init_val.clone());
             let bid_n2 = bid_n.clone();
             input()
-              .test_id(&format!("table-cell-input-{idx}-{r}-{c}"))
+              .test_id(&format!("table-cell-input-{init_idx}-{r}-{c}"))
               .auto_focus(true)
               .submit_behavior(SubmitBehavior::Submit)
               .w_full()
@@ -2960,7 +3033,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
               .on_change(move |v: &str| {
                 draft.set(v.to_owned());
                 br_c2.table_op_live(
-                  idx,
+                  live_index(at),
                   TableOp::SetCell {
                     row: r,
                     col: c,
@@ -2975,7 +3048,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
                   focused_cell.set(Some((bid_n2.clone(), next_r, c)));
                 } else {
                   br_t2.table_op(
-                    idx,
+                    live_index(at),
                     TableOp::Navigate {
                       row: r,
                       col: c,
@@ -3060,14 +3133,14 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
           .border_1()
           .border_color(move || palette(dark_mode.get()).border_normal)
           .child(mini_chip("+ 行", dark_mode, move || {
-            br1.table_op(idx, TableOp::InsertRow { at: row_count });
+            br1.table_op(live_index(at), TableOp::InsertRow { at: row_count });
           }))
           .child(mini_chip("+ 列", dark_mode, move || {
-            br2.table_op(idx, TableOp::InsertColumn { at: col_count });
+            br2.table_op(live_index(at), TableOp::InsertColumn { at: col_count });
           }))
           .child(mini_chip(align_label, dark_mode, move || {
             br5.table_op(
-              idx,
+              live_index(at),
               TableOp::SetColumnAlign {
                 col: active_rc.1,
                 align: next_align_str.clone(),
@@ -3076,22 +3149,22 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
           }));
         if row_count > 2 {
           bar = bar.child(mini_chip("− 行", dark_mode, move || {
-            br3.table_op(idx, TableOp::DeleteRow { at: active_rc.0.max(1).min(row_count - 1) });
+            br3.table_op(live_index(at), TableOp::DeleteRow { at: active_rc.0.max(1).min(row_count - 1) });
           }));
         }
         if col_count > 2 {
           bar = bar.child(mini_chip("− 列", dark_mode, move || {
-            br4.table_op(idx, TableOp::DeleteColumn { at: active_rc.1.min(col_count - 1) });
+            br4.table_op(live_index(at), TableOp::DeleteColumn { at: active_rc.1.min(col_count - 1) });
           }));
         }
-        bar.child(mini_chip("删除", dark_mode, move || br6.delete_block_at(idx)))
+        bar.child(mini_chip("删除", dark_mode, move || br6.delete_block_at(live_index(at))))
       }
     }))
 }
 
 // ── 8. Divider Block ─────────────────────────────────────────────────────────
 
-fn render_divider_block_view(env: &BlockRenderEnv, idx: usize) -> impl IntoElement {
+fn render_divider_block_view(env: &BlockRenderEnv, at: Position) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let br = env.bridge.clone();
   button()
@@ -3099,7 +3172,7 @@ fn render_divider_block_view(env: &BlockRenderEnv, idx: usize) -> impl IntoEleme
     .w_full()
     .py_4()
     .justify_center()
-    .on_press(move || br.focus_block(idx, 0))
+    .on_press(move || br.focus_block(live_index(at), 0))
     .child(view().w_full().h(px(1.5)).bg(move || palette(dark_mode.get()).quote_bar))
 }
 

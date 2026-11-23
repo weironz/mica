@@ -629,22 +629,34 @@ pub fn editor_view(
             }
           }
           ScrollMode::KeepVisible => {
-            let row_ref_opt = b_scroll
-              .block_id_at(idx)
-              .and_then(|bid| l_scroll.borrow().row_refs.get(&bid).map(|(_, r)| *r));
-            let Some(rref) = row_ref_opt else {
-              // Target row is outside the mounted virtual window -> bring it in.
-              if idx == 0 {
-                lref.scroll_to_offset(px(0.0), false);
-              } else {
-                lref.scroll_to_index(idx as u32, Percentage(0.5), px(0.0), false);
-              }
-              return;
-            };
+            let b_sc = b_scroll.clone();
+            let l_sc = l_scroll.clone();
             spawn(async move {
+              // Yield one tick so newly split rows (e.g. pressing Enter) mount into
+              // `virtual_list` and register their `row_ref` before deciding whether
+              // scrolling is actually needed, and coalesce rapid key-repeat bursts.
+              timer(Duration::from_millis(16)).await;
+              if scroll_req.get_untracked().map(|(_, _, s)| s) != Some(_seq) {
+                return;
+              }
+              let row_ref_opt = b_sc
+                .block_id_at(idx)
+                .and_then(|bid| l_sc.borrow().row_refs.get(&bid).map(|(_, r)| *r));
+              let Some(rref) = row_ref_opt else {
+                // Target row is genuinely outside the mounted virtual window -> bring it in.
+                if idx == 0 {
+                  lref.scroll_to_offset(px(0.0), false);
+                } else {
+                  lref.scroll_to_index(idx as u32, Percentage(0.5), px(0.0), false);
+                }
+                return;
+              };
               let (Some(pm), Some(rm)) = (pref.measure().await, rref.measure().await) else {
                 return;
               };
+              if scroll_req.get_untracked().map(|(_, _, s)| s) != Some(_seq) {
+                return;
+              }
               let vh = pm.frame.size.height.0;
               if vh <= 1.0 {
                 return;

@@ -702,32 +702,31 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     inline_ai_open.set(true);
   })));
 
-  // Persist editor changes -> docs_store + SQLite Vault (+ debounced cloud PATCH)
+  // Persist editor changes -> docs_store + SQLite Vault (+ debounced cloud PATCH).
+  // Interactive keystrokes (Enter / Backspace / typing) coalesce via `set_on_dirty`
+  // (300ms debounce + background SQLite write) so the UI thread never stalls on
+  // full-document Markdown serialization, FTS5 indexing, or disk fsync.
+  // Page switches, workspace switches, and version snapshots call
+  // `bridge.flush_pending_persist()` synchronously so zero edits are ever lost.
   {
     let vault_p = vault.clone();
     let docs_p = docs_store.clone();
     let tree_p = tree.clone();
     let cc_p = cloud_connector.clone();
-    bridge.set_on_persist(Rc::new(move |md: String, _crdt: Option<Vec<u8>>| {
-      doc_dirty_gen.set(doc_dirty_gen.get_untracked().wrapping_add(1));
-      if let Some(doc_id) = active_doc.get_untracked() {
-        let orig = active_origin.get_untracked();
-        let ws_id = active_workspace_id.get_untracked();
-        docs_p.borrow_mut().insert(doc_id, md.clone());
-        let _ = vault_p.save_markdown(&orig, doc_id, &md);
-        backlinks_sig.set(compute_backlinks_for(
-          &tree_p.borrow(),
-          &docs_p.borrow(),
-          Some(doc_id),
-          &active_title.get_untracked(),
-        ));
+    let disk_save_seqs: std::sync::Arc<std::sync::Mutex<HashMap<(String, Uuid), u64>>> =
+      std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+    let schedule_cloud_patch = {
+      let cc_c = cc_p.clone();
+      let vault_c = vault_p.clone();
+      Rc::new(move |orig: String, ws_id: Uuid, doc_id: Uuid, md: String| {
         if cloud_sync::is_cloud_origin(&orig)
           && is_cloud_signed_in.get_untracked()
           && !md.trim().is_empty()
         {
           let epoch = doc_save_gen.get_untracked().wrapping_add(1);
           doc_save_gen.set(epoch);
-          let (cc_a, v_a, email_req) = (cc_p.clone(), vault_p.clone(), account_email.get_untracked());
+          let (cc_a, v_a, email_req) = (cc_c.clone(), vault_c.clone(), account_email.get_untracked());
           spawn(async move {
             timer(std::time::Duration::from_millis(600)).await;
             if doc_save_gen.get_untracked() != epoch
@@ -754,8 +753,114 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             }
           });
         }
-      }
-    }));
+      })
+    };
+
+    // Synchronous flush path (invoked by `flush_pending_persist` and `set_front_matter`)
+    {
+      let vault_s = vault_p.clone();
+      let docs_s = docs_p.clone();
+      let tree_s = tree_p.clone();
+      let seqs_s = disk_save_seqs.clone();
+      let cloud_s = schedule_cloud_patch.clone();
+      bridge.set_on_persist(Rc::new(move |md: String, _crdt: Option<Vec<u8>>| {
+        doc_dirty_gen.set(doc_dirty_gen.get_untracked().wrapping_add(1));
+        if let Some(doc_id) = active_doc.get_untracked() {
+          let orig = active_origin.get_untracked();
+          let ws_id = active_workspace_id.get_untracked();
+          docs_s.borrow_mut().insert(doc_id, md.clone());
+          if let Ok(mut map) = seqs_s.lock() {
+            let entry = map.entry((orig.clone(), doc_id)).or_insert(0);
+            *entry = entry.wrapping_add(1);
+          }
+          let _ = vault_s.save_markdown(&orig, doc_id, &md);
+          let next_bl = compute_backlinks_for(
+            &tree_s.borrow(),
+            &docs_s.borrow(),
+            Some(doc_id),
+            &active_title.get_untracked(),
+          );
+          if backlinks_sig.get_untracked() != next_bl {
+            backlinks_sig.set(next_bl);
+          }
+          cloud_s(orig, ws_id, doc_id, md);
+        }
+      }));
+    }
+
+    // Debounced background persist path for rapid interactive edits
+    {
+      let br_d = bridge.clone();
+      let vault_d = vault_p.clone();
+      let docs_d = docs_p.clone();
+      let tree_d = tree_p.clone();
+      let seqs_d = disk_save_seqs.clone();
+      let cloud_d = schedule_cloud_patch;
+      bridge.set_on_dirty(Rc::new(move || {
+        let epoch = doc_dirty_gen.get_untracked().wrapping_add(1);
+        doc_dirty_gen.set(epoch);
+        let Some(doc_id) = active_doc.get_untracked() else {
+          return;
+        };
+        let orig = active_origin.get_untracked();
+        let ws_id = active_workspace_id.get_untracked();
+        let br_a = br_d.clone();
+        let vault_a = vault_d.clone();
+        let docs_a = docs_d.clone();
+        let tree_a = tree_d.clone();
+        let seqs_a = seqs_d.clone();
+        let cloud_a = cloud_d.clone();
+        spawn(async move {
+          timer(std::time::Duration::from_millis(300)).await;
+          if doc_dirty_gen.get_untracked() != epoch
+            || active_origin.get_untracked() != orig
+            || active_doc.get_untracked() != Some(doc_id)
+          {
+            return;
+          }
+          let Some(md) = br_a.take_pending_markdown() else {
+            return;
+          };
+          docs_a.borrow_mut().insert(doc_id, md.clone());
+          let next_bl = compute_backlinks_for(
+            &tree_a.borrow(),
+            &docs_a.borrow(),
+            Some(doc_id),
+            &active_title.get_untracked(),
+          );
+          if backlinks_sig.get_untracked() != next_bl {
+            backlinks_sig.set(next_bl);
+          }
+          let write_seq = seqs_a
+            .lock()
+            .ok()
+            .map(|mut map| {
+              let entry = map.entry((orig.clone(), doc_id)).or_insert(0);
+              *entry = entry.wrapping_add(1);
+              *entry
+            })
+            .unwrap_or(0);
+          let v_bg = (*vault_a).clone();
+          let orig_bg = orig.clone();
+          let md_bg = md.clone();
+          let seqs_bg = seqs_a.clone();
+          spawn(async move {
+            let _ = net::run_blocking(move || {
+              let still_latest = seqs_bg
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&(orig_bg.clone(), doc_id)).copied())
+                .is_none_or(|cur| cur == write_seq);
+              if still_latest {
+                let _ = v_bg.save_markdown(&orig_bg, doc_id, &md_bg);
+              }
+            })
+            .await;
+          });
+          cloud_a(orig, ws_id, doc_id, md);
+        });
+      }));
+    }
   }
 
   let sync_tree_snapshots: Rc<dyn Fn()> = {
@@ -836,6 +941,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let ref_snaps = refresh_snapshots.clone();
     let cc = cloud_connector.clone();
     Rc::new(move |doc_id: Uuid, title: String, record_history: bool, force_new_tab: bool| {
+      br.flush_pending_persist();
       let orig = active_origin.get_untracked();
       let ws_id = active_workspace_id.get_untracked();
       let md = docs
@@ -1797,6 +1903,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let br = bridge.clone();
     let ref_snaps = refresh_snapshots.clone();
     Rc::new(move || {
+      br.flush_pending_persist();
       if let Some(doc_id) = active_doc.get_untracked() {
         let orig = active_origin.get_untracked();
         match v.create_version_snapshot(&orig, doc_id, Some("手动快照")) {
@@ -2567,6 +2674,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let ref_snaps = refresh_snapshots.clone();
       let br = bridge.clone();
       Rc::new(move |name: String| {
+        br.flush_pending_persist();
         if let Some(doc_id) = active_doc.get_untracked() {
           let orig = active_origin.get_untracked();
           let label = if name.trim().is_empty() { "检查点" } else { name.trim() };

@@ -60,9 +60,15 @@ pub struct MicaDocumentBridge {
   session: RefCell<EditorSession>,
   /// Cached ordered block IDs for detecting structural diffs without cloning blocks.
   cached_ids: RefCell<Vec<String>>,
+  /// O(1) `block_id -> index` map rebuilt only when `structure_rev` changes.
+  id_to_index: RefCell<HashMap<String, usize>>,
   /// Per-block fine-grained revision signals (`block_id -> Signal<u64>`).
   block_revs: RefCell<HashMap<String, Signal<u64>>>,
   on_persist: RefCell<Option<PersistCallback>>,
+  /// Lightweight dirty notification for debounced persistence (avoids synchronous
+  /// full-document Markdown export & SQLite disk writes on every keystroke).
+  on_dirty: RefCell<Option<Rc<dyn Fn()>>>,
+  pending_persist: std::cell::Cell<bool>,
 
   // ── Reactive UI Signals ──────────────────────────────────────────────────
   /// Bumps ONLY when block count, IDs, or order change (`virtual_list` count/keys).
@@ -109,6 +115,11 @@ impl MicaDocumentBridge {
 
   fn from_session(session: EditorSession) -> Rc<Self> {
     let ids: Vec<String> = session.blocks().iter().map(|b| b.id.clone()).collect();
+    let id_to_index: HashMap<String, usize> = ids
+      .iter()
+      .enumerate()
+      .map(|(i, id)| (id.clone(), i))
+      .collect();
     let word_count = signal(compute_word_count_label(session.blocks()));
     let block_count = signal(session.blocks().len());
     let outline = signal(compute_outline(session.blocks()));
@@ -122,8 +133,11 @@ impl MicaDocumentBridge {
       owner: Owner::current(),
       session: RefCell::new(session),
       cached_ids: RefCell::new(ids),
+      id_to_index: RefCell::new(id_to_index),
       block_revs: RefCell::new(HashMap::new()),
       on_persist: RefCell::new(None),
+      on_dirty: RefCell::new(None),
+      pending_persist: std::cell::Cell::new(false),
       structure_rev: signal(0u64),
       selection_sig: signal(sel),
       focus_sink_rev: signal(0u64),
@@ -148,6 +162,34 @@ impl MicaDocumentBridge {
 
   pub fn set_on_persist(&self, cb: Rc<dyn Fn(String, Option<Vec<u8>>)>) {
     *self.on_persist.borrow_mut() = Some(cb);
+  }
+
+  /// Registers a lightweight dirty callback invoked synchronously on content
+  /// edits instead of exporting Markdown synchronously on every keystroke.
+  /// Callers should debounce and invoke [`Self::take_pending_markdown`] or
+  /// [`Self::flush_pending_persist`].
+  pub fn set_on_dirty(&self, cb: Rc<dyn Fn()>) {
+    *self.on_dirty.borrow_mut() = Some(cb);
+  }
+
+  /// If edits are waiting to be persisted, clears the dirty flag and exports
+  /// the current Markdown snapshot once.
+  pub fn take_pending_markdown(&self) -> Option<String> {
+    if self.pending_persist.replace(false) {
+      Some(self.export_markdown())
+    } else {
+      None
+    }
+  }
+
+  /// Synchronously flushes any pending debounced edits through `on_persist`.
+  pub fn flush_pending_persist(&self) {
+    if let Some(md) = self.take_pending_markdown() {
+      let cb = self.on_persist.borrow().clone();
+      if let Some(cb) = cb {
+        cb(md, None);
+      }
+    }
   }
 
   // ── Core Virtual-List Read Accessors ─────────────────────────────────────
@@ -202,9 +244,15 @@ impl MicaDocumentBridge {
     self.session.borrow().blocks().get(index).cloned()
   }
 
-  /// Find current index of `block_id` (or `None` if removed).
+  /// O(1) lookup of a snapshot clone of block by `block_id`.
+  pub fn block_by_id(&self, block_id: &str) -> Option<EditorBlock> {
+    let idx = self.id_to_index.borrow().get(block_id).copied()?;
+    self.session.borrow().blocks().get(idx).cloned()
+  }
+
+  /// O(1) lookup of current index of `block_id` (or `None` if removed).
   pub fn index_of_block_id(&self, block_id: &str) -> Option<usize> {
-    self.cached_ids.borrow().iter().position(|id| id == block_id)
+    self.id_to_index.borrow().get(block_id).copied()
   }
 
   /// Compute the visible 1-based ordinal for a `numbered_list` block at `index`.
@@ -298,8 +346,17 @@ impl MicaDocumentBridge {
     let (ak, al, am) = compute_active_state(&next_session);
 
     *self.session.borrow_mut() = next_session;
+    {
+      let mut idx_map = self.id_to_index.borrow_mut();
+      idx_map.clear();
+      idx_map.reserve(ids.len());
+      for (i, id) in ids.iter().enumerate() {
+        idx_map.insert(id.clone(), i);
+      }
+    }
     *self.cached_ids.borrow_mut() = ids;
     self.block_revs.borrow_mut().clear();
+    self.pending_persist.set(false);
 
     self.ime_preedit.set(None);
     self.find_matches_sig.set(Vec::new());
@@ -378,34 +435,57 @@ impl MicaDocumentBridge {
     scroll_mode: Option<ScrollMode>,
     suppress_block_revs: bool,
   ) -> EditorPatch {
+    let may_touch_front_matter = matches!(
+      cmd,
+      EditorCommand::Undo | EditorCommand::Redo | EditorCommand::ApplyRemoteUpdate { .. }
+    );
     let patch = {
       let mut s = self.session.borrow_mut();
       s.dispatch(cmd)
     };
 
-    // 1. Check whether top-level block structure (IDs / order / count) changed.
-    let (new_ids, wc, bc, ol, can_u, can_r, ak, al, am, sel, fm) = {
+    // 1. Check whether top-level block structure (IDs / order / count) changed
+    // without cloning all block IDs on plain in-block edits.
+    let (structure_changed, wc, bc, ol, can_u, can_r, ak, al, am, sel, fm) = {
       let s = self.session.borrow();
-      let ids: Vec<String> = s.blocks().iter().map(|b| b.id.clone()).collect();
+      let blocks = s.blocks();
+      let structure_changed = {
+        let mut cached = self.cached_ids.borrow_mut();
+        let same = blocks.len() == cached.len()
+          && blocks.iter().zip(cached.iter()).all(|(b, c)| b.id == *c);
+        if same {
+          false
+        } else {
+          cached.clear();
+          cached.extend(blocks.iter().map(|b| b.id.clone()));
+          let mut idx_map = self.id_to_index.borrow_mut();
+          idx_map.clear();
+          idx_map.reserve(cached.len());
+          for (i, id) in cached.iter().enumerate() {
+            idx_map.insert(id.clone(), i);
+          }
+          true
+        }
+      };
       let wc = if patch.content_changed {
-        Some(compute_word_count_label(s.blocks()))
+        Some(compute_word_count_label(blocks))
       } else {
         None
       };
-      let bc = s.blocks().len();
+      let bc = blocks.len();
       let ol = if patch.content_changed {
-        Some(compute_outline(s.blocks()))
+        Some(compute_outline(blocks))
       } else {
         None
       };
       let (ak, al, am) = compute_active_state(&s);
-      let fm = if patch.content_changed {
+      let fm = if patch.content_changed && may_touch_front_matter {
         Some(read_root_front_matter(s.doc(), s.root_block_id()))
       } else {
         None
       };
       (
-        ids,
+        structure_changed,
         wc,
         bc,
         ol,
@@ -419,23 +499,11 @@ impl MicaDocumentBridge {
       )
     };
 
-    let structure_changed = {
-      let mut cached = self.cached_ids.borrow_mut();
-      if *cached != new_ids {
-        *cached = new_ids;
-        true
-      } else {
-        false
-      }
-    };
-
     if structure_changed {
       // Prune signals for deleted block IDs so the map stays O(live_blocks).
       {
-        let cached = self.cached_ids.borrow();
-        let live_set: std::collections::HashSet<&str> =
-          cached.iter().map(String::as_str).collect();
-        self.block_revs.borrow_mut().retain(|id, _| live_set.contains(id.as_str()));
+        let idx_map = self.id_to_index.borrow();
+        self.block_revs.borrow_mut().retain(|id, _| idx_map.contains_key(id));
       }
       self.structure_rev.set(self.structure_rev.get_untracked().wrapping_add(1));
     }
@@ -474,10 +542,10 @@ impl MicaDocumentBridge {
     set_if_changed(self.block_count, bc);
 
     if let Some(wc_str) = wc {
-      self.word_count.set(wc_str);
+      set_if_changed(self.word_count, wc_str);
     }
     if let Some(ol_vec) = ol {
-      self.outline.set(ol_vec);
+      set_if_changed(self.outline, ol_vec);
     }
     if let Some(fm_str) = fm {
       set_if_changed(self.front_matter, fm_str);
@@ -493,13 +561,19 @@ impl MicaDocumentBridge {
     }
 
     if patch.content_changed {
-      self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
+      set_if_changed(self.last_edited, String::from(DEFAULT_STATUS_TEXT));
       self.session_rev.set(self.session_rev.get_untracked().wrapping_add(1));
       if emit_persist {
-        let cb = self.on_persist.borrow().clone();
-        if let Some(cb) = cb {
-          let md = self.export_markdown();
-          cb(md, patch.crdt_update.clone());
+        let dirty_cb = self.on_dirty.borrow().clone();
+        if let Some(dirty_cb) = dirty_cb {
+          self.pending_persist.set(true);
+          dirty_cb();
+        } else {
+          let cb = self.on_persist.borrow().clone();
+          if let Some(cb) = cb {
+            let md = self.export_markdown();
+            cb(md, patch.crdt_update.clone());
+          }
         }
       }
     }
@@ -1927,6 +2001,75 @@ mod tests {
       bridge.undo();
       assert!(bridge.can_redo_signal().get_untracked());
       bridge.redo();
+    });
+  }
+
+  #[test]
+  fn rapid_enter_and_backspace_do_not_rebuild_siblings_or_sync_persist() {
+    with_runtime(|| {
+      let mut md = String::from("# Runbook\n\nIntro line\n\n```mermaid\nflowchart LR\n  A[阶段0] --> B[阶段1]\n```\n\n");
+      for i in 0..40 {
+        md.push_str(&format!("Paragraph {i} body content\n\n"));
+      }
+      let bridge = MicaDocumentBridge::from_markdown(&md);
+      let initial_len = bridge.block_len();
+      let mermaid_id = bridge.block_at(2).unwrap().id;
+      let tail_id = bridge.block_at(initial_len - 1).unwrap().id;
+      let mermaid_rev = bridge.block_rev_signal(&mermaid_id);
+      let tail_rev = bridge.block_rev_signal(&tail_id);
+      let m0 = mermaid_rev.get_untracked();
+      let t0_rev = tail_rev.get_untracked();
+
+      let dirty_count = Rc::new(std::cell::Cell::new(0usize));
+      let persist_count = Rc::new(std::cell::Cell::new(0usize));
+      {
+        let dc = dirty_count.clone();
+        bridge.set_on_dirty(Rc::new(move || dc.set(dc.get() + 1)));
+      }
+      {
+        let pc = persist_count.clone();
+        bridge.set_on_persist(Rc::new(move |_md, _crdt| pc.set(pc.get() + 1)));
+      }
+
+      bridge.focus_block(1, 5);
+      let start = std::time::Instant::now();
+      for _ in 0..30 {
+        bridge.dispatch(EditorCommand::SplitBlock);
+      }
+      assert_eq!(bridge.block_len(), initial_len + 30);
+      assert_eq!(bridge.index_of_block_id(&mermaid_id), Some(32));
+      assert_eq!(bridge.block_by_id(&mermaid_id).unwrap().id, mermaid_id);
+
+      for _ in 0..30 {
+        bridge.dispatch(EditorCommand::DeleteBackward);
+      }
+      let elapsed = start.elapsed();
+
+      assert_eq!(bridge.block_len(), initial_len);
+      assert_eq!(bridge.index_of_block_id(&mermaid_id), Some(2));
+      assert_eq!(
+        mermaid_rev.get_untracked(),
+        m0,
+        "Mermaid sibling below Enter/Backspace must NEVER have its block_rev bumped"
+      );
+      assert_eq!(
+        tail_rev.get_untracked(),
+        t0_rev,
+        "Tail sibling below Enter/Backspace must NEVER have its block_rev bumped"
+      );
+      assert_eq!(dirty_count.get(), 60);
+      assert_eq!(
+        persist_count.get(),
+        0,
+        "rapid Enter/Backspace must coalesce via on_dirty rather than exporting synchronously on every keystroke"
+      );
+
+      bridge.flush_pending_persist();
+      assert_eq!(persist_count.get(), 1, "flush_pending_persist must export once");
+      assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "60 structural Enter/Backspace ops should stay snappy, took {elapsed:?}"
+      );
     });
   }
 }
