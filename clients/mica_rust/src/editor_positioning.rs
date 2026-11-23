@@ -515,3 +515,44 @@ pub fn inline_math_popover_view(
       )
   })
 }
+
+/// Computes continuous 60fps vertical edge auto-scroll velocity (in px per 16ms
+/// tick; negative scrolls up, positive scrolls down, `0.0` inside the safe band)
+/// when dragging a text selection or marquee box near/past the top or bottom
+/// edge of the editor viewport (`CAP-02-03`).
+pub fn edge_autoscroll_speed(cy: f32, viewport_h: f32) -> f32 {
+  if viewport_h <= 1.0 {
+    return 0.0;
+  }
+  let zone = 56.0_f32.min(viewport_h * 0.25);
+  const MIN_SPEED: f32 = 10.0;
+  const MAX_SPEED: f32 = 38.0;
+  const RAMP: f32 = 96.0;
+  let ramp = |past: f32| {
+    let t = (past / RAMP).clamp(0.0, 1.0);
+    MIN_SPEED + t * (MAX_SPEED - MIN_SPEED)
+  };
+  if cy < zone {
+    -ramp(zone - cy)
+  } else if cy > viewport_h - zone {
+    ramp(cy - (viewport_h - zone))
+  } else {
+    0.0
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn edge_autoscroll_speed_ramps_smoothly_near_and_past_edges() {
+    assert_eq!(edge_autoscroll_speed(300.0, 600.0), 0.0);
+    let top_inner = edge_autoscroll_speed(50.0, 600.0);
+    let top_outside = edge_autoscroll_speed(-40.0, 600.0);
+    assert!(top_inner < 0.0 && top_outside < top_inner);
+    let bot_inner = edge_autoscroll_speed(550.0, 600.0);
+    let bot_outside = edge_autoscroll_speed(650.0, 600.0);
+    assert!(bot_inner > 0.0 && bot_outside > bot_inner);
+  }
+}

@@ -50,7 +50,7 @@
 | --- | --- | --- | --- | --- |
 | `CAP-02-01` 单/双/三击与键盘扩选 | P0 | 桌面/Web | ✅ | `mica-editor::word_range_selects_latin_identifiers_and_cjk_segments` |
 | `CAP-02-02` 跨块向上/下拖选不卡元素 | P0 | 桌面/Web | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
-| `CAP-02-03` 拖选边缘自动滚屏 | P1 | 桌面/Web | 🟡 | `editor_view.rs` 已实现 `44px` 边缘节流滚屏，需长文档实机调优流畅度 |
+| `CAP-02-03` 拖选边缘自动滚屏 | P1 | 桌面/Web | ✅ | `editor_positioning::tests::edge_autoscroll_speed_ramps_smoothly_near_and_past_edges` + `editor_view.rs` 60fps `set_interval` 连续像素滚屏与选区同步推进 |
 | `CAP-02-04` 点击正文外/标题/Esc 释放选区 | P0 | 桌面/Web | ✅ | `editor_view.rs` 页边距/标题 `on_press_down`/`on_focus` |
 | `CAP-02-05` 页边距与正文内空白启动框选 | P0 | 桌面/Web | ✅ | `block_marquee::tests::starts_marquee_margin_grip_gutter_scrollbar_rules` + `editor_view.rs` |
 | `CAP-02-06` 连续块范围命中与高亮 | P1 | 桌面/Web | ✅ | `block_marquee::tests::hit_block_range_returns_contiguous_bounds` |

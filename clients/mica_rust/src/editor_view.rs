@@ -173,7 +173,12 @@ pub fn editor_view(
   let sink_clear_rev = signal(0u64);
   let sink_state = Rc::new(RefCell::new(ImeSinkState::default()));
   let marquee_row_rects: Rc<RefCell<Vec<(usize, RectF)>>> = Rc::new(RefCell::new(Vec::new()));
-  let autoscroll_cooldown = signal(false);
+  let scroll_offset_y = signal(0.0_f32);
+  let scroll_content_h = signal(0.0_f32);
+  let scroll_viewport_h = signal(0.0_f32);
+  let autoscroll_speed = signal(0.0_f32);
+  let autoscroll_busy = signal(false);
+  let autoscroll_last_xy = signal((0.0_f32, 0.0_f32));
   let bubble_anchor: Signal<(f32, f32)> = signal((120.0, 48.0));
   let bubble_recalc_rev = signal(0u64);
   let ime_sink_pos: Signal<(f32, f32)> = signal((0.0, 0.0));
@@ -794,6 +799,134 @@ pub fn editor_view(
   let marquee_origin: Signal<Option<(f32, f32)>> = signal(None);
   let paper_bounds: Signal<(f32, f32)> = signal((960.0, 720.0));
 
+  // Continuous 60fps edge auto-scroll timer (CAP-02-03): while dragging a text
+  // selection or marquee box near/past the top or bottom viewport edge, scrolls
+  // `virtual_list` smoothly by exact pixels and extends the active selection
+  // even when the pointer is held stationary or moved into the top toolbar!
+  {
+    let br_auto = bridge.clone();
+    let layouts_auto = layouts.clone();
+    let m_auto = marquee.clone();
+    let lref_auto = list_ref;
+    let pref_auto = paper_ref;
+    let rects_auto = marquee_row_rects.clone();
+    effect(move || {
+      if autoscroll_speed.get().abs() < 0.1 {
+        return;
+      }
+      let br_t = br_auto.clone();
+      let layouts_t = layouts_auto.clone();
+      let m_t = m_auto.clone();
+      let rects_t = rects_auto.clone();
+      let task = set_interval(Duration::from_millis(16), move || {
+        let speed = autoscroll_speed.get_untracked();
+        if speed.abs() < 0.1 {
+          return;
+        }
+        let has_drag = drag_anchor.get_untracked().is_some();
+        let has_marquee = m_t.is_active_untracked();
+        if !has_drag && !has_marquee {
+          autoscroll_speed.set(0.0);
+          return;
+        }
+        let cur_y = scroll_offset_y.get_untracked();
+        let ch = scroll_content_h.get_untracked();
+        let vh = scroll_viewport_h.get_untracked().max(paper_bounds.get_untracked().1);
+        let next_y = if ch > 0.0 {
+          (cur_y + speed).clamp(0.0, (ch - vh).max(0.0))
+        } else {
+          (cur_y + speed).max(0.0)
+        };
+        let delta_y = next_y - cur_y;
+        if delta_y.abs() >= 0.5 {
+          scroll_offset_y.set(next_y);
+          lref_auto.scroll_to_offset(px(next_y), false);
+          if let Some((ox, oy)) = marquee_origin.get_untracked() {
+            marquee_origin.set(Some((ox, oy - delta_y)));
+          }
+          if let Some((px0, py0)) = marquee_origin_page.get_untracked() {
+            marquee_origin_page.set(Some((px0, py0 - delta_y)));
+          }
+        }
+        if autoscroll_busy.get_untracked() {
+          return;
+        }
+        if let Some(anchor) = drag_anchor.get_untracked() {
+          let count = br_t.block_len();
+          if count == 0 {
+            return;
+          }
+          if speed < 0.0 && next_y <= 1.0 {
+            let next = DocSelection::from_positions(anchor, DocPosition::new(0, 0));
+            if br_t.selection().as_ref() != Some(&next) {
+              br_t.set_selection(next);
+            }
+            return;
+          }
+          if speed > 0.0 && ch > 0.0 && next_y >= (ch - vh).max(0.0) - 1.0 {
+            let last = count - 1;
+            let end_off = br_t.block_at(last).map(|b| utf16_len(&b.text)).unwrap_or(0);
+            let next = DocSelection::from_positions(anchor, DocPosition::new(last, end_off));
+            if br_t.selection().as_ref() != Some(&next) {
+              br_t.set_selection(next);
+            }
+            return;
+          }
+          autoscroll_busy.set(true);
+          let row_refs = layouts_t.borrow().snapshot_row_refs();
+          let br_m = br_t.clone();
+          spawn(async move {
+            let Some(pm) = pref_auto.measure().await else {
+              autoscroll_busy.set(false);
+              return;
+            };
+            let mut best: Option<(usize, f32)> = None;
+            for (_bid, idx, rref) in row_refs {
+              if let Some(rm) = rref.measure().await {
+                let top = rm.page.y.0 - pm.page.y.0;
+                let bottom = top + rm.frame.size.height.0;
+                if bottom > 0.0 && top < pm.frame.size.height.0 {
+                  best = match best {
+                    None => Some((idx, top)),
+                    Some((b_idx, b_top)) => {
+                      if (speed < 0.0 && top < b_top) || (speed > 0.0 && top > b_top) {
+                        Some((idx, top))
+                      } else {
+                        Some((b_idx, b_top))
+                      }
+                    }
+                  };
+                }
+              }
+            }
+            if let Some((target_idx, _)) = best
+              && let Some(cur_anchor) = drag_anchor.get_untracked()
+            {
+              let target_off = if speed < 0.0 {
+                0
+              } else {
+                br_m.block_at(target_idx).map(|b| utf16_len(&b.text)).unwrap_or(0)
+              };
+              let next = DocSelection::from_positions(cur_anchor, DocPosition::new(target_idx, target_off));
+              if br_m.selection().as_ref() != Some(&next) {
+                br_m.set_selection(next);
+              }
+            }
+            autoscroll_busy.set(false);
+          });
+        } else if has_marquee {
+          let (cx, cy) = autoscroll_last_xy.get_untracked();
+          if let Some((ox, oy)) = marquee_origin.get_untracked() {
+            let rect = RectF::from_points(ox, oy, cx, cy);
+            let rects = rects_t.borrow();
+            m_t.update_drag(rect, &rects);
+          }
+        }
+      });
+      cleanup(move || task.cancel());
+    });
+  }
+
   let m_esc = marquee.clone();
   let b_esc_find = bridge.clone();
   on_key_with(
@@ -1209,6 +1342,7 @@ pub fn editor_view(
   let fmt_bar_inline = render_format_bar.clone();
   let fmt_bar_second = render_format_bar;
 
+  let m_root_up = marquee.clone();
   view()
     .flex_1()
     .min_w(px(0.0))
@@ -1217,6 +1351,24 @@ pub fn editor_view(
     .overflow_hidden()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
+    .on_mouse_up(move |_: &MouseEvent| {
+      autoscroll_speed.set(0.0);
+      if drag_anchor.get_untracked().is_some() {
+        drag_anchor.set(None);
+        if has_text_selection.get_untracked() {
+          bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
+        }
+      }
+      if marquee_origin.get_untracked().is_some()
+        || marquee_origin_page.get_untracked().is_some()
+      {
+        marquee_origin.set(None);
+        marquee_origin_page.set(None);
+        m_root_up.end_drag();
+      }
+      body_blank_marquee_ready.set(false);
+      table_drag_anchor.set(None);
+    })
     .on_layout(move |b: &Bounds<Points>| {
       let w = b.size.width.0;
       if w > 0.0 && (header_width.get_untracked() - w).abs() > 2.0 {
@@ -1543,7 +1695,6 @@ pub fn editor_view(
       let br_footer = b_body.clone();
       let br_hdr_drag = b_body.clone();
       let br_ftr_drag = b_body.clone();
-      let br_edge_drag = b_body.clone();
       let br_bubble = b_body.clone();
       let h_bub = h_bubble.clone();
       let m_title_clear = marquee.clone();
@@ -1719,6 +1870,7 @@ pub fn editor_view(
           {
             let cx = e.position.x.0;
             let cy = e.position.y.0;
+            autoscroll_last_xy.set((cx, cy));
             if (cx - ox).abs() >= MARQUEE_DRAG_SLOP || (cy - oy).abs() >= MARQUEE_DRAG_SLOP {
               if drag_anchor.get_untracked().is_some() {
                 drag_anchor.set(None);
@@ -1727,62 +1879,37 @@ pub fn editor_view(
               let rect = RectF::from_points(ox, oy, cx, cy);
               let rects = rects_move.borrow();
               m_move.update_drag(rect, &rects);
+              let (_, vh) = paper_bounds.get_untracked();
+              autoscroll_speed.set(crate::editor_positioning::edge_autoscroll_speed(cy, vh));
             }
             return;
           }
-          // 2. Edge auto-scroll during upward/downward cross-block drag selection
-          if let Some(anchor) = drag_anchor.get_untracked() {
+          // 2. Smooth 60fps edge auto-scroll velocity update during cross-block drag
+          if drag_anchor.get_untracked().is_some() {
             let (_, vh) = paper_bounds.get_untracked();
             let cy = e.position.y.0;
-            let dir: i32 = if cy < 44.0 {
-              -1
-            } else if vh > 88.0 && cy > vh - 44.0 {
-              1
+            autoscroll_last_xy.set((e.position.x.0, cy));
+            autoscroll_speed.set(crate::editor_positioning::edge_autoscroll_speed(cy, vh));
+          } else if autoscroll_speed.get_untracked() != 0.0 {
+            autoscroll_speed.set(0.0);
+          }
+        })
+        .on_mouse_leave({
+          let m_leave = marquee.clone();
+          move |e: &MouseEvent| {
+            let active_drag =
+              drag_anchor.get_untracked().is_some() || m_leave.is_active_untracked();
+            if e.pressed_button == Some(MouseButton::Left) && active_drag {
+              let (_, vh) = paper_bounds.get_untracked();
+              let speed = if e.position.y.0 <= vh * 0.5 { -24.0 } else { 24.0 };
+              autoscroll_speed.set(speed);
             } else {
-              0
-            };
-            if dir != 0 && !autoscroll_cooldown.get_untracked() {
-              autoscroll_cooldown.set(true);
-              spawn(async move {
-                timer(Duration::from_millis(90)).await;
-                autoscroll_cooldown.set(false);
-              });
-              let count = br_edge_drag.block_len();
-              if count > 0 {
-                let cur_node = br_edge_drag
-                  .selection()
-                  .map(|s| s.focus_pos().node)
-                  .unwrap_or(anchor.node);
-                let target_idx = if dir < 0 {
-                  cur_node.saturating_sub(1)
-                } else {
-                  (cur_node + 1).min(count - 1)
-                };
-                if target_idx != cur_node {
-                  let target_off = if dir < 0 {
-                    0
-                  } else {
-                    br_edge_drag
-                      .block_at(target_idx)
-                      .map(|b| utf16_len(&b.text))
-                      .unwrap_or(0)
-                  };
-                  br_edge_drag.set_selection(DocSelection::from_positions(
-                    anchor,
-                    DocPosition::new(target_idx, target_off),
-                  ));
-                  if target_idx == 0 {
-                    list_ref.scroll_to_offset(px(0.0), false);
-                  } else {
-                    let align = if dir < 0 { Percentage(0.08) } else { Percentage(0.88) };
-                    list_ref.scroll_to_index(target_idx as u32, align, px(0.0), false);
-                  }
-                }
-              }
+              autoscroll_speed.set(0.0);
             }
           }
         })
         .on_mouse_up(move |_: &MouseEvent| {
+          autoscroll_speed.set(0.0);
           if drag_anchor.get_untracked().is_some() {
             drag_anchor.set(None);
             if has_text_selection.get_untracked() {
@@ -1930,7 +2057,14 @@ pub fn editor_view(
           .element_ref(&list_ref)
           .estimated_item_size(px(36.0))
           .scrollbar(false)
-          .on_scroll(move |_: &ScrollEvent| {
+          .on_scroll(move |e: &ScrollEvent| {
+            scroll_offset_y.set(e.offset.y.0);
+            if e.content_size.height.0 > 0.0 {
+              scroll_content_h.set(e.content_size.height.0);
+            }
+            if e.size.height.0 > 0.0 {
+              scroll_viewport_h.set(e.size.height.0);
+            }
             if has_text_selection.get_untracked() {
               bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
             }
