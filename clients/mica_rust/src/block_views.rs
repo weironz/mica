@@ -100,6 +100,17 @@ pub struct BlockRenderEnv {
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
   pub last_click: Signal<(usize, u32, f64, u8)>,
   pub page_width: Signal<f32>,
+  pub editor_focused: Signal<bool>,
+  pub caret_blink_on: Signal<bool>,
+  pub sink_clear_rev: Signal<u64>,
+  pub marquee_selected: Signal<Option<(usize, usize)>>,
+}
+
+fn is_non_prose_block(block: &EditorBlock) -> bool {
+  matches!(
+    effective_block_kind(block),
+    "code_block" | "board" | "mermaid" | "math" | "math_block" | "image" | "table" | "divider"
+  )
 }
 
 // ── Virtual List Row Entry Point ─────────────────────────────────────────────
@@ -110,8 +121,19 @@ pub struct BlockRenderEnv {
 pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoElement {
   let bridge = env.bridge.clone();
   let bridge_id = env.bridge.clone();
+  let bridge_drag = env.bridge.clone();
+  let bridge_sel = env.bridge.clone();
+  let layouts_reg = env.layouts.clone();
+  let layouts_drag = env.layouts.clone();
+  let drag_anchor = env.drag_anchor;
   let page_width = env.page_width;
+  let dark_mode = env.dark_mode;
+  let marquee_selected = env.marquee_selected;
   let structure_rev = bridge.structure_rev_signal();
+  let row_ref = element_ref();
+  let row_width = signal(960.0_f32);
+  let drag_measure: TextMeasureFn = Rc::new(text_measurer());
+
   // Memoized cell identity: NEVER runs on typing (`structure_rev` stays flat);
   // on page switch or splice, short-circuits unchanged cells and immediately
   // re-renders recycled cells whose `block_id` actually changed!
@@ -121,8 +143,70 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   });
 
   view()
+    .element_ref(&row_ref)
     .w_full()
     .items_center()
+    .on_layout(move |b: &Bounds<Points>| {
+      if (row_width.get_untracked() - b.size.width.0).abs() > 0.5 {
+        row_width.set(b.size.width.0);
+      }
+    })
+    // Unified full-width cross-block drag handler: covers left/right margins AND
+    // every block kind (prose, tables, dividers, code blocks, images, boards,
+    // Mermaid, math) so upward/downward drag selection NEVER stalls!
+    .on_mouse_move(move |e: &MouseEvent| {
+      if e.pressed_button != Some(MouseButton::Left) {
+        return;
+      }
+      let Some(anchor) = drag_anchor.get_untracked() else {
+        return;
+      };
+      let idx = at.index();
+      let Some(block) = bridge_drag.block_at(idx) else {
+        return;
+      };
+      let focus_pos = if is_non_prose_block(&block) {
+        if idx < anchor.node {
+          DocPosition::new(idx, 0)
+        } else if idx > anchor.node {
+          DocPosition::new(idx, utf16_len(&block.text))
+        } else {
+          anchor
+        }
+      } else {
+        let rw = row_width.get_untracked();
+        let eff = page_width.get_untracked();
+        let col_w = if crate::page_width::is_full_width(eff) {
+          rw
+        } else {
+          rw.min(eff)
+        };
+        let content_left = ((rw - col_w) * 0.5).max(0.0) + 24.0;
+        let off = {
+          let cache = layouts_drag.borrow();
+          if let Some(info) = cache.blocks.get(&block.id) {
+            let text_left = content_left + info.text_frame.origin.x.0;
+            let text_top = info.text_frame.origin.y.0;
+            let local_x = e.position.x.0 - text_left;
+            let local_y = (e.position.y.0 - text_top).max(0.0);
+            if local_x <= 0.0 {
+              offset_at_point(&info.lines, 0.0, local_y, &info.font, &|f, t| drag_measure(f, t))
+            } else {
+              offset_at_point(&info.lines, local_x, local_y, &info.font, &|f, t| drag_measure(f, t))
+            }
+          } else if idx < anchor.node {
+            0
+          } else {
+            utf16_len(&block.text)
+          }
+        };
+        DocPosition::new(idx, off)
+      };
+      let next = DocSelection::from_positions(anchor, focus_pos);
+      if bridge_drag.selection().as_ref() != Some(&next) {
+        bridge_drag.set_selection(next);
+      }
+    })
     .child(
       view()
         .w_full()
@@ -135,6 +219,7 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
           }
         })
         .px_6()
+        .relative()
         .child(dynamic(move || {
           let Some(block_id) = cell_block_id.get() else {
             return view().h(px(1.0)).into_element();
@@ -142,10 +227,50 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
           let rev_sig = bridge.block_rev_signal(&block_id);
           rev_sig.get();
           let idx = at.index();
+          layouts_reg.borrow_mut().register_row_ref(&block_id, idx, row_ref);
           let Some(block) = bridge.block_at(idx) else {
             return view().h(px(1.0)).into_element();
           };
           render_block_body(&env, idx, block)
+        }))
+        // Scoped non-interactive selection highlight for marquee block selection
+        // AND cross-block range selections spanning non-prose blocks (tables,
+        // dividers, code blocks, images, boards, Mermaid, math).
+        .child(dynamic(move || {
+          let idx = at.index();
+          let in_marquee = marquee_selected
+            .get()
+            .is_some_and(|(lo, hi)| idx >= lo && idx <= hi);
+          let in_non_prose_range = if in_marquee {
+            false
+          } else if let Some(sel) = bridge_sel.selection_signal().get() {
+            !sel.is_collapsed()
+              && idx >= sel.start_pos().node
+              && idx <= sel.end_pos().node
+              && bridge_sel
+                .block_at(idx)
+                .is_some_and(|b| is_non_prose_block(&b))
+          } else {
+            false
+          };
+          if !in_marquee && !in_non_prose_range {
+            return view()
+              .absolute()
+              .pointer_events(PointerEvents::None)
+              .into_element();
+          }
+          let p = palette(dark_mode.get());
+          view()
+            .test_id("block-selection-overlay")
+            .absolute()
+            .left(px(20.0))
+            .right(px(20.0))
+            .top(px(1.0))
+            .bottom(px(1.0))
+            .rounded(px(6.0))
+            .bg(p.selection_bg)
+            .pointer_events(PointerEvents::None)
+            .into_element()
         })),
     )
 }
@@ -237,11 +362,16 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     let br_move = bridge.clone();
     let br_sel = bridge.clone();
     let br_find = bridge.clone();
+    let preedit_overlay_sig = bridge.ime_preedit_signal();
     let drag_anchor_d = env.drag_anchor;
     let drag_anchor_m = env.drag_anchor;
     let last_click = env.last_click;
     let focused_code = env.focused_code_block;
     let focused_cell = env.focused_table_cell;
+    let editor_focused = env.editor_focused;
+    let caret_blink_on = env.caret_blink_on;
+    let sink_clear_rev = env.sink_clear_rev;
+    let layout_rev = signal(0u64);
     let kind_color = kind.clone();
     let measure: TextMeasureFn = Rc::new(text_measurer());
     let measure_sel = measure.clone();
@@ -275,6 +405,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       .on_press_down(move |e: &PressEvent| {
         focused_code.set(None);
         focused_cell.set(None);
+        sink_clear_rev.update(|v| *v = v.wrapping_add(1));
         let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
         let click_count = e.clicks.clamp(1, 3);
         let _ = last_click;
@@ -311,9 +442,13 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       })
       // 1. Scoped selection highlight & primary caret layer (NEVER rebuilds text spans!)
       .child(dynamic(move || {
+        // Recompute caret/selection geometry whenever TextLayout updates line metrics!
+        let _ = layout_rev.get();
         let sel_opt = br_sel.selection_signal().get();
         let find_all = br_find.find_matches_signal().get();
         let find_active = br_find.find_active_idx_signal().get();
+        let focused = editor_focused.get();
+        let preedit = preedit_overlay_sig.get();
         let p = palette(dark_mode.get());
         let cache = layouts_sel.borrow();
         let lines = cache
@@ -358,7 +493,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
           }
         }
 
-        // Selection range & caret
+        // Selection range & blinking caret (hidden when unfocused; zero-rebuild blink via reactive bg)
         if let Some(sel) = sel_opt {
           let start_p = sel.start_pos();
           let end_p = sel.end_pos();
@@ -393,7 +528,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
               );
             }
           }
-          if sel.is_collapsed() && focus_p.node == idx {
+          if sel.is_collapsed() && focus_p.node == idx && focused {
             let (cx, cy, ch) = caret_rect_for_offset(
               lines,
               focus_p.offset,
@@ -401,17 +536,50 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
               line_h,
               &|f, t| measure_sel(f, t),
             );
-            layer = layer.child(
-              view()
-                .test_id("mica-active-caret")
-                .absolute()
-                .left(px(cx))
-                .top(px(cy + 1.0))
-                .w(px(2.0))
-                .h(px((ch - 2.0).max(14.0)))
-                .rounded(px(1.0))
-                .bg(p.accent),
-            );
+            let active_preedit = preedit
+              .as_ref()
+              .filter(|(bi, _, comp)| *bi == idx && !comp.is_empty());
+            if let Some((_, _, comp)) = active_preedit {
+              let comp_str = comp.clone();
+              layer = layer.child(
+                view()
+                  .test_id("mica-ime-preedit")
+                  .absolute()
+                  .left(px(cx))
+                  .top(px(cy))
+                  .h(px(ch.max(line_h)))
+                  .px(px(2.0))
+                  .rounded(px(2.0))
+                  .bg(p.surface_raised)
+                  .border_b_1()
+                  .border_color(p.accent)
+                  .justify_center()
+                  .child(
+                    text(comp_str)
+                      .text_size(px(font_px))
+                      .line_height(px(line_h))
+                      .text_color(p.text_primary),
+                  ),
+              );
+            } else {
+              layer = layer.child(
+                view()
+                  .test_id("mica-active-caret")
+                  .absolute()
+                  .left(px(cx))
+                  .top(px(cy + 1.0))
+                  .w(px(2.0))
+                  .h(px((ch - 2.0).max(14.0)))
+                  .rounded(px(1.0))
+                  .bg(move || {
+                    if caret_blink_on.get() {
+                      palette(dark_mode.get()).accent
+                    } else {
+                      TRANSPARENT_RGBA
+                    }
+                  }),
+              );
+            }
           }
         }
         layer
@@ -419,7 +587,6 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       // 2. Native rich inline spans with `EventKind::TextLayout`
       .child({
         let base_color_kind = kind_color;
-        let preedit_sig = bridge.ime_preedit_signal();
         let mut t = text("")
           .w_full()
           .text_size(px(font_px))
@@ -436,10 +603,12 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
             }
           })
           .on(EventKind::TextLayout, move |p: &EventPayload| {
-            if let EventPayload::TextLayout(lines) = p {
-              layouts_l
+            if let EventPayload::TextLayout(lines) = p
+              && layouts_l
                 .borrow_mut()
-                .update_lines(&bid_l, lines.clone(), font_l.clone(), line_h);
+                .update_lines(&bid_l, lines.clone(), font_l.clone(), line_h)
+            {
+              layout_rev.update(|v| *v = v.wrapping_add(1));
             }
           });
 
@@ -449,7 +618,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
               .text_color(move || palette(dark_mode.get()).text_ghost),
           );
         } else {
-          let runs = build_inline_runs(&text_spans, &marks, preedit_sig.get_untracked().as_ref().filter(|(bi, _, _)| *bi == idx));
+          let runs = build_inline_runs(&text_spans, &marks, None);
           if runs.is_empty() {
             // Keep 1 line height even on blank paragraphs
             t = t.child(text("\u{200B}"));
@@ -874,16 +1043,12 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
             let br_c = br_change.clone();
             let init_val = live_src.get_untracked();
             let lang_ed = lang_for_ed.clone();
-            let ed_ref = element_ref();
-            spawn(async move {
-              ed_ref.focus();
-            });
             editor()
-              .element_ref(&ed_ref)
               .test_id("code-block-editor")
               .accessibility_label("代码块编辑器")
               .w_full()
-              .value(Some(SharedString::from(init_val)))
+              .default_value(Some(SharedString::from(init_val)))
+              .auto_focus(true)
               .language(Some(SharedString::from(lang_ed)))
               .placeholder("输入代码...")
               .line_numbers(line_numbers)
@@ -1666,6 +1831,8 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let lightbox = env.lightbox;
+  let focused_code = env.focused_code_block;
+  let block_id = block.id.clone();
   let source = block.text.clone();
   let src_zoom = source.clone();
   let src_zoom_btn = source.clone();
@@ -1791,7 +1958,18 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
               .border_1()
               .border_color(move || palette(dark_mode.get()).border_normal)
               .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-              .on_press(move || editing.set(!editing.get_untracked()))
+              .on_press({
+                let bid_m = block_id.clone();
+                move || {
+                  let next = !editing.get_untracked();
+                  editing.set(next);
+                  if next {
+                    focused_code.set(Some(bid_m.clone()));
+                  } else if focused_code.get_untracked().as_deref() == Some(bid_m.as_str()) {
+                    focused_code.set(None);
+                  }
+                }
+              })
               .child(
                 text(move || if editing.get() { "收起源码" } else { "源码" })
                   .text_size(px(11.5))
@@ -1818,7 +1996,8 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
               .test_id("mermaid-source-editor")
               .accessibility_label("Mermaid 源码编辑器")
               .w_full()
-              .value(Some(SharedString::from(se2)))
+              .default_value(Some(SharedString::from(se2)))
+              .auto_focus(true)
               .placeholder("graph LR\n  A[Mica] --> B[Pure Rust]")
               .line_numbers(false)
               .soft_wrap(false)

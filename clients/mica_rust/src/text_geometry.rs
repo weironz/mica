@@ -9,7 +9,11 @@
 use std::collections::HashMap;
 
 use mica_editor::utf16::{utf16_len, utf16_slice};
-use nsh_core::{TextLine, geometry::{Bounds, Points}};
+use nsh_core::{
+  TextLine,
+  element::ElementRef,
+  geometry::{Bounds, Points},
+};
 
 /// Visual layout geometry captured for a currently mounted text block.
 #[derive(Clone, Debug, Default)]
@@ -31,20 +35,31 @@ pub struct BlockTextLayout {
 #[derive(Default)]
 pub struct VisibleLayoutCache {
   pub blocks: HashMap<String, BlockTextLayout>,
+  /// Live `ElementRef` for each currently mounted `virtual_list` row (`block_id -> (index, ref)`).
+  pub row_refs: HashMap<String, (usize, ElementRef)>,
+  /// Live `ElementRef` for each currently mounted prose text box (`block_id -> ref`).
+  pub text_refs: HashMap<String, ElementRef>,
 }
 
 impl VisibleLayoutCache {
+  /// Updates `lines` for `block_id`, returning `true` iff the line geometry changed.
   pub fn update_lines(
     &mut self,
     block_id: &str,
     lines: Vec<TextLine>,
     font: String,
     line_height: f32,
-  ) {
+  ) -> bool {
     let entry = self.blocks.entry(block_id.to_owned()).or_default();
-    entry.lines = lines;
-    entry.font = font;
-    entry.line_height = line_height;
+    let changed = entry.lines != lines
+      || entry.font != font
+      || (entry.line_height - line_height).abs() > 0.1;
+    if changed {
+      entry.lines = lines;
+      entry.font = font;
+      entry.line_height = line_height;
+    }
+    changed
   }
 
   pub fn update_text_frame(&mut self, block_id: &str, frame: Bounds<Points>) {
@@ -57,12 +72,36 @@ impl VisibleLayoutCache {
     entry.row_frame = frame;
   }
 
+  pub fn register_row_ref(&mut self, block_id: &str, index: usize, r: ElementRef) {
+    self.row_refs.insert(block_id.to_owned(), (index, r));
+  }
+
+  pub fn register_text_ref(&mut self, block_id: &str, r: ElementRef) {
+    self.text_refs.insert(block_id.to_owned(), r);
+  }
+
+  pub fn snapshot_row_refs(&self) -> Vec<(String, usize, ElementRef)> {
+    self
+      .row_refs
+      .iter()
+      .map(|(id, &(idx, r))| (id.clone(), idx, r))
+      .collect()
+  }
+
+  pub fn prune_to_live(&mut self, live_ids: &std::collections::HashSet<&str>) {
+    self.blocks.retain(|id, _| live_ids.contains(id.as_str()));
+    self.row_refs.retain(|id, _| live_ids.contains(id.as_str()));
+    self.text_refs.retain(|id, _| live_ids.contains(id.as_str()));
+  }
+
   pub fn get(&self, block_id: &str) -> Option<&BlockTextLayout> {
     self.blocks.get(block_id)
   }
 
   pub fn clear(&mut self) {
     self.blocks.clear();
+    self.row_refs.clear();
+    self.text_refs.clear();
   }
 }
 
@@ -98,7 +137,9 @@ pub fn block_typography(
   (size, line_height, weight, css)
 }
 
-/// Measures the horizontal advance of UTF-16 prefix `prefix_u16` within `line`.
+/// Measures the horizontal advance of UTF-16 prefix `prefix_u16` within `line`,
+/// proportionally calibrated against the platform engine's exact `line.width` so
+/// caret & click hit-testing match DirectWrite / CoreText / DOM subpixel metrics.
 fn measure_line_prefix<F>(line: &TextLine, offset_in_line_u16: u32, font: &str, measure: &F) -> f32
 where
   F: Fn(&str, &str) -> Points,
@@ -106,14 +147,19 @@ where
   if offset_in_line_u16 == 0 || line.text.is_empty() {
     return 0.0;
   }
-  let line_u16_len = utf16_len(&line.text) as u32;
+  let line_u16_len = utf16_len(&line.text);
   if offset_in_line_u16 >= line_u16_len {
     return line.width.0.max(0.0);
   }
   let sub = utf16_slice(&line.text, 0, offset_in_line_u16);
   let measured = measure(font, sub).0.max(0.0);
   if line.width.0 > 0.0 {
-    measured.min(line.width.0)
+    let full_measured = measure(font, &line.text).0;
+    if full_measured > 0.5 {
+      (measured * (line.width.0 / full_measured)).clamp(0.0, line.width.0)
+    } else {
+      measured.min(line.width.0)
+    }
   } else {
     measured
   }

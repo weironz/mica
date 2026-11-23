@@ -14,7 +14,7 @@
 //!   22-item `/` slash menu, floating selection bubble menu, `Ctrl+F` find bar,
 //!   and floating bottom-right word count badge.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use mica_editor::{
   DocPosition, DocSelection, EditorCommand, FindMatch,
@@ -25,8 +25,8 @@ use nsh_core::{
   SubmitBehavior,
   color::Rgba,
   element::{
-    ClipboardItem, ImageSrc, KeyOptions, Svg, element_ref, on_key_with, set_clipboard,
-    set_clipboard_item, svg, text_measurer, virtual_list,
+    ClipboardItem, ImageSrc, KeyOptions, Spawned, Svg, element_ref, on_key_with, set_clipboard,
+    set_clipboard_item, set_interval, svg, text_measurer, virtual_list,
   },
   geometry::{Bounds, Points, px},
   keymap::When,
@@ -34,6 +34,7 @@ use nsh_core::{
 };
 
 use crate::{
+  block_marquee::{MARQUEE_DRAG_SLOP, RectF, starts_marquee_in_margin},
   block_views::{
     BlockRenderEnv, LightboxContent, OpenBoardCallback, render_lightbox_modal,
     render_virtual_block_row,
@@ -152,18 +153,26 @@ pub fn editor_view(
 
   let list_ref = element_ref();
   let sink_ref = element_ref();
+  let paper_ref = element_ref();
   let editor_focused = signal(false);
+  let caret_blink_on = signal(true);
+  let blink_task: Rc<RefCell<Option<Spawned<()>>>> = Rc::new(RefCell::new(None));
   let sink_value = signal(String::new());
+  let sink_clear_rev = signal(0u64);
   let sink_state = Rc::new(RefCell::new(ImeSinkState::default()));
+  let marquee_row_rects: Rc<RefCell<Vec<(usize, RectF)>>> = Rc::new(RefCell::new(Vec::new()));
+  let autoscroll_cooldown = signal(false);
 
   let ai_enabled = header.ai_enabled;
   let on_inline_ai_key = header.on_inline_ai.clone();
   let on_insert_image_key = header.on_insert_image.clone();
 
   // Sync `has_text_selection` & slash menu closure reactively when selection changes.
+  // IMPORTANT: NEVER clear `sink_value` here! Clearing the native Win32/macOS Edit
+  // sink on every typed character races with `WM_CHAR`/`EN_CHANGE`, producing doubled
+  // characters (`ttest`) and dropped symbols (like backtick `` ` ``).
   {
     let sel_sig = bridge.selection_signal();
-    let st_sel = sink_state.clone();
     effect(move || {
       let sel = sel_sig.get();
       let is_range = sel.as_ref().is_some_and(|s| !s.is_collapsed());
@@ -174,12 +183,78 @@ pub fn editor_view(
       if is_range && slash.open.get_untracked() {
         close_slash(slash);
       }
-      // Clear IME sink buffer cleanly whenever selection moves while not composing.
-      let mut st = st_sel.borrow_mut();
-      if !st.composing && !st.text.is_empty() {
-        st.emptied = Some(std::mem::take(&mut st.text));
-        drop(st);
-        sink_value.set(String::new());
+    });
+  }
+
+  // Caret blink timer: solid immediately upon focus or selection move, then blinks
+  // smoothly at 530ms intervals while focused; cancelled cleanly on blur / unmount.
+  {
+    let sel_sig = bridge.selection_signal();
+    let bt = blink_task.clone();
+    effect(move || {
+      let focused = editor_focused.get();
+      let sel = sel_sig.get();
+      if let Some(prev) = bt.borrow_mut().take() {
+        prev.cancel();
+      }
+      let collapsed = sel.as_ref().is_some_and(|s| s.is_collapsed());
+      if !focused || !collapsed {
+        caret_blink_on.set(false);
+        return;
+      }
+      caret_blink_on.set(true);
+      let task = set_interval(Duration::from_millis(530), move || {
+        caret_blink_on.update(|b| *b = !*b);
+      });
+      *bt.borrow_mut() = Some(task);
+    });
+  }
+
+  // Clear hidden IME sink ONLY on explicit non-typing cursor repositions (click).
+  {
+    let st_clear = sink_state.clone();
+    effect(move || {
+      if sink_clear_rev.get() > 0 {
+        empty_ime_sink(&st_clear, sink_value);
+      }
+    });
+  }
+
+  // Prune stale layout/row refs AND clear orphaned code-block / table-cell focus
+  // whenever block structure changes (delete / page switch) so stale focus from
+  // a previous page never blocks prose shortcuts on the newly opened page!
+  {
+    let struct_rev = bridge.structure_rev_signal();
+    let b_prune = bridge.clone();
+    let l_prune = layouts.clone();
+    effect(move || {
+      let _ = struct_rev.get();
+      let ids = b_prune.block_ids();
+      let live: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+      l_prune.borrow_mut().prune_to_live(&live);
+      if let Some(fid) = focused_code_block.get_untracked()
+        && !live.contains(fid.as_str())
+      {
+        focused_code_block.set(None);
+      }
+      if let Some((tid, _, _)) = focused_table_cell.get_untracked()
+        && !live.contains(tid.as_str())
+      {
+        focused_table_cell.set(None);
+      }
+    });
+  }
+
+  // Release hidden prose IME sink whenever focus enters a code block or table cell,
+  // so `Backspace` / `Delete` / arrows belong exclusively to the nested editor!
+  {
+    let sref = sink_ref;
+    let st_blur = sink_state.clone();
+    effect(move || {
+      if focused_code_block.get().is_some() || focused_table_cell.get().is_some() {
+        empty_ime_sink(&st_blur, sink_value);
+        sref.blur();
+        editor_focused.set(false);
       }
     });
   }
@@ -188,11 +263,13 @@ pub fn editor_view(
   {
     let focus_rev = bridge.focus_sink_rev_signal();
     let sref = sink_ref;
+    let st_focus = sink_state.clone();
     effect(move || {
       let rev = focus_rev.get();
       if rev > 0 {
         focused_code_block.set(None);
         focused_table_cell.set(None);
+        empty_ime_sink(&st_focus, sink_value);
         sref.focus();
       }
     });
@@ -223,7 +300,10 @@ pub fn editor_view(
     let on_ai_k = on_inline_ai_key.clone();
     let on_img_k = on_insert_image_key.clone();
     effect(move || {
-      if !editor_focused.get() {
+      if !editor_focused.get()
+        || focused_code_block.get().is_some()
+        || focused_table_cell.get().is_some()
+      {
         return;
       }
       let bindings: &[(&str, bool, EditorKeyAction)] = &[
@@ -282,14 +362,7 @@ pub fn editor_view(
             }
             // Empty IME sink before structural/navigation commands so the next
             // typed character diffs cleanly against an empty buffer.
-            {
-              let mut guard = st.borrow_mut();
-              if !guard.text.is_empty() {
-                guard.emptied = Some(std::mem::take(&mut guard.text));
-                drop(guard);
-                sink_value.set(String::new());
-              }
-            }
+            empty_ime_sink(&st, sink_value);
             handle_editor_key(
               action,
               &br,
@@ -369,66 +442,73 @@ pub fn editor_view(
     },
   );
 
-  // Marquee multi-block keyboard actions: Delete / Backspace / Mod+C / Mod+X
-  for key in ["delete", "backspace"] {
-    let b_del = bridge.clone();
-    let m_del = marquee.clone();
-    on_key_with(
-      key,
-      KeyOptions {
-        when: When::Always,
-        pass_through: true,
-        ..KeyOptions::default()
-      },
-      move |_| {
-        if let Some((lo, hi)) = m_del.selected_blocks() {
-          b_del.delete_block_range(lo, hi);
-          m_del.clear();
-        }
-      },
-    );
-  }
+  // Marquee multi-block keyboard actions: registered ONLY while a marquee block
+  // selection is active so they NEVER interfere with code blocks / table cells!
   {
-    let b_copy = bridge.clone();
-    let m_copy = marquee.clone();
-    on_key_with(
-      "mod+c",
-      KeyOptions {
-        when: When::Always,
-        pass_through: true,
-        ..KeyOptions::default()
-      },
-      move |_| {
-        if let Some((lo, hi)) = m_copy.selected_blocks() {
-          let md = b_copy.copy_block_range_markdown(lo, hi);
-          if !md.is_empty() {
-            set_clipboard(md);
-          }
-        }
-      },
-    );
-  }
-  {
-    let b_cut = bridge.clone();
-    let m_cut = marquee.clone();
-    on_key_with(
-      "mod+x",
-      KeyOptions {
-        when: When::Always,
-        pass_through: true,
-        ..KeyOptions::default()
-      },
-      move |_| {
-        if let Some((lo, hi)) = m_cut.selected_blocks() {
-          let md = b_cut.copy_block_range_markdown(lo, hi);
-          if !md.is_empty() {
-            set_clipboard(md);
-          }
-          b_cut.delete_block_range(lo, hi);
-          m_cut.clear();
-        }
-      },
-    );
+    let b_marquee = bridge.clone();
+    let m_keys = marquee.clone();
+    effect(move || {
+      if m_keys.selected_range.get().is_none() {
+        return;
+      }
+      for key in ["delete", "backspace"] {
+        let b_del = b_marquee.clone();
+        let m_del = m_keys.clone();
+        on_key_with(
+          key,
+          KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some((lo, hi)) = m_del.selected_range.get_untracked() {
+              b_del.delete_block_range(lo, hi);
+              m_del.clear();
+            }
+          },
+        );
+      }
+      {
+        let b_copy = b_marquee.clone();
+        let m_copy = m_keys.clone();
+        on_key_with(
+          "mod+c",
+          KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some((lo, hi)) = m_copy.selected_range.get_untracked() {
+              let md = b_copy.copy_block_range_markdown(lo, hi);
+              if !md.is_empty() {
+                set_clipboard(md);
+              }
+            }
+          },
+        );
+      }
+      {
+        let b_cut = b_marquee.clone();
+        let m_cut = m_keys.clone();
+        on_key_with(
+          "mod+x",
+          KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some((lo, hi)) = m_cut.selected_range.get_untracked() {
+              let md = b_cut.copy_block_range_markdown(lo, hi);
+              if !md.is_empty() {
+                set_clipboard(md);
+              }
+              b_cut.delete_block_range(lo, hi);
+              m_cut.clear();
+            }
+          },
+        );
+      }
+    });
   }
 
   let active_kind = bridge.active_kind_signal();
@@ -458,6 +538,10 @@ pub fn editor_view(
     focused_table_cell,
     last_click,
     page_width,
+    editor_focused,
+    caret_blink_on,
+    sink_clear_rev,
+    marquee_selected: marquee.selected_range,
   };
 
   let b_copy_path = bridge.clone();
@@ -1055,7 +1139,10 @@ pub fn editor_view(
       //    RIGHT EDGE of the window!) + hidden native IME proxy sink + centered
       //    header (page title + properties) / per-block virtualized rows / footer
       //    (backlinks + bottom click-to-focus) + non-blocking page-width grips +
-      //    floating selection bubble menu + slash menu + word count badge.
+      //    margin block-marquee selection + floating selection bubble menu +
+      //    slash menu + word count badge.
+      let m_down = marquee.clone();
+      let m_move = marquee.clone();
       let m_up = marquee.clone();
       let m_overlay = marquee.clone();
       let on_commit_width = header.on_commit_page_width.clone();
@@ -1063,8 +1150,14 @@ pub fn editor_view(
       let br_count = b_body.clone();
       let br_keys = b_body.clone();
       let br_footer = b_body.clone();
+      let br_hdr_drag = b_body.clone();
+      let br_ftr_drag = b_body.clone();
+      let br_edge_drag = b_body.clone();
       let br_bubble = b_body.clone();
       let h_bub = h_bubble.clone();
+      let layouts_marquee = layouts.clone();
+      let rects_down = marquee_row_rects.clone();
+      let rects_move = marquee_row_rects.clone();
 
       // Hidden native IME proxy sink closures
       let br_chg = b_body.clone();
@@ -1084,6 +1177,7 @@ pub fn editor_view(
       let backlinks_slot_ftr = backlinks_slot.clone();
 
       view()
+        .element_ref(&paper_ref)
         .test_id("mica-rich-editor")
         .flex_1()
         .w_full()
@@ -1094,6 +1188,119 @@ pub fn editor_view(
         .on_layout(move |b: &Bounds<Points>| {
           paper_bounds.set((b.size.width.0, b.size.height.0));
           slash.box_size.set((b.size.width.0, b.size.height.0));
+        })
+        .on_press_down(move |e: &PressEvent| {
+          let lx = e.position.x.0;
+          let ly = e.position.y.0;
+          let (vw, vh) = paper_bounds.get_untracked();
+          let eff = page_width.get_untracked();
+          let room = (vw - 24.0).max(0.0);
+          let col = crate::page_width::rendered_column_width(eff, room);
+          let col_left = ((vw - col) * 0.5).max(0.0);
+          let col_right = col_left + col;
+
+          if starts_marquee_in_margin(lx, ly, vw, col_left, col_right, vh) {
+            m_down.clear();
+            marquee_origin.set(Some((lx, ly)));
+            drag_anchor.set(None);
+            focused_code_block.set(None);
+            focused_table_cell.set(None);
+            sink_ref.blur();
+            editor_focused.set(false);
+
+            let pref = paper_ref;
+            let row_refs = layouts_marquee.borrow().snapshot_row_refs();
+            let rects_slot = rects_down.clone();
+            let content_l = col_left + 20.0;
+            let content_r = (col_right - 20.0).max(content_l + 1.0);
+            spawn(async move {
+              let Some(pm) = pref.measure().await else {
+                return;
+              };
+              let mut measured = Vec::with_capacity(row_refs.len());
+              for (_bid, idx, rref) in row_refs {
+                if let Some(rm) = rref.measure().await {
+                  let top = rm.page.y.0 - pm.page.y.0;
+                  let bottom = top + rm.frame.size.height.0;
+                  if bottom > top {
+                    measured.push((idx, RectF::new(content_l, top, content_r, bottom)));
+                  }
+                }
+              }
+              measured.sort_by_key(|(idx, _)| *idx);
+              *rects_slot.borrow_mut() = measured;
+            });
+          } else if m_down.is_active_untracked() {
+            m_down.clear();
+            marquee_origin.set(None);
+          }
+        })
+        .on_mouse_move(move |e: &MouseEvent| {
+          if e.pressed_button != Some(MouseButton::Left) {
+            return;
+          }
+          // 1. Live margin marquee rectangle drag
+          if let Some((ox, oy)) = marquee_origin.get_untracked() {
+            let cx = e.position.x.0;
+            let cy = e.position.y.0;
+            if (cx - ox).abs() >= MARQUEE_DRAG_SLOP || (cy - oy).abs() >= MARQUEE_DRAG_SLOP {
+              let rect = RectF::from_points(ox, oy, cx, cy);
+              let rects = rects_move.borrow();
+              m_move.update_drag(rect, &rects);
+            }
+            return;
+          }
+          // 2. Edge auto-scroll during upward/downward cross-block drag selection
+          if let Some(anchor) = drag_anchor.get_untracked() {
+            let (_, vh) = paper_bounds.get_untracked();
+            let cy = e.position.y.0;
+            let dir: i32 = if cy < 44.0 {
+              -1
+            } else if vh > 88.0 && cy > vh - 44.0 {
+              1
+            } else {
+              0
+            };
+            if dir != 0 && !autoscroll_cooldown.get_untracked() {
+              autoscroll_cooldown.set(true);
+              spawn(async move {
+                timer(Duration::from_millis(90)).await;
+                autoscroll_cooldown.set(false);
+              });
+              let count = br_edge_drag.block_len();
+              if count > 0 {
+                let cur_node = br_edge_drag
+                  .selection()
+                  .map(|s| s.focus_pos().node)
+                  .unwrap_or(anchor.node);
+                let target_idx = if dir < 0 {
+                  cur_node.saturating_sub(1)
+                } else {
+                  (cur_node + 1).min(count - 1)
+                };
+                if target_idx != cur_node {
+                  let target_off = if dir < 0 {
+                    0
+                  } else {
+                    br_edge_drag
+                      .block_at(target_idx)
+                      .map(|b| utf16_len(&b.text))
+                      .unwrap_or(0)
+                  };
+                  br_edge_drag.set_selection(DocSelection::from_positions(
+                    anchor,
+                    DocPosition::new(target_idx, target_off),
+                  ));
+                  if target_idx == 0 {
+                    list_ref.scroll_to_offset(px(0.0), false);
+                  } else {
+                    let align = if dir < 0 { Percentage(0.08) } else { Percentage(0.88) };
+                    list_ref.scroll_to_index(target_idx as u32, align, px(0.0), false);
+                  }
+                }
+              }
+            }
+          }
         })
         .on_mouse_up(move |_: &MouseEvent| {
           if drag_anchor.get_untracked().is_some() {
@@ -1150,6 +1357,7 @@ pub fn editor_view(
                 &br_chg,
                 slash,
                 ai_enabled,
+                focused_code_block,
               );
             })
             .on_composition_change(move |c: &Composition| {
@@ -1174,11 +1382,15 @@ pub fn editor_view(
                   &br_comp,
                   slash,
                   ai_enabled,
+                  focused_code_block,
                 );
               }
             })
             .on_key_press(move |k: &str| {
-              if k == "Backspace" && !st_key_press.borrow().composing && st_key_press.borrow().text.is_empty() {
+              if k == "Backspace"
+                && !st_key_press.borrow().composing
+                && st_key_press.borrow().text.is_empty()
+              {
                 br_key_press.dispatch(EditorCommand::DeleteBackward);
                 sync_slash_palette_from_caret(&br_key_press, slash, ai_enabled);
               }
@@ -1187,18 +1399,14 @@ pub fn editor_view(
               if copied_link.get_untracked() {
                 copied_link.set(false);
               }
-              {
-                let mut st = st_paste.borrow_mut();
-                if !st.text.is_empty() {
-                  st.emptied = Some(std::mem::take(&mut st.text));
-                  drop(st);
-                  sink_value.set(String::new());
-                }
-              }
+              focused_code_block.set(None);
+              focused_table_cell.set(None);
+              empty_ime_sink(&st_paste, sink_value);
               if !p.text.is_empty() || !p.html.is_empty() {
                 br_paste.paste_clipboard(&p.text, &p.html, false);
                 sync_slash_palette_from_caret(&br_paste, slash, ai_enabled);
               }
+              br_paste.request_focus();
             }),
         )
         .child(
@@ -1225,6 +1433,16 @@ pub fn editor_view(
             view()
               .w_full()
               .items_center()
+              .on_mouse_move(move |e: &MouseEvent| {
+                if e.pressed_button == Some(MouseButton::Left)
+                  && let Some(anchor) = drag_anchor.get_untracked()
+                {
+                  let next = DocSelection::from_positions(anchor, DocPosition::new(0, 0));
+                  if br_hdr_drag.selection().as_ref() != Some(&next) {
+                    br_hdr_drag.set_selection(next);
+                  }
+                }
+              })
               .child(
                 view()
                   .w_full()
@@ -1273,6 +1491,21 @@ pub fn editor_view(
             view()
               .w_full()
               .items_center()
+              .on_mouse_move(move |e: &MouseEvent| {
+                if e.pressed_button == Some(MouseButton::Left)
+                  && let Some(anchor) = drag_anchor.get_untracked()
+                {
+                  let last = br_ftr_drag.block_len().saturating_sub(1);
+                  let end_off = br_ftr_drag
+                    .block_at(last)
+                    .map(|b| utf16_len(&b.text))
+                    .unwrap_or(0);
+                  let next = DocSelection::from_positions(anchor, DocPosition::new(last, end_off));
+                  if br_ftr_drag.selection().as_ref() != Some(&next) {
+                    br_ftr_drag.set_selection(next);
+                  }
+                }
+              })
               .child(
                 view()
                   .w_full()
@@ -1403,6 +1636,16 @@ fn common_prefix_bytes(a: &str, b: &str) -> usize {
     .unwrap_or(0)
 }
 
+fn empty_ime_sink(sink_state: &Rc<RefCell<ImeSinkState>>, sink_value: Signal<String>) {
+  let mut st = sink_state.borrow_mut();
+  if st.composing || st.text.is_empty() {
+    return;
+  }
+  st.emptied = Some(std::mem::take(&mut st.text));
+  drop(st);
+  sink_value.set(String::new());
+}
+
 fn apply_sink_text_diff(
   text: &str,
   sink_state: &Rc<RefCell<ImeSinkState>>,
@@ -1410,6 +1653,7 @@ fn apply_sink_text_diff(
   bridge: &MicaDocumentBridge,
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
+  focused_code_block: Signal<Option<String>>,
 ) {
   let (deleted, inserted) = {
     let mut st = sink_state.borrow_mut();
@@ -1425,6 +1669,21 @@ fn apply_sink_text_diff(
     (deleted, inserted)
   };
   sink_value.set(text.to_owned());
+
+  // Never drop keystrokes if the bridge somehow had no active selection yet.
+  if (deleted > 0 || !inserted.is_empty()) && bridge.selection().is_none() {
+    let last = bridge.block_len().saturating_sub(1);
+    let end_off = bridge
+      .block_at(last)
+      .map(|b| utf16_len(&b.text))
+      .unwrap_or(0);
+    bridge.set_selection(DocSelection::caret(last, end_off));
+  }
+
+  let prev_focus_kind = bridge
+    .selection()
+    .and_then(|s| bridge.block_at(s.focus_pos().node))
+    .map(|b| b.kind);
 
   for _ in 0..deleted {
     bridge.dispatch(EditorCommand::DeleteBackward);
@@ -1443,13 +1702,20 @@ fn apply_sink_text_diff(
     }
   }
   if sink_state.borrow().text.len() > SINK_LIMIT {
-    let mut st = sink_state.borrow_mut();
-    if !st.composing && !st.text.is_empty() {
-      st.emptied = Some(std::mem::take(&mut st.text));
-      drop(st);
-      sink_value.set(String::new());
-    }
+    empty_ime_sink(sink_state, sink_value);
   }
+
+  // If a markdown input rule (e.g. typing ```` ``` ````) just converted the focused
+  // prose block into a `code_block`, hand focus straight to its live code editor.
+  if prev_focus_kind.as_deref() != Some("code_block")
+    && let Some(sel) = bridge.selection()
+    && let Some(blk) = bridge.block_at(sel.focus_pos().node)
+    && blk.kind == "code_block"
+  {
+    empty_ime_sink(sink_state, sink_value);
+    focused_code_block.set(Some(blk.id));
+  }
+
   sync_slash_palette_from_caret(bridge, slash, ai_enabled);
 }
 

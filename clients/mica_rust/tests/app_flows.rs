@@ -319,3 +319,86 @@ fn virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch() {
   app.wait_for("100%").unwrap();
   app.press("id:lightbox-close-btn").unwrap();
 }
+
+#[test]
+fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Fresh page: type "t", "e", "s", "t" one character at a time via IME sink.
+  //    Must produce exact "test" (NEVER doubled "ttest"!) and show focused caret.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+  for ch in ["t", "e", "s", "t"] {
+    app.type_text("id:mica-editor-ime-sink", ch).unwrap();
+  }
+  app.wait_for("test").unwrap();
+  app.wait_for("id:mica-active-caret").unwrap();
+
+  // 2. Typing backtick `` ` `` must NOT be swallowed by sink clearing.
+  app.type_text("id:mica-editor-ime-sink", " `bar").unwrap();
+  app.wait_for("test `bar").unwrap();
+  assert!(
+    !app.shows("ttest"),
+    "continuous typing must not duplicate characters into 'ttest'"
+  );
+
+  // 3. Insert a code block and verify:
+  //    a) Prose caret hides when code block editor takes focus.
+  //    b) Typing + Backspace inside `code-block-editor` genuinely deletes code chars!
+  app.press("id:ed-slash-open").unwrap();
+  app.wait_for("id:slash-code").unwrap();
+  app.press("id:slash-code").unwrap();
+  app.wait_for("id:code-block-editor").unwrap();
+  app.press("id:code-block-editor").unwrap();
+  app.type_text("id:code-block-editor", "hello_world").unwrap();
+  app.wait_for("hello_world").unwrap();
+  app
+    .wait_for_gone("id:mica-active-caret", std::time::Duration::from_millis(500))
+    .unwrap();
+  // Press Backspace 6 times to delete "_world" -> "hello"
+  for _ in 0..6 {
+    app.press_key("backspace").unwrap();
+  }
+  app.wait_for("hello").unwrap();
+  assert!(
+    !app.shows("hello_world"),
+    "Backspace inside code-block-editor must actually delete characters"
+  );
+
+  // 4. Typing triple backticks ```` ``` ```` in a fresh paragraph auto-converts to a
+  //    code block AND hands focus directly to `code-block-editor` so typing + Backspace work immediately!
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 3").unwrap();
+  for ch in ["`", "`", "`"] {
+    app.type_text("id:mica-editor-ime-sink", ch).unwrap();
+  }
+  app.wait_for("id:code-block-editor").unwrap();
+  app.type_text("id:code-block-editor", "fn_xyz").unwrap();
+  app.wait_for("fn_xyz").unwrap();
+  for _ in 0..4 {
+    app.press_key("backspace").unwrap();
+  }
+  app.wait_for("fn").unwrap();
+  assert!(
+    !app.shows("fn_xyz"),
+    "Backspace must work inside a code block created via triple backticks"
+  );
+
+  // 5. Cross-block selection spanning a GFM table renders `block-selection-overlay` over the table!
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 4").unwrap();
+  let mut paste_ev = nsh_core::PasteEvent::default();
+  paste_ev.text = "## Section 3\n\n| ColA | ColB |\n| --- | --- |\n| ISP-01 | 10G |\n\n## Section 4".into();
+  app.paste("id:mica-editor-ime-sink", &paste_ev).unwrap();
+  app.wait_for("Section 3").unwrap();
+  app.wait_for("ISP-01").unwrap();
+  app.wait_for("Section 4").unwrap();
+  // Mod+A selects across Section 3 -> Table -> Section 4, painting selection highlight on the table.
+  app.press_key("mod+a").unwrap();
+  app.wait_for("id:block-selection-overlay").unwrap();
+}
