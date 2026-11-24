@@ -11,15 +11,22 @@ RUN apk add --no-cache brotli \
   && apk del brotli \
   && test -s /usr/share/nginx/html/mica_rust_bg.wasm.br \
   && test -s /usr/share/nginx/html/mica_rust.js.br \
-  && test -s /usr/share/nginx/html/nsh.js.br
+  && test -s /usr/share/nginx/html/nsh.js.br \
+  && test -s /usr/share/nginx/html/mica_preview/math_bg.wasm.br \
+  && test -s /usr/share/nginx/html/mica_preview/mermaid_bg.wasm.br
 # Refuse incomplete pure-Rust bundles or retired Flutter/JS assets.
 RUN test ! -e /usr/share/nginx/html/main.dart.js \
   && test ! -e /usr/share/nginx/html/yjs_bundle.js \
   && test ! -e /usr/share/nginx/html/mermaid.min.js \
   && test -s /usr/share/nginx/html/index.html \
+  && test -s /usr/share/nginx/html/favicon.svg \
   && test -s /usr/share/nginx/html/nsh.js \
   && test -s /usr/share/nginx/html/mica_rust.js \
   && test -s /usr/share/nginx/html/mica_rust_bg.wasm \
-  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -r /usr/share/nginx/html/nsh.js && test -r /usr/share/nginx/html/mica_rust.js && test -r /usr/share/nginx/html/mica_rust_bg.wasm' \
+  && test -s /usr/share/nginx/html/mica_preview/math.js \
+  && test -s /usr/share/nginx/html/mica_preview/math_bg.wasm \
+  && test -s /usr/share/nginx/html/mica_preview/mermaid.js \
+  && test -s /usr/share/nginx/html/mica_preview/mermaid_bg.wasm \
+  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -r /usr/share/nginx/html/favicon.svg && test -r /usr/share/nginx/html/nsh.js && test -r /usr/share/nginx/html/mica_rust.js && test -r /usr/share/nginx/html/mica_rust_bg.wasm && test -r /usr/share/nginx/html/mica_preview/math_bg.wasm && test -r /usr/share/nginx/html/mica_preview/mermaid_bg.wasm' \
   || { echo "pure-Rust web bundle is incomplete, contains retired assets, or is unreadable by nginx" >&2; exit 1; }
 EXPOSE 80

@@ -3,44 +3,126 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mica — Fullstack Rust Notes &amp; Whiteboard</title>
+<meta name="theme-color" content="#6357E8">
+<meta name="color-scheme" content="light dark">
+<meta name="mica-preview-version" content="">
+<title>Mica</title>
+<link rel="icon" type="image/svg+xml" href="./favicon.svg">
+<link id="mica-nsh-preload" rel="modulepreload" href="./nsh.js">
+<link id="mica-glue-preload" rel="modulepreload" href="./mica_rust.js">
+<link id="mica-wasm-preload" rel="preload" href="./mica_rust_bg.wasm" as="fetch" crossorigin>
 <style>
-  html, body { margin: 0; height: 100%; background: #ffffff; overflow: hidden; }
-  @media (prefers-color-scheme: dark) { html, body { background: #09090b; } }
+  html, body { margin: 0; height: 100%; background: #FFFFFF; overflow: hidden; }
+  @media (prefers-color-scheme: dark) { html, body { background: #0F1419; } }
   #app { position: fixed; inset: 0; }
-  #status {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    color: #71717a;
+  #mica-splash {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    opacity: 0; animation: mica-splash-in 240ms ease-out 300ms forwards;
+    font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #71717A;
   }
+  #mica-splash svg { width: 48px; height: 48px; }
+  #mica-splash[data-error="1"] { opacity: 1; animation: none; color: #DC2626; }
+  @keyframes mica-splash-in { to { opacity: 1; } }
 </style>
 </head>
 <body>
 <div id="app"></div>
-<div id="status">Loading Mica (Pure Rust WebAssembly)…</div>
+<div id="mica-splash" aria-live="polite">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-hidden="true">
+    <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
+      <defs>
+        <linearGradient id="ms-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#4F7CFF"/>
+          <stop offset="0.48" stop-color="#6357E8"/>
+          <stop offset="1" stop-color="#8B4DE8"/>
+        </linearGradient>
+        <linearGradient id="ms-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#5E8CFF"/>
+          <stop offset="1" stop-color="#4656D8"/>
+        </linearGradient>
+        <linearGradient id="ms-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#7968F1"/>
+          <stop offset="1" stop-color="#9B4DDA"/>
+        </linearGradient>
+      </defs>
+      <path fill="url(#ms-main)" d="M 178 282 Q 178 236 224 236 L 318 236 Q 342 236 358 257 L 512 462 L 666 257 Q 682 236 706 236 L 800 236 Q 846 236 846 282 L 846 742 Q 846 788 800 788 L 706 788 Q 674 788 674 756 L 674 494 L 558 650 Q 536 680 512 680 Q 488 680 466 650 L 350 494 L 350 756 Q 350 788 318 788 L 224 788 Q 178 788 178 742 Z"/>
+      <path fill="url(#ms-left)" d="M 242 302 L 312 302 L 512 570 L 466 632 L 342 466 L 342 726 L 242 726 Z"/>
+      <path fill="url(#ms-right)" d="M 782 302 L 712 302 L 512 570 L 558 632 L 682 466 L 682 726 L 782 726 Z"/>
+    </g>
+  </svg>
+  <span id="mica-splash-msg"></span>
+</div>
 <script type="module">
-  import { createPlayer } from "./nsh.js";
+  const nshUrl = document.getElementById("mica-nsh-preload")?.getAttribute("href") || "./nsh.js";
+  const glueUrl = document.getElementById("mica-glue-preload")?.getAttribute("href") || "./mica_rust.js";
+  const wasmUrl = document.getElementById("mica-wasm-preload")?.getAttribute("href") || "./mica_rust_bg.wasm";
+  const previewVer = document.querySelector('meta[name="mica-preview-version"]')?.getAttribute("content") || "";
+  const qs = previewVer ? `?v=${previewVer}` : "";
 
-  const status = document.getElementById("status");
+  const previewMods = { math: null, mermaid: null };
+  async function loadPreview(kind) {
+    if (!previewMods[kind]) {
+      previewMods[kind] = (async () => {
+        const mod = await import(`./mica_preview/${kind}.js${qs}`);
+        await mod.default({ module_or_path: `./mica_preview/${kind}_bg.wasm${qs}` });
+        return mod;
+      })().catch((err) => {
+        previewMods[kind] = null;
+        throw err;
+      });
+    }
+    return previewMods[kind];
+  }
+
+  window.__micaPreviewRenderMath = async (source, display, color) => {
+    try {
+      const mod = await loadPreview("math");
+      return mod.render_math(source, Boolean(display), color || "#18181b") ?? null;
+    } catch (err) {
+      console.warn("[mica-preview] math failed:", err);
+      return null;
+    }
+  };
+  window.__micaPreviewRenderMermaid = async (source, themeJson) => {
+    try {
+      const mod = await loadPreview("mermaid");
+      return mod.render_mermaid(source, themeJson) ?? null;
+    } catch (err) {
+      console.warn("[mica-preview] mermaid failed:", err);
+      return null;
+    }
+  };
+
+  const splash = document.getElementById("mica-splash");
+  const splashMsg = document.getElementById("mica-splash-msg");
   const root = document.getElementById("app");
+  const showError = (msg) => {
+    if (splash) {
+      splash.setAttribute("data-error", "1");
+      splash.style.display = "flex";
+    }
+    if (splashMsg) splashMsg.textContent = String(msg);
+  };
+
   try {
+    const { createPlayer } = await import(nshUrl);
     const player = await createPlayer(root, {
       dialogs: "viewport",
-      wasm: "./mica_rust_bg.wasm",
-      glue: "./mica_rust.js",
+      wasm: wasmUrl,
+      glue: glueUrl,
       onError: (msg) => {
         console.error("[mica-rust]", msg);
-        status.textContent = String(msg);
-        status.style.display = "";
+        showError(msg);
       },
     });
     window.micaPlayer = player;
-    status.style.display = "none";
+    splash?.remove();
     player.runRust();
   } catch (err) {
     console.error("[mica-rust] boot failed:", err);
-    status.textContent = "Failed to start Mica: " + String(err?.message ?? err);
-    status.style.display = "";
+    showError("Failed to start Mica: " + String(err?.message ?? err));
   }
 </script>
 </body>

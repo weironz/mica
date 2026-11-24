@@ -24,7 +24,10 @@ mica-client = { path = "../../crates/mica-client" }
 mica-core = { path = "../../crates/mica-core" }
 mica-editor = { path = "../../crates/mica-editor" }
 mica-interchange = { path = "../../crates/interchange" }
-mica-md = { path = "../../crates/md-core", features = ["render"] }
+# On Web (`wasm32`), only `render-board` stays in the main bundle; Math (`ratex`)
+# and Mermaid (`merman`) are lazy-loaded via `mica_preview/{math,mermaid}.wasm`
+# on first use so ordinary pages pay zero parser/layout/font weight at startup.
+mica-md = { path = "../../crates/md-core", features = ["render-board"] }
 mica-sync = { path = "../../crates/mica-sync" }
 
 # L3 Native Shell presentation primitives: enable only `editor` (pure-Rust code
@@ -39,6 +42,7 @@ uuid = { version = "1.11", features = ["serde", "v4"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mica-core = { path = "../../crates/mica-core", features = ["store"] }
+mica-md = { path = "../../crates/md-core", features = ["render"] }
 mica-sync = { path = "../../crates/mica-sync", features = ["sqlite"] }
 dirs-next = "2"
 tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
@@ -48,7 +52,7 @@ ureq = { version = "3", features = ["json"] }
 js-sys = "0.3"
 nsh-platform-web = { version = "0.6.1", default-features = false }
 uuid = { version = "1.11", features = ["serde", "v4", "js"] }
-wasm-bindgen = "0.2"
+wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
   "AbortController",
@@ -110,5 +114,4 @@ inherits = "release"
 opt-level = "z"
 lto = true
 codegen-units = 1
-strip = true
 panic = "abort"

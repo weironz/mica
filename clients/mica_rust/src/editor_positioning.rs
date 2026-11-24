@@ -380,6 +380,7 @@ pub fn inline_math_popover_view(
           .items_center()
           .justify_center()
           .child(dynamic(move || {
+            let _ = crate::preview_render::preview_rev().get();
             let src = edit_sig.get().map(|e| e.draft).unwrap_or_default();
             let p = palette(dark_mode.get());
             if src.trim().is_empty() {
@@ -387,10 +388,10 @@ pub fn inline_math_popover_view(
                 .text_size(px(12.0))
                 .text_color(p.text_faint)
                 .into_element()
-            } else if let Some(m) = mica_md::render::render_math_svg(
+            } else if let Some(m) = crate::preview_render::render_math_cached(
               src.trim(),
               false,
-              Some(p.text_primary_hex),
+              p.text_primary_hex,
             ) {
               let w = (m.width * 18.0).clamp(16.0, 290.0) as f32;
               let h = (m.height * 18.0).clamp(18.0, 84.0) as f32;

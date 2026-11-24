@@ -210,8 +210,10 @@ jobs:
       - name: Build pure-Rust WebAssembly bundle
         if: ${{ matrix.web }}
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends brotli clang
           rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
+          bash scripts/test-web-csp-hashes.sh
           bash scripts/build-web-rust.sh
       - uses: docker/setup-buildx-action@v3
       - name: Login to Aliyun ACR

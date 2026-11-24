@@ -145,33 +145,39 @@ fn render_math_card(source: &str, dark_mode: bool) -> impl IntoElement {
     r"E = mc^2"
   } else {
     source.trim()
-  };
-  let fg_hex = if dark_mode { "#f4f4f5" } else { "#18181b" };
-  let rendered = mica_md::render::render_math_svg(latex, true, Some(fg_hex));
-
-  if let Some(math_svg) = rendered {
-    let h = ((math_svg.height * 22.0).clamp(28.0, 140.0)) as f32;
-    let w = ((math_svg.width * 22.0).clamp(60.0, 520.0)) as f32;
-    return view()
-      .w_full()
-      .py_2()
-      .items_center()
-      .justify_center()
-      .child(svg(ImageSrc::svg_markup(&math_svg.svg)).w(px(w)).h(px(h)));
   }
+  .to_string();
+  let fg_hex = if dark_mode { "#f4f4f5" } else { "#18181b" };
+  let preview_rev = crate::preview_render::preview_rev();
 
-  view()
-    .w_full()
-    .p_3()
-    .border_1()
-    .border_color(move || theme().border)
-    .rounded(move || theme().radius)
-    .bg(move || theme().card)
-    .child(
-      text(latex.to_string())
-        .text_sm()
-        .text_color(move || theme().muted_foreground),
-    )
+  nsh_core::element::dynamic(move || {
+    let _ = preview_rev.get();
+    if let Some(math_svg) = crate::preview_render::render_math_cached(&latex, true, fg_hex) {
+      let h = ((math_svg.height * 22.0).clamp(28.0, 140.0)) as f32;
+      let w = ((math_svg.width * 22.0).clamp(60.0, 520.0)) as f32;
+      return view()
+        .w_full()
+        .py_2()
+        .items_center()
+        .justify_center()
+        .child(svg(ImageSrc::svg_markup(&math_svg.svg)).w(px(w)).h(px(h)))
+        .into_element();
+    }
+
+    view()
+      .w_full()
+      .p_3()
+      .border_1()
+      .border_color(move || theme().border)
+      .rounded(move || theme().radius)
+      .bg(move || theme().card)
+      .child(
+        text(latex.clone())
+          .text_sm()
+          .text_color(move || theme().muted_foreground),
+      )
+      .into_element()
+  })
 }
 
 fn render_mermaid_block(input: &AtomicBlockInput, dark_mode: bool) -> impl IntoElement {
@@ -183,44 +189,37 @@ fn render_mermaid_card(source: &str, dark_mode: bool) -> impl IntoElement {
     "graph LR\n  A[Mica Core] --> B[Pure Rust Shell]"
   } else {
     source.trim()
-  };
-  let host_theme = mica_md::MermaidHostTheme {
-    dark: dark_mode,
-    canvas: if dark_mode { "#18181b" } else { "#ffffff" }.into(),
-    surface: if dark_mode { "#27272a" } else { "#f4f4f5" }.into(),
-    surface_alt: if dark_mode { "#3f3f46" } else { "#e4e4e7" }.into(),
-    text: if dark_mode { "#f4f4f5" } else { "#18181b" }.into(),
-    subtle_text: if dark_mode { "#a1a1aa" } else { "#71717a" }.into(),
-    border: if dark_mode { "#52525b" } else { "#d4d4d8" }.into(),
-    line: if dark_mode { "#a1a1aa" } else { "#52525b" }.into(),
-    error: "#ef4444".into(),
-    warning: "#f59e0b".into(),
-    success: "#22c55e".into(),
-  };
-  let rendered = mica_md::render_mermaid_svg(src, Some(&host_theme));
+  }
+  .to_string();
+  let preview_rev = crate::preview_render::preview_rev();
 
-  if let Some(svg_markup) = rendered {
-    let (w, h) = crate::block_views::parse_svg_aspect_size(&svg_markup, 640.0, 320.0);
-    return view()
+  nsh_core::element::dynamic(move || {
+    let _ = preview_rev.get();
+    if let Some(svg_markup) = crate::preview_render::render_mermaid_cached(&src, dark_mode) {
+      let (w, h) = crate::block_views::parse_svg_aspect_size(&svg_markup, 640.0, 320.0);
+      return view()
+        .w_full()
+        .py_2()
+        .items_center()
+        .justify_center()
+        .child(
+          image(ImageSrc::svg_markup(&svg_markup))
+            .w(px(w))
+            .h(px(h)),
+        )
+        .into_element();
+    }
+
+    view()
       .w_full()
       .py_2()
-      .items_center()
-      .justify_center()
       .child(
-        image(ImageSrc::svg_markup(&svg_markup))
-          .w(px(w))
-          .h(px(h)),
-      );
-  }
-
-  view()
-    .w_full()
-    .py_2()
-    .child(
-      text(src.to_string())
-        .text_xs()
-        .text_color(move || theme().foreground),
-    )
+        text(src.clone())
+          .text_xs()
+          .text_color(move || theme().foreground),
+      )
+      .into_element()
+  })
 }
 
 fn render_embedded_board_block(input: &AtomicBlockInput, dark_mode: bool) -> impl IntoElement {

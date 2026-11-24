@@ -37,6 +37,7 @@ pub mod mica_icons;
 pub mod mica_theme;
 pub mod net;
 pub mod page_width;
+pub mod preview_render;
 pub mod property_panel;
 pub mod responsive_shell;
 pub mod right_sidebar;
@@ -583,6 +584,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   // Root owner for long-lived async tasks (native OS file dialogs, exports, imports,
   // backups, cloud sync) so closing a context menu or popover NEVER cancels them.
   let app_owner = Owner::current();
+  preview_render::init_preview_owner(app_owner);
 
   // Root-mounted sidebar rename & emoji picker modal state (avoids 280px sidebar clipping)
   let sidebar_rename_open = signal(false);

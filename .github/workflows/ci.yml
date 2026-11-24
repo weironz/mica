@@ -160,8 +160,9 @@ jobs:
       - name: Install Linux GUI & wasm32 build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang libgtk-3-dev libwebkit2gtk-4.1-dev libxkbcommon-dev
+          sudo apt-get install -y --no-install-recommends brotli clang libgtk-3-dev libwebkit2gtk-4.1-dev libxkbcommon-dev
           rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/mica_rust
@@ -175,7 +176,9 @@ jobs:
       - name: Build native desktop binary
         run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --locked
       - name: Build pure-Rust WebAssembly bundle
-        run: bash scripts/build-web-rust.sh
+        run: |
+          bash scripts/test-web-csp-hashes.sh
+          bash scripts/build-web-rust.sh
 
   mcp:
     name: MCP (mica-cli mcp conformance)
@@ -225,8 +228,10 @@ jobs:
       - name: Build pure-Rust Web bundle for Dockerfile.web
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang
+          sudo apt-get install -y --no-install-recommends brotli clang
           rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
+          bash scripts/test-web-csp-hashes.sh
           bash scripts/build-web-rust.sh
       - name: Build Docker images
         run: |

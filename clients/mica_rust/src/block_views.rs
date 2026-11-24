@@ -2518,12 +2518,7 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, at: Position, block: EditorBl
   let hovered = signal(false);
   let copied = signal(false);
   let copy_gen = signal(0u64);
-
-  let rendered_svg = render_mermaid_svg_for_theme(&source, dark_mode.get_untracked());
-  let (svg_w, svg_h) = rendered_svg
-    .as_deref()
-    .map(|s| parse_svg_aspect_size(s, 860.0, 460.0))
-    .unwrap_or((640.0, 220.0));
+  let preview_rev = crate::preview_render::preview_rev();
 
   view()
     .test_id("node-view-mermaid")
@@ -2556,7 +2551,9 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, at: Position, block: EditorBl
           }));
         })
         .child(dynamic(move || {
+          let _ = preview_rev.get();
           if let Some(svg_markup) = render_mermaid_svg_for_theme(&source, dark_mode.get()) {
+            let (svg_w, svg_h) = parse_svg_aspect_size(&svg_markup, 860.0, 460.0);
             image(ImageSrc::svg_markup(&svg_markup))
               .w(px(svg_w))
               .h(px(svg_h))
@@ -2692,41 +2689,7 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, at: Position, block: EditorBl
 }
 
 pub fn render_mermaid_svg_for_theme(src: &str, dark_mode: bool) -> Option<String> {
-  thread_local! {
-    static SVG_CACHE: RefCell<std::collections::HashMap<(bool, String), Option<String>>> =
-      RefCell::new(std::collections::HashMap::new());
-  }
-  let clean = if src.trim().is_empty() {
-    "graph LR\n  A[Mica] --> B[Pure Rust]"
-  } else {
-    src.trim()
-  };
-  let key = (dark_mode, clean.to_owned());
-  if let Some(cached) = SVG_CACHE.with(|c| c.borrow().get(&key).cloned()) {
-    return cached;
-  }
-  let host_theme = mica_md::MermaidHostTheme {
-    dark: dark_mode,
-    canvas: if dark_mode { "#18181b" } else { "#ffffff" }.into(),
-    surface: if dark_mode { "#27272a" } else { "#f4f4f5" }.into(),
-    surface_alt: if dark_mode { "#3f3f46" } else { "#e4e4e7" }.into(),
-    text: if dark_mode { "#f4f4f5" } else { "#18181b" }.into(),
-    subtle_text: if dark_mode { "#a1a1aa" } else { "#71717a" }.into(),
-    border: if dark_mode { "#52525b" } else { "#d4d4d8" }.into(),
-    line: if dark_mode { "#a1a1aa" } else { "#52525b" }.into(),
-    error: "#ef4444".into(),
-    warning: "#f59e0b".into(),
-    success: "#22c55e".into(),
-  };
-  let rendered = mica_md::render_mermaid_svg(clean, Some(&host_theme));
-  SVG_CACHE.with(|c| {
-    let mut map = c.borrow_mut();
-    if map.len() >= 64 {
-      map.clear();
-    }
-    map.insert(key, rendered.clone());
-  });
-  rendered
+  crate::preview_render::render_mermaid_cached(src, dark_mode)
 }
 
 pub fn parse_svg_aspect_size(svg_markup: &str, max_w: f32, max_h: f32) -> (f32, f32) {
@@ -2773,9 +2736,10 @@ fn render_math_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         .justify_center()
         .on_press(move || editing.set(!editing.get_untracked()))
         .child(dynamic(move || {
+          let _ = crate::preview_render::preview_rev().get();
           let latex = if source.trim().is_empty() { r"E = mc^2" } else { source.trim() };
           let fg = if dark_mode.get() { "#f4f4f5" } else { "#18181b" };
-          if let Some(m) = mica_md::render::render_math_svg(latex, true, Some(fg)) {
+          if let Some(m) = crate::preview_render::render_math_cached(latex, true, fg) {
             let w = (m.width * 22.0).clamp(60.0, 560.0) as f32;
             let h = (m.height * 22.0).clamp(28.0, 160.0) as f32;
             svg(ImageSrc::svg_markup(&m.svg)).w(px(w)).h(px(h)).into_element()
@@ -3244,6 +3208,7 @@ pub fn render_lightbox_modal(
                 base_size.set((init_w, init_h));
 
                 let diagram_el = dynamic(move || {
+                  let _ = crate::preview_render::preview_rev().get();
                   let current_src = live_source.get();
                   if let Some(svg_markup) = render_mermaid_svg_for_theme(&current_src, dark_mode.get()) {
                     let (w0, h0) = parse_svg_aspect_size(&svg_markup, 960.0, 520.0);
