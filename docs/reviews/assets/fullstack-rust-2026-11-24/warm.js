@@ -9,7 +9,8 @@ const { chromium } = require('playwright');
   const page = await ctx.newPage();
   const ready = () => page.waitForFunction(() => {
     const s = document.getElementById('status'), app = document.getElementById('app');
-    return s && s.style.display === 'none' && app && app.innerText.trim().length > 0;
+    // Old index.html had #status; the splash version has #mica-splash outside #app.
+    return (!s || s.style.display === 'none') && app && app.innerText.trim().length > 0;
   }, null, { timeout: 120000, polling: 50 });
   await page.goto(url); await ready(); await page.waitForTimeout(1500);
   const cdp = await ctx.newCDPSession(page);

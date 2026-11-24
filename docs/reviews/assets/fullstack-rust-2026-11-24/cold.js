@@ -22,7 +22,8 @@ const { chromium } = require('playwright');
   await page.goto(url, { waitUntil: 'commit' });
   await page.waitForFunction(() => {
     const s = document.getElementById('status'), app = document.getElementById('app');
-    return s && s.style.display === 'none' && app && app.innerText.trim().length > 0;
+    // Old index.html had #status; the splash version has #mica-splash outside #app.
+    return (!s || s.style.display === 'none') && app && app.innerText.trim().length > 0;
   }, null, { timeout: 120000, polling: 50 });
   const t = (Date.now() - t0) / 1000;
   if (shot) await page.screenshot({ path: shot });
