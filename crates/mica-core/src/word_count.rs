@@ -138,7 +138,10 @@ mod tests {
     let wc = count_text("Hello, world! Mica v0.14.11 is fast.");
     // Words: Hello, world, Mica, v0, 14, 11, is, fast = 8
     assert_eq!(wc.words, 8);
-    assert_eq!(wc.chars, "Hello,world!Micav0.14.11isfast.".chars().count() as u64);
+    assert_eq!(
+      wc.chars,
+      "Hello,world!Micav0.14.11isfast.".chars().count() as u64
+    );
   }
 
   #[test]

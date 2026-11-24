@@ -65,9 +65,15 @@ pub enum TableNavDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum TableNavResult {
-  Cell { row: usize, col: usize },
+  Cell {
+    row: usize,
+    col: usize,
+  },
   /// Pressing Tab in the bottom-right cell inserts a new trailing row and focuses `(row, 0)`.
-  InsertRowAndFocus { row: usize, col: usize },
+  InsertRowAndFocus {
+    row: usize,
+    col: usize,
+  },
   /// Left/Up/Shift+Tab past `(0, 0)` exits to the block above.
   ExitBefore,
   /// Right/Down past the bottom edge exits to (or creates) the block below.
@@ -355,7 +361,11 @@ impl TableModel {
       if row_len == 0 {
         continue;
       }
-      for cell in self.rows[r].iter_mut().take(c_hi.min(row_len - 1) + 1).skip(c_lo) {
+      for cell in self.rows[r]
+        .iter_mut()
+        .take(c_hi.min(row_len - 1) + 1)
+        .skip(c_lo)
+      {
         if !cell.is_empty() {
           *cell = TableCell::empty();
           changed = true;
@@ -565,9 +575,7 @@ impl TableModel {
     let plain_rows: Vec<String> = (r_lo..=r_hi)
       .map(|r| {
         (c_lo..=c_hi)
-          .map(|c| {
-            self.rows[r][c].text.replace(['\t', '\n'], " ")
-          })
+          .map(|c| self.rows[r][c].text.replace(['\t', '\n'], " "))
           .collect::<Vec<_>>()
           .join("\t")
       })

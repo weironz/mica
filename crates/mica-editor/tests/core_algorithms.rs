@@ -27,7 +27,10 @@ fn utf16_replace_and_diff_helpers_work_on_cjk() {
   assert_eq!(common_suffix_utf16("abc你好", "xyz你好", 0), 2);
   let (start, old_end) = diff_edit_range("你好世界", "你好Mica世界", None, None, None);
   assert_eq!((start, old_end), (2, 2));
-  assert_eq!(inserted_text_utf16("你好世界", "你好Mica世界", None, None), "Mica");
+  assert_eq!(
+    inserted_text_utf16("你好世界", "你好Mica世界", None, None),
+    "Mica"
+  );
 }
 
 #[test]
@@ -72,7 +75,10 @@ fn mark_shift_split_concat_preserve_integrity() {
 #[test]
 fn math_atom_run_detection_and_caret_snapping() {
   let marks = vec![EditorMark::new(3, 8, "math")];
-  assert_eq!(math_run_at(&marks, 5).map(|m| (m.start, m.end)), Some((3, 8)));
+  assert_eq!(
+    math_run_at(&marks, 5).map(|m| (m.start, m.end)),
+    Some((3, 8))
+  );
   assert_eq!(
     math_run_starting_at(&marks, 3).map(|m| (m.start, m.end)),
     Some((3, 8))
@@ -223,7 +229,10 @@ fn paste_heuristics_detect_urls_formulas_and_fence_repairs() {
   assert!(looks_like_url("https://github.com/weironz/mica"));
   assert!(!looks_like_url("not a url"));
   assert!(looks_like_image_url("https://cdn.example.com/a.png"));
-  assert_eq!(pasted_formula_source("$$\nE = mc^2\n$$"), Some("E = mc^2".to_string()));
+  assert_eq!(
+    pasted_formula_source("$$\nE = mc^2\n$$"),
+    Some("E = mc^2".to_string())
+  );
   assert_eq!(normalize_line_endings("a\r\nb\rc"), "a\nb\nc");
 
   let retagged = retag_mislabeled_fences("```markdown\n{\"a\": 1}\n```");
@@ -232,8 +241,18 @@ fn paste_heuristics_detect_urls_formulas_and_fence_repairs() {
 
 #[test]
 fn lis_minimal_move_ops_moves_only_out_of_order_blocks() {
-  let old_ids = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
-  let new_ids = vec!["d".to_string(), "a".to_string(), "b".to_string(), "c".to_string()];
+  let old_ids = vec![
+    "a".to_string(),
+    "b".to_string(),
+    "c".to_string(),
+    "d".to_string(),
+  ];
+  let new_ids = vec![
+    "d".to_string(),
+    "a".to_string(),
+    "b".to_string(),
+    "c".to_string(),
+  ];
   let old_blocks: Vec<EditorBlock> = old_ids
     .iter()
     .map(|id| EditorBlock::new(id, "paragraph", id))

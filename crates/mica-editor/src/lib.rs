@@ -37,9 +37,7 @@ pub use paste::{
   pasted_formula_source, retag_mislabeled_fences, selection_clipboard_text, selection_md_blocks,
   single_line_paste_inline, single_line_paste_keeps_marks, unwrap_nested_fences, visible_ordinal,
 };
-pub use rules::{
-  InputRuleMatch, detect_page_link_trigger, detect_slash_trigger, match_input_rule,
-};
+pub use rules::{InputRuleMatch, detect_page_link_trigger, detect_slash_trigger, match_input_rule};
 pub use selection::{
   ActiveMarks, DocPosition, DocSelection, InlineSelectionRange, NormalizedSelection,
   active_marks_for_selection, inline_selection_ranges, reconcile_selection, word_range_at,

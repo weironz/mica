@@ -39,7 +39,13 @@ fn memory_storage_empty_returns_none_and_zero_cursor() {
   let store = MemoryMirrorStorage::new();
   assert_eq!(store.load().unwrap(), None);
   assert_eq!(store.cursor().unwrap(), SyncCursor::default());
-  assert_eq!(store.log_sizes().unwrap(), LogSizes { local: 0, remote: 0 });
+  assert_eq!(
+    store.log_sizes().unwrap(),
+    LogSizes {
+      local: 0,
+      remote: 0
+    }
+  );
   assert!(!store.is_broken());
 }
 
@@ -92,7 +98,13 @@ fn memory_storage_outbox_clock_stays_monotonic_across_trim_and_compact() {
   // Advance to 3 and compact: outbox becomes empty, next clock must be 4 (> pushed_clock).
   store.advance_cursor(None, Some(3)).unwrap();
   store.compact().unwrap();
-  assert_eq!(store.log_sizes().unwrap(), LogSizes { local: 0, remote: 0 });
+  assert_eq!(
+    store.log_sizes().unwrap(),
+    LogSizes {
+      local: 0,
+      remote: 0
+    }
+  );
 
   let d4 = edit_diff(&mut doc, "e");
   assert_eq!(store.append_outbox(&d4).unwrap(), 4);
@@ -112,7 +124,13 @@ fn memory_storage_remote_batch_dedupes_sorts_and_updates_cursor() {
     .unwrap();
 
   assert_eq!(store.cursor().unwrap().last_synced_rid, 3);
-  assert_eq!(store.log_sizes().unwrap(), LogSizes { local: 0, remote: 2 });
+  assert_eq!(
+    store.log_sizes().unwrap(),
+    LogSizes {
+      local: 0,
+      remote: 2
+    }
+  );
 
   let txns = store.take_pending_mirror_txns();
   assert_eq!(txns.len(), 1);
@@ -199,8 +217,14 @@ fn memory_storage_hydrate_sorts_and_replays_all_logs() {
   let store = MemoryMirrorStorage::hydrate(IdbHydrateSnapshot {
     base: Some(base),
     outbox: vec![
-      OutboxEntry { clock: 2, bytes: l2 },
-      OutboxEntry { clock: 1, bytes: l1 },
+      OutboxEntry {
+        clock: 2,
+        bytes: l2,
+      },
+      OutboxEntry {
+        clock: 1,
+        bytes: l1,
+      },
     ],
     remote: vec![
       RemoteEntry { rid: 11, bytes: r2 },
@@ -217,7 +241,12 @@ fn memory_storage_hydrate_sorts_and_replays_all_logs() {
   let replayed = MicaDoc::from_update(&loaded.state).unwrap();
   assert_eq!(replayed.to_blocks()[1].text, "initR1R2L1L2");
   assert_eq!(
-    store.outbox_after(0).unwrap().iter().map(|e| e.clock).collect::<Vec<_>>(),
+    store
+      .outbox_after(0)
+      .unwrap()
+      .iter()
+      .map(|e| e.clock)
+      .collect::<Vec<_>>(),
     vec![1, 2]
   );
 }
@@ -239,7 +268,10 @@ fn memory_storage_corrupt_base_and_log_return_corrupt_error() {
     }],
     ..Default::default()
   });
-  assert!(matches!(store_bad_remote.load(), Err(StorageError::Corrupt(_))));
+  assert!(matches!(
+    store_bad_remote.load(),
+    Err(StorageError::Corrupt(_))
+  ));
 }
 
 #[test]
@@ -289,14 +321,14 @@ fn memory_storage_mark_broken_freezes_and_save_base_heals() {
 mod sqlite_tests {
   use std::sync::{Arc, Mutex};
 
-  use base64::engine::general_purpose::STANDARD;
   use base64::Engine as _;
+  use base64::engine::general_purpose::STANDARD;
   use mica_core::LocalStore;
   use mica_sync::{
     SqliteSyncStorage, StorageError, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase,
     SyncStorage,
   };
-  use serde_json::{json, Value};
+  use serde_json::{Value, json};
 
   use super::{edit_diff, make_doc};
 
@@ -339,9 +371,7 @@ mod sqlite_tests {
 
     let r1 = edit_diff(&mut doc, " R1");
     let r2 = edit_diff(&mut doc, " R2");
-    storage
-      .append_remote_batch(&[(11, r1), (12, r2)])
-      .unwrap();
+    storage.append_remote_batch(&[(11, r1), (12, r2)]).unwrap();
 
     assert_eq!(storage.cursor().unwrap().last_synced_rid, 12);
     assert_eq!(storage.log_sizes().unwrap().local, 2);
@@ -375,19 +405,27 @@ mod sqlite_tests {
     let mut a = SqliteSyncStorage::new(shared.clone(), "https://s1|u1", "same-doc", 1);
     let mut b = SqliteSyncStorage::new(shared, "https://s1|u2", "same-doc", 2);
 
-    a.save_base(&make_doc("account-1").encode_state(), 5).unwrap();
-    b.save_base(&make_doc("account-2").encode_state(), 9).unwrap();
+    a.save_base(&make_doc("account-1").encode_state(), 5)
+      .unwrap();
+    b.save_base(&make_doc("account-2").encode_state(), 9)
+      .unwrap();
 
     let la = a.load().unwrap().unwrap();
     let lb = b.load().unwrap().unwrap();
     assert_eq!(la.cursor, 5);
     assert_eq!(lb.cursor, 9);
     assert_eq!(
-      mica_core::MicaDoc::from_update(&la.state).unwrap().to_blocks()[1].text,
+      mica_core::MicaDoc::from_update(&la.state)
+        .unwrap()
+        .to_blocks()[1]
+        .text,
       "account-1"
     );
     assert_eq!(
-      mica_core::MicaDoc::from_update(&lb.state).unwrap().to_blocks()[1].text,
+      mica_core::MicaDoc::from_update(&lb.state)
+        .unwrap()
+        .to_blocks()[1]
+        .text,
       "account-2"
     );
   }
@@ -418,7 +456,11 @@ mod sqlite_tests {
       epoch: 1,
       json: base_frame,
     });
-    assert!(effects.iter().any(|e| matches!(e, SyncEffect::Ready { .. })));
+    assert!(
+      effects
+        .iter()
+        .any(|e| matches!(e, SyncEffect::Ready { .. }))
+    );
     assert_eq!(engine.phase(), SyncPhase::Synced);
 
     // 2. Go offline and make a local edit.
@@ -446,10 +488,15 @@ mod sqlite_tests {
     );
     let effects2 = engine2.handle_event(SyncEvent::Connect);
     // Seeds immediately from SQLite BEFORE socket opens!
-    assert!(effects2
-      .iter()
-      .any(|e| matches!(e, SyncEffect::Ready { root_block_id } if root_block_id == "root")));
-    assert_eq!(engine2.doc().unwrap().to_blocks()[1].text, "server + offline");
+    assert!(
+      effects2
+        .iter()
+        .any(|e| matches!(e, SyncEffect::Ready { root_block_id } if root_block_id == "root"))
+    );
+    assert_eq!(
+      engine2.doc().unwrap().to_blocks()[1].text,
+      "server + offline"
+    );
     assert_eq!(engine2.cursor(), 5);
     assert!(!engine2.outbox_empty());
 

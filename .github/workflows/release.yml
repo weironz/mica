@@ -252,7 +252,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - name: Build pure-Rust Linux .deb
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libxkbcommon-dev dpkg-dev
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-dev dpkg-dev
           bash scripts/build-linux-deb.sh "${{ needs.draft.outputs.version }}" out
       - name: Write checksum manifest
         working-directory: out

@@ -67,11 +67,7 @@ impl MicaClientRuntime {
   }
 
   /// Open (or create in memory) a document backed by `EditorSession` + `SyncEngine`.
-  pub fn open_document_markdown(
-    &mut self,
-    doc_id: Uuid,
-    initial_markdown: &str,
-  ) -> SessionClaim {
+  pub fn open_document_markdown(&mut self, doc_id: Uuid, initial_markdown: &str) -> SessionClaim {
     let claim = self.claims.open_document(Some(doc_id));
     self.active_doc_id = Some(doc_id);
     self.active_board = None;

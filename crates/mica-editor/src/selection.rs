@@ -131,13 +131,7 @@ impl DocSelection {
     }
   }
 
-  pub const fn table_area(
-    block_index: usize,
-    r0: usize,
-    c0: usize,
-    r1: usize,
-    c1: usize,
-  ) -> Self {
+  pub const fn table_area(block_index: usize, r0: usize, c0: usize, r1: usize, c1: usize) -> Self {
     Self::TableCell {
       block_index,
       row: r0,
@@ -272,11 +266,7 @@ impl DocSelection {
         anchor,
         focus,
         ..
-      } => {
-        end_row.is_none_or(|r| r == row)
-          && end_col.is_none_or(|c| c == col)
-          && anchor == focus
-      }
+      } => end_row.is_none_or(|r| r == row) && end_col.is_none_or(|c| c == col) && anchor == focus,
     }
   }
 
@@ -487,7 +477,12 @@ pub fn inline_selection_ranges(
     return Vec::new();
   }
   let mut out = Vec::new();
-  for (i, block) in blocks.iter().enumerate().take(end.node + 1).skip(start.node) {
+  for (i, block) in blocks
+    .iter()
+    .enumerate()
+    .take(end.node + 1)
+    .skip(start.node)
+  {
     if !block.is_inline_text() {
       continue;
     }
@@ -581,10 +576,8 @@ pub fn active_marks_for_selection(
         .iter()
         .map(|r| blocks[r.block_index].marks())
         .collect();
-      let candidate_kinds: BTreeSet<&str> = per_range_marks[0]
-        .iter()
-        .map(|m| m.kind.as_str())
-        .collect();
+      let candidate_kinds: BTreeSet<&str> =
+        per_range_marks[0].iter().map(|m| m.kind.as_str()).collect();
       let mut out = ActiveMarks::default();
       for kind in candidate_kinds {
         if ranges

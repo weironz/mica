@@ -568,16 +568,36 @@ mod tests {
       },
     ];
 
-    let without_imports =
-      fold_hourly_to_daily(&rows, &[], Some(day), "1d", 1, 7, 0, None, false, day + 10_000);
+    let without_imports = fold_hourly_to_daily(
+      &rows,
+      &[],
+      Some(day),
+      "1d",
+      1,
+      7,
+      0,
+      None,
+      false,
+      day + 10_000,
+    );
     assert_eq!(without_imports.totals.pages_edited, 1);
     assert_eq!(without_imports.totals.pages_created, 0);
     assert_eq!(without_imports.totals.words_added, 80);
     assert_eq!(without_imports.totals.words_deleted, 10);
     assert_eq!(without_imports.totals.net_words, 70);
 
-    let with_imports =
-      fold_hourly_to_daily(&rows, &[], Some(day), "1d", 1, 7, 0, None, true, day + 10_000);
+    let with_imports = fold_hourly_to_daily(
+      &rows,
+      &[],
+      Some(day),
+      "1d",
+      1,
+      7,
+      0,
+      None,
+      true,
+      day + 10_000,
+    );
     assert_eq!(with_imports.totals.pages_edited, 2);
     assert_eq!(with_imports.totals.pages_created, 1);
     assert_eq!(with_imports.totals.words_added, 5080);

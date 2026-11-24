@@ -283,9 +283,17 @@ impl EditorHistoryTracker {
     let changed = if redo { doc.redo() } else { doc.undo() };
     let (undo_depth, redo_depth) = doc.history_depths();
     let (source, dest, src_depth) = if redo {
-      (&mut self.redo_meta, &mut self.undo_meta, redo_depth as usize)
+      (
+        &mut self.redo_meta,
+        &mut self.undo_meta,
+        redo_depth as usize,
+      )
     } else {
-      (&mut self.undo_meta, &mut self.redo_meta, undo_depth as usize)
+      (
+        &mut self.undo_meta,
+        &mut self.redo_meta,
+        undo_depth as usize,
+      )
     };
 
     let restored = if changed {

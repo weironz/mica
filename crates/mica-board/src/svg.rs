@@ -72,7 +72,10 @@ pub fn extract_board_snapshot_from_svg(svg_bytes: &[u8]) -> Option<BoardSnapshot
       return Some(snap);
     }
     // Strip ASCII whitespace in case an XML formatter wrapped the Base64 text.
-    let compact_b64: String = trimmed.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let compact_b64: String = trimmed
+      .chars()
+      .filter(|c| !c.is_ascii_whitespace())
+      .collect();
     if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&compact_b64)
       && let Ok(json_str) = std::str::from_utf8(&decoded)
       && let Ok(snap) = BoardSnapshot::parse_json(json_str)

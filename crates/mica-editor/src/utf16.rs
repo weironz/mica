@@ -135,7 +135,9 @@ pub fn common_prefix_utf16(a: &str, b: &str) -> u32 {
   while i < n && au[i] == bu[i] {
     i += 1;
   }
-  if i > 0 && ((i < au.len() && is_low_surrogate(au[i])) || (i < bu.len() && is_low_surrogate(bu[i]))) {
+  if i > 0
+    && ((i < au.len() && is_low_surrogate(au[i])) || (i < bu.len() && is_low_surrogate(bu[i])))
+  {
     i -= 1;
   }
   i as u32
@@ -191,7 +193,8 @@ pub fn diff_edit_range(
         && old_end == prefix
         && prefix > s
         && next_caret.is_none_or(|nc| nc as i64 == s as i64 + delta)
-        && utf16_slice(old_text, s, old_len) == utf16_slice(new_text, (s as i64 + delta) as u32, new_len)
+        && utf16_slice(old_text, s, old_len)
+          == utf16_slice(new_text, (s as i64 + delta) as u32, new_len)
       {
         prefix = s;
         old_end = s;

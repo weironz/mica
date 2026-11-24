@@ -10,7 +10,7 @@ use crate::routing::{Side, anchor_point};
 use super::BoardSession;
 use super::catalog::{
   DEFAULT_PASTE_OFFSET, DOUBLE_CLICK_MS, DRAG_MOVE_THRESHOLD, FIT_ZOOM_MAX, FIT_ZOOM_MIN,
-  MIND_BRANCH_PALETTE, MIN_NODE_H, MIN_NODE_W, NODE_PADDING_V, PEN_MIN_DIST, SNAP_THRESHOLD,
+  MIN_NODE_H, MIN_NODE_W, MIND_BRANCH_PALETTE, NODE_PADDING_V, PEN_MIN_DIST, SNAP_THRESHOLD,
   SNAP_THRESHOLD_MIN, ZOOM_MAX, ZOOM_MIN, shape_meta, tech_icon_meta,
 };
 use super::hit_test::{dist, node_anchor_by_name};
@@ -31,7 +31,14 @@ impl BoardSession {
         space,
         read_only,
         timestamp_ms,
-      } => self.handle_pointer_down([screen_x, screen_y], button, shift, space, read_only, timestamp_ms),
+      } => self.handle_pointer_down(
+        [screen_x, screen_y],
+        button,
+        shift,
+        space,
+        read_only,
+        timestamp_ms,
+      ),
       BoardCommand::PointerMove {
         screen_x,
         screen_y,
@@ -145,9 +152,8 @@ impl BoardSession {
         text_color,
         align,
         kind,
-      } => self.update_selected_nodes_style_cmd(
-        fill, stroke, dashed, font_size, text_color, align, kind,
-      ),
+      } => self
+        .update_selected_nodes_style_cmd(fill, stroke, dashed, font_size, text_color, align, kind),
       BoardCommand::UpdateSelectedEdge {
         routing,
         stroke,
@@ -327,8 +333,7 @@ impl BoardSession {
       }
       BoardTool::Shape => {
         let kind = self.active_shape_kind.clone();
-        let mut patch =
-          self.add_node_cmd(world, &kind, None, None, None, None, None, None, true);
+        let mut patch = self.add_node_cmd(world, &kind, None, None, None, None, None, None, true);
         merge_pre_delta(&mut patch, pre_delta);
         return patch;
       }
@@ -442,7 +447,12 @@ impl BoardSession {
       rect: Rect::from_points(world, world),
     });
     self.active_rev += 1;
-    let mut patch = self.build_patch(false, None, had_selection || pre_delta.is_some(), Vec::new());
+    let mut patch = self.build_patch(
+      false,
+      None,
+      had_selection || pre_delta.is_some(),
+      Vec::new(),
+    );
     merge_pre_delta(&mut patch, pre_delta);
     patch
   }
@@ -1113,7 +1123,16 @@ impl BoardSession {
 
   fn insert_mindmap_at(&mut self, world_center: [f64; 2]) -> BoardPatch {
     self.push_undo(None);
-    let root = self.create_node_struct(world_center, "mind_root", None, None, None, None, None, None);
+    let root = self.create_node_struct(
+      world_center,
+      "mind_root",
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+    );
     let root_id = root.id.clone();
     self.snapshot.nodes.push(root);
     self.rebuild_indices();

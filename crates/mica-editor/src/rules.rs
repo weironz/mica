@@ -117,11 +117,7 @@ pub fn match_input_rule(block: &EditorBlock, caret: u32) -> Option<InputRuleMatc
     }
 
     // Display math block: $$...$$
-    if caret == total_u16
-      && total_u16 > 4
-      && text.starts_with("$$")
-      && text.ends_with("$$")
-    {
+    if caret == total_u16 && total_u16 > 4 && text.starts_with("$$") && text.ends_with("$$") {
       let inner = &text[2..text.len() - 2];
       let trimmed = inner.trim();
       if !trimmed.is_empty() && !trimmed.contains("$$") {

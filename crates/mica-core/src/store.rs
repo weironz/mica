@@ -882,7 +882,10 @@ impl LocalStore {
     // builds remain compatible without bumping `SCHEMA_VERSION`.
     for col in ["word_count", "char_count"] {
       if !has_column(&conn, "doc_snapshot", col) {
-        conn.execute(&format!("ALTER TABLE doc_snapshot ADD COLUMN {col} INTEGER"), [])?;
+        conn.execute(
+          &format!("ALTER TABLE doc_snapshot ADD COLUMN {col} INTEGER"),
+          [],
+        )?;
       }
     }
     conn.execute_batch(

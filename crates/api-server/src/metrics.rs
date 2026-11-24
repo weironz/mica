@@ -887,7 +887,9 @@ fn render_snapshot_gauges(out: &mut String, s: &DbSnapshot, workspace_quota_byte
     "mica_files_total{{kind=\"attachment\"}} {}",
     s.attachment_files
   );
-  out.push_str("# HELP mica_orphan_pages_total Live pages with zero incoming or outgoing page links.\n");
+  out.push_str(
+    "# HELP mica_orphan_pages_total Live pages with zero incoming or outgoing page links.\n",
+  );
   out.push_str("# TYPE mica_orphan_pages_total gauge\n");
   let _ = writeln!(out, "mica_orphan_pages_total {}", s.orphan_pages);
   out.push_str("# HELP mica_public_shares_total Active unrevoked public page shares.\n");

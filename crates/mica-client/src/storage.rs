@@ -94,7 +94,10 @@ impl PrefsState {
       .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
       .unwrap_or_default();
     let had_secrets = strip_web_secret_prefs(&mut entries);
-    let state = Self { entries, persist_web: true };
+    let state = Self {
+      entries,
+      persist_web: true,
+    };
     if had_secrets {
       let _ = state.flush();
     }
@@ -113,7 +116,10 @@ impl PrefsState {
     } else {
       BTreeMap::new()
     };
-    Self { entries, path: Some(path) }
+    Self {
+      entries,
+      path: Some(path),
+    }
   }
 
   fn flush(&self) -> Result<(), String> {
@@ -141,8 +147,8 @@ impl PrefsState {
     if self.persist_web {
       let mut safe = self.entries.clone();
       strip_web_secret_prefs(&mut safe);
-      let body = serde_json::to_string(&safe)
-        .map_err(|e| format!("failed to serialize web prefs: {e}"))?;
+      let body =
+        serde_json::to_string(&safe).map_err(|e| format!("failed to serialize web prefs: {e}"))?;
       crate::web_runtime::local_storage_set(WEB_PREFS_STORAGE_KEY, &body)?;
     }
     Ok(())
@@ -254,8 +260,12 @@ impl VaultStore {
           .filter(|p| !p.as_os_str().is_empty())
           .map(Path::to_path_buf)
           .unwrap_or_else(|| PathBuf::from("."));
-        std::fs::create_dir_all(&vault_dir)
-          .map_err(|e| format!("failed to create vault directory {}: {e}", vault_dir.display()))?;
+        std::fs::create_dir_all(&vault_dir).map_err(|e| {
+          format!(
+            "failed to create vault directory {}: {e}",
+            vault_dir.display()
+          )
+        })?;
         PrefsState::load_from(vault_dir.join(PREFS_FILENAME))
       };
       let store = LocalStore::open(trimmed).map_err(|e| e.to_string())?;
@@ -310,17 +320,26 @@ impl VaultStore {
   }
 
   fn lock_prefs(&self) -> Result<MutexGuard<'_, PrefsState>, String> {
-    self.prefs.lock().map_err(|_| "prefs mutex poisoned".to_string())
+    self
+      .prefs
+      .lock()
+      .map_err(|_| "prefs mutex poisoned".to_string())
   }
 
   #[cfg(not(target_arch = "wasm32"))]
   fn lock_store(&self) -> Result<MutexGuard<'_, LocalStore>, String> {
-    self.store.lock().map_err(|_| "local vault mutex poisoned".to_string())
+    self
+      .store
+      .lock()
+      .map_err(|_| "local vault mutex poisoned".to_string())
   }
 
   #[cfg(target_arch = "wasm32")]
   fn lock_memory(&self) -> Result<MutexGuard<'_, MemoryVault>, String> {
-    self.memory.lock().map_err(|_| "memory vault mutex poisoned".to_string())
+    self
+      .memory
+      .lock()
+      .map_err(|_| "memory vault mutex poisoned".to_string())
   }
 
   // ── Persistent Client Preferences (`AppPrefs`) ──────────────────────────
@@ -349,7 +368,9 @@ impl VaultStore {
     self
       .prefs
       .lock()
-      .map(|p| AppPrefs { entries: p.entries.clone() })
+      .map(|p| AppPrefs {
+        entries: p.entries.clone(),
+      })
       .unwrap_or_default()
   }
 
@@ -416,8 +437,8 @@ impl VaultStore {
         deduped.push(id.to_string());
       }
     }
-    let encoded = serde_json::to_string(&deduped)
-      .map_err(|e| format!("failed to encode favorites: {e}"))?;
+    let encoded =
+      serde_json::to_string(&deduped).map_err(|e| format!("failed to encode favorites: {e}"))?;
     self.set_pref(&format!("favoritePages:{ws_id}"), &encoded)
   }
 
@@ -589,7 +610,11 @@ impl VaultStore {
     let norm = normalize_origin(origin);
     self.set_pref(
       PREF_ACTIVE_ORIGIN,
-      if norm.is_empty() { DEFAULT_ORIGIN } else { &norm },
+      if norm.is_empty() {
+        DEFAULT_ORIGIN
+      } else {
+        &norm
+      },
     )
   }
 
@@ -657,7 +682,11 @@ impl VaultStore {
         .filter(|((orig, _), _)| orig == origin)
         .map(|(_, v)| v.clone())
         .collect();
-      list.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
+      list.sort_by(|a, b| {
+        a.position
+          .cmp(&b.position)
+          .then_with(|| a.name.cmp(&b.name))
+      });
       list
     };
     for v in &mut views {
@@ -757,9 +786,16 @@ impl VaultStore {
     {
       let mut mem = self.lock_memory()?;
       validate_memory_parent(&mem.views, origin, view.id, view.parent_view_id)?;
-      mem.views.insert((origin.to_string(), view.id), view.clone());
+      mem
+        .views
+        .insert((origin.to_string(), view.id), view.clone());
     }
-    if let Some(icon) = view.icon.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(icon) = view
+      .icon
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+    {
       let _ = self.set_view_icon(view.id, Some(icon));
     }
     Ok(())
@@ -838,7 +874,12 @@ impl VaultStore {
         .lock_store()?
         .trash_view_subtree(origin, &root_id.to_string())
         .map_err(|e| e.to_string())?;
-      Ok(ids.into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect())
+      Ok(
+        ids
+          .into_iter()
+          .filter_map(|s| Uuid::parse_str(&s).ok())
+          .collect(),
+      )
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -872,7 +913,12 @@ impl VaultStore {
         .lock_store()?
         .restore_view_subtree(origin, &root_id.to_string())
         .map_err(|e| e.to_string())?;
-      Ok(ids.into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect())
+      Ok(
+        ids
+          .into_iter()
+          .filter_map(|s| Uuid::parse_str(&s).ok())
+          .collect(),
+      )
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -904,9 +950,7 @@ impl VaultStore {
           .views
           .get(&(origin.to_string(), pid))
           .is_some_and(|p| !p.is_deleted);
-        if !parent_live
-          && let Some(root_mut) = mem.views.get_mut(&root_key)
-        {
+        if !parent_live && let Some(root_mut) = mem.views.get_mut(&root_key) {
           root_mut.parent_view_id = None;
         }
       }
@@ -968,7 +1012,10 @@ impl VaultStore {
     let deleted_ids: HashSet<Uuid> = deleted.iter().map(|v| v.id).collect();
     let roots: Vec<Uuid> = deleted
       .iter()
-      .filter(|v| v.parent_view_id.is_none_or(|pid| !deleted_ids.contains(&pid)))
+      .filter(|v| {
+        v.parent_view_id
+          .is_none_or(|pid| !deleted_ids.contains(&pid))
+      })
       .map(|v| v.id)
       .collect();
 
@@ -987,7 +1034,9 @@ impl VaultStore {
       {
         let store = self.lock_store()?;
         let _ = store.delete_doc(origin, &view.object_id.to_string());
-        store.purge_view(origin, &view.id.to_string()).map_err(|e| e.to_string())?;
+        store
+          .purge_view(origin, &view.id.to_string())
+          .map_err(|e| e.to_string())?;
       }
       #[cfg(target_arch = "wasm32")]
       {
@@ -1029,7 +1078,11 @@ impl VaultStore {
       }
     }
     for kids in children_of.values_mut() {
-      kids.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
+      kids.sort_by(|a, b| {
+        a.position
+          .cmp(&b.position)
+          .then_with(|| a.name.cmp(&b.name))
+      });
     }
 
     let mut subtree = Vec::new();
@@ -1050,7 +1103,9 @@ impl VaultStore {
     let sibling_names: Vec<String> = all_views
       .iter()
       .filter(|v| {
-        !v.is_deleted && v.workspace_id == root.workspace_id && v.parent_view_id == root.parent_view_id
+        !v.is_deleted
+          && v.workspace_id == root.workspace_id
+          && v.parent_view_id == root.parent_view_id
       })
       .map(|v| v.name.clone())
       .collect();
@@ -1088,13 +1143,23 @@ impl VaultStore {
         parent_view_id: if is_root {
           orig.parent_view_id
         } else {
-          orig.parent_view_id.and_then(|pid| id_map.get(&pid).copied())
+          orig
+            .parent_view_id
+            .and_then(|pid| id_map.get(&pid).copied())
         },
         object_id: new_doc_id,
         object_type: orig.object_type.clone(),
-        name: if is_root { final_root_name.clone() } else { orig.name.clone() },
+        name: if is_root {
+          final_root_name.clone()
+        } else {
+          orig.name.clone()
+        },
         icon: orig.icon.clone().or_else(|| self.view_icon(orig.id)),
-        position: if is_root { root_position.clone() } else { orig.position.clone() },
+        position: if is_root {
+          root_position.clone()
+        } else {
+          orig.position.clone()
+        },
         is_deleted: false,
         created_by: orig.created_by,
         created_at: now,
@@ -1136,7 +1201,10 @@ impl VaultStore {
 
     let mut entries = Vec::new();
     for &root in &deleted {
-      if root.parent_view_id.is_some_and(|pid| deleted_ids.contains(&pid)) {
+      if root
+        .parent_view_id
+        .is_some_and(|pid| deleted_ids.contains(&pid))
+      {
         continue;
       }
       let (mut child_folders, mut child_pages) = (0usize, 0usize);
@@ -1204,16 +1272,20 @@ impl VaultStore {
     {
       let mut mem = self.lock_memory()?;
       let key = (origin.to_string(), ws_id);
-      let position = mem.workspaces.get(&key).map(|(_, p)| p.clone()).unwrap_or_else(|| {
-        let max_pos = mem
-          .workspaces
-          .iter()
-          .filter(|((orig, _), _)| orig == origin)
-          .filter_map(|(_, (_, pos))| pos.parse::<i64>().ok())
-          .max()
-          .unwrap_or(0);
-        format!("{:010}", max_pos + 10)
-      });
+      let position = mem
+        .workspaces
+        .get(&key)
+        .map(|(_, p)| p.clone())
+        .unwrap_or_else(|| {
+          let max_pos = mem
+            .workspaces
+            .iter()
+            .filter(|((orig, _), _)| orig == origin)
+            .filter_map(|(_, (_, pos))| pos.parse::<i64>().ok())
+            .max()
+            .unwrap_or(0);
+          format!("{:010}", max_pos + 10)
+        });
       mem.workspaces.insert(key, (trimmed.to_string(), position));
     }
     let _ = self.set_pref(&format!("workspaceName:{origin}:{ws_id}"), trimmed);
@@ -1309,7 +1381,9 @@ impl VaultStore {
       for v in &ws_views {
         let _ = store.delete_doc(origin, &v.object_id.to_string());
       }
-      store.delete_workspace(origin, &ws_id.to_string()).map_err(|e| e.to_string())?;
+      store
+        .delete_workspace(origin, &ws_id.to_string())
+        .map_err(|e| e.to_string())?;
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1352,7 +1426,16 @@ impl VaultStore {
   ) {
     let doc = doc_from_markdown(markdown, Some(self.client_id));
     let initial_words = mica_core::word_count::count_doc(&doc).words;
-    self.record_activity(origin, workspace_id, doc_id, source, true, 0, initial_words, 0);
+    self.record_activity(
+      origin,
+      workspace_id,
+      doc_id,
+      source,
+      true,
+      0,
+      initial_words,
+      0,
+    );
   }
 
   /// Persist `markdown` AND record the edit's word delta into the local usage
@@ -1391,7 +1474,16 @@ impl VaultStore {
 
     let added = next_words.saturating_sub(prev_words);
     let deleted = prev_words.saturating_sub(next_words);
-    self.record_activity(origin, workspace_id, doc_id, source, false, 1, added, deleted);
+    self.record_activity(
+      origin,
+      workspace_id,
+      doc_id,
+      source,
+      false,
+      1,
+      added,
+      deleted,
+    );
     Ok(())
   }
 
@@ -1465,7 +1557,9 @@ impl VaultStore {
     {
       let mut overview = {
         let store = self.lock_store()?;
-        store.usage_overview(origin, &HashMap::new()).map_err(|e| e.to_string())?
+        store
+          .usage_overview(origin, &HashMap::new())
+          .map_err(|e| e.to_string())?
       };
       // `LocalStore::open` seeds an unused `"local"` placeholder workspace; drop it
       // whenever real UUID workspaces exist (matching `VaultStore::list_workspaces`)
@@ -1609,7 +1703,14 @@ impl VaultStore {
     {
       let store = self.lock_store()?;
       store
-        .usage_activity(origin, canonical, range_days, tz_offset_minutes, workspace_id, include_imports)
+        .usage_activity(
+          origin,
+          canonical,
+          range_days,
+          tz_offset_minutes,
+          workspace_id,
+          include_imports,
+        )
         .map_err(|e| e.to_string())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1640,7 +1741,9 @@ impl VaultStore {
   /// Load `(origin, doc_id)` as a [`MicaDoc`] and serialize its body through
   /// single-source `mica_md::serialize_body`.
   pub fn load_markdown(&self, origin: &str, doc_id: Uuid) -> Option<String> {
-    Some(markdown_from_doc(&self.load_raw_doc(origin, &doc_id.to_string())?))
+    Some(markdown_from_doc(
+      &self.load_raw_doc(origin, &doc_id.to_string())?,
+    ))
   }
 
   /// Persist whiteboard JSON inside a dedicated [`MicaDoc`] (single `"board"`
@@ -1664,7 +1767,10 @@ impl VaultStore {
     doc_id: Uuid,
     label: Option<&str>,
   ) -> Result<(), String> {
-    let effective_label = label.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(DEFAULT_VERSION_LABEL);
+    let effective_label = label
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .unwrap_or(DEFAULT_VERSION_LABEL);
     let doc_key = doc_id.to_string();
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1685,7 +1791,11 @@ impl VaultStore {
       let Some(state) = mem.docs.get(&map_key).cloned() else {
         return Err(format!("document {doc_id} has no saved snapshot yet"));
       };
-      mem.versions.entry(map_key).or_default().push((Some(effective_label.to_string()), state));
+      mem
+        .versions
+        .entry(map_key)
+        .or_default()
+        .push((Some(effective_label.to_string()), state));
       Ok(())
     }
   }
@@ -1707,7 +1817,13 @@ impl VaultStore {
         .list_local_versions(origin, &doc_key)
         .unwrap_or_default()
         .into_iter()
-        .map(|v| (v.id, v.label.unwrap_or_else(|| "自动快照".to_string()), v.created_at))
+        .map(|v| {
+          (
+            v.id,
+            v.label.unwrap_or_else(|| "自动快照".to_string()),
+            v.created_at,
+          )
+        })
         .collect()
     }
     #[cfg(target_arch = "wasm32")]
@@ -1723,7 +1839,13 @@ impl VaultStore {
             .iter()
             .enumerate()
             .rev()
-            .map(|(idx, (lbl, _))| (idx.to_string(), lbl.clone().unwrap_or_else(|| "自动快照".to_string()), 0i64))
+            .map(|(idx, (lbl, _))| {
+              (
+                idx.to_string(),
+                lbl.clone().unwrap_or_else(|| "自动快照".to_string()),
+                0i64,
+              )
+            })
             .collect()
         })
         .unwrap_or_default()
@@ -1754,7 +1876,9 @@ impl VaultStore {
     #[cfg(target_arch = "wasm32")]
     {
       let mem = self.lock_memory()?;
-      let idx: usize = version_id.parse().map_err(|_| format!("invalid version id {version_id}"))?;
+      let idx: usize = version_id
+        .parse()
+        .map_err(|_| format!("invalid version id {version_id}"))?;
       let state = mem
         .versions
         .get(&(origin.to_string(), doc_key))
@@ -1786,7 +1910,9 @@ impl VaultStore {
     #[cfg(target_arch = "wasm32")]
     {
       let mut mem = self.lock_memory()?;
-      let idx: usize = version_id.parse().map_err(|_| format!("invalid version id {version_id}"))?;
+      let idx: usize = version_id
+        .parse()
+        .map_err(|_| format!("invalid version id {version_id}"))?;
       let map_key = (origin.to_string(), doc_key);
       let state = mem
         .versions
@@ -1803,7 +1929,10 @@ impl VaultStore {
   fn save_raw_doc(&self, origin: &str, doc_key: &str, doc: &MicaDoc) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      self.lock_store()?.save_doc(origin, doc_key, doc).map_err(|e| e.to_string())
+      self
+        .lock_store()?
+        .save_doc(origin, doc_key, doc)
+        .map_err(|e| e.to_string())
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1822,7 +1951,12 @@ impl VaultStore {
   fn load_raw_doc(&self, origin: &str, doc_key: &str) -> Option<MicaDoc> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      self.store.lock().ok()?.load_doc(origin, doc_key, self.client_id).ok()?
+      self
+        .store
+        .lock()
+        .ok()?
+        .load_doc(origin, doc_key, self.client_id)
+        .ok()?
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1844,7 +1978,11 @@ fn legacy_flutter_db_path() -> Option<PathBuf> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn early_rust_db_path() -> Option<PathBuf> {
-  Some(dirs_next::data_local_dir()?.join("mica").join("vault.sqlite"))
+  Some(
+    dirs_next::data_local_dir()?
+      .join("mica")
+      .join("vault.sqlite"),
+  )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1892,7 +2030,10 @@ fn seed_non_secret_prefs_from_legacy(legacy_path: &Path) -> BTreeMap<String, Str
     return out;
   };
   if let Some(b) = map.get("darkMode").and_then(serde_json::Value::as_bool) {
-    out.insert("darkMode".to_string(), if b { "true" } else { "false" }.to_string());
+    out.insert(
+      "darkMode".to_string(),
+      if b { "true" } else { "false" }.to_string(),
+    );
   }
   if let Some(w) = map.get(PREF_PAGE_WIDTH).and_then(serde_json::Value::as_f64)
     && w.is_finite()
@@ -1900,13 +2041,18 @@ fn seed_non_secret_prefs_from_legacy(legacy_path: &Path) -> BTreeMap<String, Str
   {
     out.insert(PREF_PAGE_WIDTH.to_string(), w.to_string());
   }
-  if let Some(w) = map.get(PREF_SIDEBAR_WIDTH).and_then(serde_json::Value::as_f64)
+  if let Some(w) = map
+    .get(PREF_SIDEBAR_WIDTH)
+    .and_then(serde_json::Value::as_f64)
     && w.is_finite()
     && (180.0..=640.0).contains(&w)
   {
     out.insert(PREF_SIDEBAR_WIDTH.to_string(), w.to_string());
   }
-  if let Some(arr) = map.get(PREF_KNOWN_SERVERS).and_then(serde_json::Value::as_array) {
+  if let Some(arr) = map
+    .get(PREF_KNOWN_SERVERS)
+    .and_then(serde_json::Value::as_array)
+  {
     let mut servers = Vec::new();
     for item in arr {
       if let Some(s) = item.as_str() {
@@ -1940,7 +2086,9 @@ fn next_sibling_position(
 ) -> String {
   let max = all_views
     .iter()
-    .filter(|v| !v.is_deleted && v.workspace_id == workspace_id && v.parent_view_id == parent_view_id)
+    .filter(|v| {
+      !v.is_deleted && v.workspace_id == workspace_id && v.parent_view_id == parent_view_id
+    })
     .filter_map(|v| v.position.parse::<i64>().ok())
     .max()
     .unwrap_or(0);
@@ -2041,7 +2189,10 @@ fn local_view_to_api_view(lv: LocalView) -> Option<View> {
   let id = Uuid::parse_str(&lv.id).ok()?;
   let object_id = Uuid::parse_str(&lv.object_id).ok()?;
   let workspace_id = Uuid::parse_str(&lv.workspace_id).unwrap_or_else(|_| Uuid::nil());
-  let parent_view_id = lv.parent_id.as_deref().and_then(|s| Uuid::parse_str(s).ok());
+  let parent_view_id = lv
+    .parent_id
+    .as_deref()
+    .and_then(|s| Uuid::parse_str(s).ok());
   Some(View {
     id,
     workspace_id,
@@ -2068,13 +2219,18 @@ fn collect_memory_subtree(
 ) -> Vec<Uuid> {
   let mut children_of: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
   for ((orig, id), v) in views {
-    if orig == origin && (!live_only || !v.is_deleted)
+    if orig == origin
+      && (!live_only || !v.is_deleted)
       && let Some(pid) = v.parent_view_id
     {
       children_of.entry(pid).or_default().push(*id);
     }
   }
-  if live_only && views.get(&(origin.to_string(), root_id)).is_none_or(|r| r.is_deleted) {
+  if live_only
+    && views
+      .get(&(origin.to_string(), root_id))
+      .is_none_or(|r| r.is_deleted)
+  {
     return Vec::new();
   }
   let mut out = Vec::new();
@@ -2122,7 +2278,9 @@ fn validate_memory_parent(
     if !seen.insert(curr) {
       break;
     }
-    cursor = views.get(&(origin.to_string(), curr)).and_then(|v| v.parent_view_id);
+    cursor = views
+      .get(&(origin.to_string(), curr))
+      .and_then(|v| v.parent_view_id);
   }
   Ok(())
 }
@@ -2132,7 +2290,14 @@ mod tests {
   use super::*;
   use chrono::Utc;
 
-  fn make_view(ws: Uuid, doc: Uuid, name: &str, kind: &str, parent: Option<Uuid>, pos: &str) -> View {
+  fn make_view(
+    ws: Uuid,
+    doc: Uuid,
+    name: &str,
+    kind: &str,
+    parent: Option<Uuid>,
+    pos: &str,
+  ) -> View {
     let now = Utc::now();
     View {
       id: Uuid::new_v4(),
@@ -2159,11 +2324,20 @@ mod tests {
     let md = "# Title\n\nParagraph with **bold** and `code`.\n\n- Item 1\n- Item 2";
     vault.save_markdown(vault.origin(), doc_id, md).unwrap();
     let loaded = vault.load_markdown(vault.origin(), doc_id).unwrap();
-    assert!(loaded.contains("# Title") && loaded.contains("**bold**") && loaded.contains("- Item 2"));
+    assert!(
+      loaded.contains("# Title") && loaded.contains("**bold**") && loaded.contains("- Item 2")
+    );
 
     let board_json = r#"{"nodes":[{"id":"n1","text":"Mica Board"}],"edges":[]}"#;
-    vault.save_board_json(vault.origin(), "main-board", board_json).unwrap();
-    assert_eq!(vault.load_board_json(vault.origin(), "main-board").as_deref(), Some(board_json));
+    vault
+      .save_board_json(vault.origin(), "main-board", board_json)
+      .unwrap();
+    assert_eq!(
+      vault
+        .load_board_json(vault.origin(), "main-board")
+        .as_deref(),
+      Some(board_json)
+    );
   }
 
   #[test]
@@ -2191,13 +2365,19 @@ mod tests {
     let vault = VaultStore::in_memory();
     let doc_id = Uuid::new_v4();
     assert_eq!(vault.list_version_count("local", doc_id), 0);
-    assert!(vault.create_version_snapshot("local", doc_id, Some("v1")).is_err());
+    assert!(
+      vault
+        .create_version_snapshot("local", doc_id, Some("v1"))
+        .is_err()
+    );
 
     vault.save_markdown("local", doc_id, "# Draft 1").unwrap();
     let after_save = vault.list_version_count("local", doc_id);
     assert!(after_save >= 1);
 
-    vault.create_version_snapshot("local", doc_id, Some("Checkpoint 1")).unwrap();
+    vault
+      .create_version_snapshot("local", doc_id, Some("Checkpoint 1"))
+      .unwrap();
     assert_eq!(vault.list_version_count("local", doc_id), after_save + 1);
 
     let cp_id = vault
@@ -2209,11 +2389,28 @@ mod tests {
 
     vault.save_markdown("local", doc_id, "# Draft 2").unwrap();
     // Non-mutating version preview MUST NOT alter the live doc.
-    assert!(vault.load_version_markdown("local", doc_id, &cp_id).unwrap().contains("# Draft 1"));
-    assert!(vault.load_markdown("local", doc_id).unwrap().contains("# Draft 2"));
+    assert!(
+      vault
+        .load_version_markdown("local", doc_id, &cp_id)
+        .unwrap()
+        .contains("# Draft 1")
+    );
+    assert!(
+      vault
+        .load_markdown("local", doc_id)
+        .unwrap()
+        .contains("# Draft 2")
+    );
 
-    assert!(vault.restore_version_markdown("local", doc_id, &cp_id).unwrap().contains("# Draft 1"));
-    vault.create_version_snapshot("local", doc_id, None).unwrap();
+    assert!(
+      vault
+        .restore_version_markdown("local", doc_id, &cp_id)
+        .unwrap()
+        .contains("# Draft 1")
+    );
+    vault
+      .create_version_snapshot("local", doc_id, None)
+      .unwrap();
     assert!(vault.list_version_count("local", doc_id) >= after_save + 2);
   }
 
@@ -2221,7 +2418,12 @@ mod tests {
   fn prefs_round_trip_and_persist_to_json_file() {
     let dir = std::env::temp_dir().join(format!("mica_prefs_test_{}", Uuid::new_v4()));
     let db_str = dir.join("vault.sqlite").to_str().unwrap().to_string();
-    let (ws_id, fav_a, fav_b, view_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (ws_id, fav_a, fav_b, view_id) = (
+      Uuid::new_v4(),
+      Uuid::new_v4(),
+      Uuid::new_v4(),
+      Uuid::new_v4(),
+    );
 
     {
       let vault = VaultStore::open_at(&db_str).unwrap();
@@ -2232,7 +2434,9 @@ mod tests {
 
       vault.set_page_width(920.0).unwrap();
       vault.set_sidebar_width(310.0).unwrap();
-      vault.set_favorites_for(ws_id, &[fav_a, fav_b, fav_a]).unwrap();
+      vault
+        .set_favorites_for(ws_id, &[fav_a, fav_b, fav_a])
+        .unwrap();
       vault.set_view_icon(view_id, Some("📘")).unwrap();
       vault
         .set_known_servers(&[
@@ -2241,7 +2445,9 @@ mod tests {
           "http://localhost:8080/".into(),
         ])
         .unwrap();
-      vault.save_server_credential("https://notes.mica.dev/", "alice@mica.dev", "tok-abc").unwrap();
+      vault
+        .save_server_credential("https://notes.mica.dev/", "alice@mica.dev", "tok-abc")
+        .unwrap();
       vault.set_active_origin("https://notes.mica.dev/").unwrap();
       vault.set_bool_pref("focusMode", true).unwrap();
     }
@@ -2249,22 +2455,41 @@ mod tests {
     assert!(dir.join(PREFS_FILENAME).exists());
     {
       let reopened = VaultStore::open_at(&db_str).unwrap();
-      assert_eq!((reopened.page_width(), reopened.sidebar_width()), (920.0, 310.0));
+      assert_eq!(
+        (reopened.page_width(), reopened.sidebar_width()),
+        (920.0, 310.0)
+      );
       assert_eq!(reopened.favorites_for(ws_id), vec![fav_a, fav_b]);
       assert_eq!(reopened.view_icon(view_id).as_deref(), Some("📘"));
       assert_eq!(
         reopened.known_servers(),
-        vec!["https://notes.mica.dev".to_string(), "http://localhost:8080".to_string()]
+        vec![
+          "https://notes.mica.dev".to_string(),
+          "http://localhost:8080".to_string()
+        ]
       );
       assert_eq!(
         reopened.saved_server_credentials(),
-        vec![("https://notes.mica.dev".into(), "alice@mica.dev".into(), "tok-abc".into())]
+        vec![(
+          "https://notes.mica.dev".into(),
+          "alice@mica.dev".into(),
+          "tok-abc".into()
+        )]
       );
       assert_eq!(reopened.active_origin(), "https://notes.mica.dev");
       assert!(reopened.bool_pref("focusMode", false));
-      assert_eq!(reopened.snapshot_prefs().entries.get("focusMode").map(String::as_str), Some("true"));
+      assert_eq!(
+        reopened
+          .snapshot_prefs()
+          .entries
+          .get("focusMode")
+          .map(String::as_str),
+        Some("true")
+      );
 
-      reopened.clear_server_credential("https://notes.mica.dev").unwrap();
+      reopened
+        .clear_server_credential("https://notes.mica.dev")
+        .unwrap();
       assert!(reopened.saved_server_credentials().is_empty());
       reopened.set_view_icon(view_id, None).unwrap();
       assert!(reopened.view_icon(view_id).is_none());
@@ -2279,22 +2504,45 @@ mod tests {
     let vault = VaultStore::in_memory();
     let ws = Uuid::new_v4();
     let folder_a = make_view(ws, Uuid::new_v4(), "Folder A", "folder", None, "0000000010");
-    let folder_b = make_view(ws, Uuid::new_v4(), "Folder B", "folder", Some(folder_a.id), "0000000010");
+    let folder_b = make_view(
+      ws,
+      Uuid::new_v4(),
+      "Folder B",
+      "folder",
+      Some(folder_a.id),
+      "0000000010",
+    );
     let page_1 = make_view(ws, Uuid::new_v4(), "Page 1", "page", None, "0000000020");
     let page_2 = make_view(ws, Uuid::new_v4(), "Page 2", "page", None, "0000000030");
     for v in [&folder_a, &folder_b, &page_1, &page_2] {
       vault.save_view(DEFAULT_ORIGIN, v).unwrap();
     }
 
-    vault.reorder_views(DEFAULT_ORIGIN, Some(folder_a.id), &[page_2.id, page_1.id]).unwrap();
+    vault
+      .reorder_views(DEFAULT_ORIGIN, Some(folder_a.id), &[page_2.id, page_1.id])
+      .unwrap();
     let views = vault.list_views(DEFAULT_ORIGIN);
     let p2 = views.iter().find(|v| v.id == page_2.id).unwrap();
     let p1 = views.iter().find(|v| v.id == page_1.id).unwrap();
-    assert_eq!((p2.parent_view_id, p2.position.as_str()), (Some(folder_a.id), "0000000010"));
-    assert_eq!((p1.parent_view_id, p1.position.as_str()), (Some(folder_a.id), "0000000020"));
+    assert_eq!(
+      (p2.parent_view_id, p2.position.as_str()),
+      (Some(folder_a.id), "0000000010")
+    );
+    assert_eq!(
+      (p1.parent_view_id, p1.position.as_str()),
+      (Some(folder_a.id), "0000000020")
+    );
 
-    assert!(vault.reorder_views(DEFAULT_ORIGIN, Some(page_1.id), &[page_2.id]).is_err());
-    assert!(vault.reorder_views(DEFAULT_ORIGIN, Some(folder_b.id), &[folder_a.id]).is_err());
+    assert!(
+      vault
+        .reorder_views(DEFAULT_ORIGIN, Some(page_1.id), &[page_2.id])
+        .is_err()
+    );
+    assert!(
+      vault
+        .reorder_views(DEFAULT_ORIGIN, Some(folder_b.id), &[folder_a.id])
+        .is_err()
+    );
   }
 
   #[test]
@@ -2302,17 +2550,42 @@ mod tests {
     let vault = VaultStore::in_memory();
     let ws = Uuid::new_v4();
     let live_parent = make_view(ws, Uuid::new_v4(), "Projects", "folder", None, "0000000010");
-    let folder = make_view(ws, Uuid::new_v4(), "Archive", "folder", Some(live_parent.id), "0000000010");
-    let sub_folder = make_view(ws, Uuid::new_v4(), "Old", "folder", Some(folder.id), "0000000010");
+    let folder = make_view(
+      ws,
+      Uuid::new_v4(),
+      "Archive",
+      "folder",
+      Some(live_parent.id),
+      "0000000010",
+    );
+    let sub_folder = make_view(
+      ws,
+      Uuid::new_v4(),
+      "Old",
+      "folder",
+      Some(folder.id),
+      "0000000010",
+    );
     let (doc_id, standalone_doc) = (Uuid::new_v4(), Uuid::new_v4());
-    let leaf_page = make_view(ws, doc_id, "Spec", "page", Some(sub_folder.id), "0000000010");
+    let leaf_page = make_view(
+      ws,
+      doc_id,
+      "Spec",
+      "page",
+      Some(sub_folder.id),
+      "0000000010",
+    );
     let standalone = make_view(ws, standalone_doc, "Scratch", "page", None, "0000000020");
 
     for v in [&live_parent, &folder, &sub_folder, &leaf_page, &standalone] {
       vault.save_view(DEFAULT_ORIGIN, v).unwrap();
     }
-    vault.save_markdown(DEFAULT_ORIGIN, doc_id, "Spec body").unwrap();
-    vault.save_markdown(DEFAULT_ORIGIN, standalone_doc, "Scratch body").unwrap();
+    vault
+      .save_markdown(DEFAULT_ORIGIN, doc_id, "Spec body")
+      .unwrap();
+    vault
+      .save_markdown(DEFAULT_ORIGIN, standalone_doc, "Scratch body")
+      .unwrap();
 
     let trashed = vault.trash_view_subtree(DEFAULT_ORIGIN, folder.id).unwrap();
     assert_eq!(trashed.len(), 3);
@@ -2325,37 +2598,88 @@ mod tests {
     assert!(!entries[0].deleted_label.is_empty());
 
     // Restoring a child whose parent is still deleted promotes child to root.
-    assert_eq!(vault.restore_view_subtree(DEFAULT_ORIGIN, leaf_page.id).unwrap(), vec![leaf_page.id]);
-    let leaf_after = vault.list_views(DEFAULT_ORIGIN).into_iter().find(|v| v.id == leaf_page.id).unwrap();
+    assert_eq!(
+      vault
+        .restore_view_subtree(DEFAULT_ORIGIN, leaf_page.id)
+        .unwrap(),
+      vec![leaf_page.id]
+    );
+    let leaf_after = vault
+      .list_views(DEFAULT_ORIGIN)
+      .into_iter()
+      .find(|v| v.id == leaf_page.id)
+      .unwrap();
     assert!(!leaf_after.is_deleted && leaf_after.parent_view_id.is_none());
 
-    assert_eq!(vault.restore_view_subtree(DEFAULT_ORIGIN, folder.id).unwrap().len(), 2);
-    assert!(vault.list_views(DEFAULT_ORIGIN).iter().all(|v| !v.is_deleted));
+    assert_eq!(
+      vault
+        .restore_view_subtree(DEFAULT_ORIGIN, folder.id)
+        .unwrap()
+        .len(),
+      2
+    );
+    assert!(
+      vault
+        .list_views(DEFAULT_ORIGIN)
+        .iter()
+        .all(|v| !v.is_deleted)
+    );
 
     vault.trash_view_subtree(DEFAULT_ORIGIN, folder.id).unwrap();
-    vault.trash_view_subtree(DEFAULT_ORIGIN, standalone.id).unwrap();
+    vault
+      .trash_view_subtree(DEFAULT_ORIGIN, standalone.id)
+      .unwrap();
     assert_eq!(vault.purge_all_trash(DEFAULT_ORIGIN, ws).unwrap(), 3);
-    assert!(vault.load_markdown(DEFAULT_ORIGIN, standalone_doc).is_none());
+    assert!(
+      vault
+        .load_markdown(DEFAULT_ORIGIN, standalone_doc)
+        .is_none()
+    );
   }
 
   #[test]
   fn clone_view_copies_page_and_folder_subtrees_and_workspace_crud() {
     let vault = VaultStore::in_memory();
     let ws = Uuid::new_v4();
-    vault.save_workspace_name(DEFAULT_ORIGIN, ws, "Engineering").unwrap();
-    assert!(vault.list_workspaces(DEFAULT_ORIGIN).iter().any(|(id, n)| *id == ws && n == "Engineering"));
-    vault.save_workspace_name(DEFAULT_ORIGIN, ws, "Core Eng").unwrap();
-    assert!(vault.list_workspaces(DEFAULT_ORIGIN).iter().any(|(id, n)| *id == ws && n == "Core Eng"));
+    vault
+      .save_workspace_name(DEFAULT_ORIGIN, ws, "Engineering")
+      .unwrap();
+    assert!(
+      vault
+        .list_workspaces(DEFAULT_ORIGIN)
+        .iter()
+        .any(|(id, n)| *id == ws && n == "Engineering")
+    );
+    vault
+      .save_workspace_name(DEFAULT_ORIGIN, ws, "Core Eng")
+      .unwrap();
+    assert!(
+      vault
+        .list_workspaces(DEFAULT_ORIGIN)
+        .iter()
+        .any(|(id, n)| *id == ws && n == "Core Eng")
+    );
 
     let folder = make_view(ws, Uuid::new_v4(), "Guides", "folder", None, "0000000010");
     let doc_id = Uuid::new_v4();
-    let page = make_view(ws, doc_id, "Onboarding", "page", Some(folder.id), "0000000010");
+    let page = make_view(
+      ws,
+      doc_id,
+      "Onboarding",
+      "page",
+      Some(folder.id),
+      "0000000010",
+    );
     vault.save_view(DEFAULT_ORIGIN, &folder).unwrap();
     vault.save_view(DEFAULT_ORIGIN, &page).unwrap();
-    vault.save_markdown(DEFAULT_ORIGIN, doc_id, "# Welcome\n\nStep one.").unwrap();
+    vault
+      .save_markdown(DEFAULT_ORIGIN, doc_id, "# Welcome\n\nStep one.")
+      .unwrap();
     vault.set_view_icon(page.id, Some("🧭")).unwrap();
 
-    let cloned_folder = vault.clone_view(DEFAULT_ORIGIN, folder.id, "Guides").unwrap();
+    let cloned_folder = vault
+      .clone_view(DEFAULT_ORIGIN, folder.id, "Guides")
+      .unwrap();
     assert_ne!(cloned_folder.id, folder.id);
     assert_ne!(cloned_folder.name, "Guides");
     let cloned_child = vault
@@ -2365,10 +2689,20 @@ mod tests {
       .expect("cloned child page");
     assert_ne!(cloned_child.id, page.id);
     assert_eq!(cloned_child.icon.as_deref(), Some("🧭"));
-    assert!(vault.load_markdown(DEFAULT_ORIGIN, cloned_child.object_id).unwrap().contains("Step one."));
+    assert!(
+      vault
+        .load_markdown(DEFAULT_ORIGIN, cloned_child.object_id)
+        .unwrap()
+        .contains("Step one.")
+    );
 
     vault.delete_workspace(DEFAULT_ORIGIN, ws).unwrap();
-    assert!(vault.list_views(DEFAULT_ORIGIN).into_iter().all(|v| v.workspace_id != ws));
+    assert!(
+      vault
+        .list_views(DEFAULT_ORIGIN)
+        .into_iter()
+        .all(|v| v.workspace_id != ws)
+    );
     assert!(vault.load_markdown(DEFAULT_ORIGIN, doc_id).is_none());
   }
 
@@ -2376,7 +2710,11 @@ mod tests {
   #[test]
   fn default_vault_path_adopts_legacy_store_db_and_preserves_early_rust_fallback() {
     let root = std::env::temp_dir().join(format!("mica_vault_path_test_{}", Uuid::new_v4()));
-    let legacy_db = root.join("roaming").join("mica").join("local").join("store.db");
+    let legacy_db = root
+      .join("roaming")
+      .join("mica")
+      .join("local")
+      .join("store.db");
     let early_db = root.join("local").join("mica").join("vault.sqlite");
     let custom_dir = root.join("custom");
 
@@ -2466,8 +2804,13 @@ mod tests {
           origin: DEFAULT_ORIGIN.to_string(),
         })
         .unwrap();
-      let doc = doc_from_markdown("# 旧版标题\n\n这段内容来自 v0.14.11 Flutter 本地库。", Some(1));
-      store.save_doc(DEFAULT_ORIGIN, &doc_id.to_string(), &doc).unwrap();
+      let doc = doc_from_markdown(
+        "# 旧版标题\n\n这段内容来自 v0.14.11 Flutter 本地库。",
+        Some(1),
+      );
+      store
+        .save_doc(DEFAULT_ORIGIN, &doc_id.to_string(), &doc)
+        .unwrap();
       store
         .create_local_version(DEFAULT_ORIGIN, &doc_id.to_string(), "v0.14.11 快照")
         .unwrap();
@@ -2477,14 +2820,26 @@ mod tests {
     {
       let vault = VaultStore::open_at(&db_str).unwrap();
       let workspaces = vault.list_workspaces(DEFAULT_ORIGIN);
-      assert!(workspaces.iter().any(|(id, name)| *id == ws_id && name == "旧版 Flutter 本地工作区"));
+      assert!(
+        workspaces
+          .iter()
+          .any(|(id, name)| *id == ws_id && name == "旧版 Flutter 本地工作区")
+      );
       let views = vault.list_views(DEFAULT_ORIGIN);
       assert_eq!(views.len(), 2);
-      assert!(views.iter().any(|v| v.id == page_id && v.parent_view_id == Some(folder_id)));
+      assert!(
+        views
+          .iter()
+          .any(|v| v.id == page_id && v.parent_view_id == Some(folder_id))
+      );
       let md = vault.load_markdown(DEFAULT_ORIGIN, doc_id).unwrap();
       assert!(md.contains("这段内容来自 v0.14.11 Flutter 本地库。"));
       let versions = vault.list_versions(DEFAULT_ORIGIN, doc_id);
-      assert!(versions.iter().any(|(_, label, _)| label == "v0.14.11 快照"));
+      assert!(
+        versions
+          .iter()
+          .any(|(_, label, _)| label == "v0.14.11 快照")
+      );
     }
 
     let _ = std::fs::remove_dir_all(&root);
@@ -2513,7 +2868,10 @@ mod tests {
     let seeded = seed_non_secret_prefs_from_legacy(&legacy_json);
     assert_eq!(seeded.get("darkMode").map(String::as_str), Some("true"));
     assert_eq!(seeded.get(PREF_PAGE_WIDTH).map(String::as_str), Some("960"));
-    assert_eq!(seeded.get(PREF_SIDEBAR_WIDTH).map(String::as_str), Some("320"));
+    assert_eq!(
+      seeded.get(PREF_SIDEBAR_WIDTH).map(String::as_str),
+      Some("320")
+    );
     assert_eq!(
       seeded.get(PREF_KNOWN_SERVERS).map(String::as_str),
       Some(r#"["https://notes.mica.dev"]"#)
@@ -2538,7 +2896,10 @@ mod tests {
     assert!(strip_web_secret_prefs(&mut entries));
     assert!(!entries.contains_key(PREF_SERVER_CREDENTIALS));
     assert_eq!(entries.get("darkMode").map(String::as_str), Some("true"));
-    assert_eq!(entries.get(PREF_PAGE_WIDTH).map(String::as_str), Some("880"));
+    assert_eq!(
+      entries.get(PREF_PAGE_WIDTH).map(String::as_str),
+      Some("880")
+    );
     assert!(!strip_web_secret_prefs(&mut entries));
   }
 
@@ -2574,26 +2935,50 @@ mod tests {
       let store = LocalStore::open(&db_str).unwrap();
       let mut base_a = doc_from_markdown("# Account A", Some(10));
       let sv0 = base_a.state_vector();
-      let b_id = base_a.to_blocks().into_iter().find(|b| b.kind != "page").unwrap().id;
+      let b_id = base_a
+        .to_blocks()
+        .into_iter()
+        .find(|b| b.kind != "page")
+        .unwrap()
+        .id;
       base_a.text_insert(&b_id, 9, " offline edit");
       let offline_diff = base_a.encode_diff(&sv0).unwrap();
 
       store.save_doc(&key_a, &doc_a.to_string(), &base_a).unwrap();
-      store.append_update(&key_a, &doc_a.to_string(), &offline_diff).unwrap();
+      store
+        .append_update(&key_a, &doc_a.to_string(), &offline_diff)
+        .unwrap();
 
       let doc_b_state = doc_from_markdown("# Account B Secret", Some(20));
-      store.save_doc(&key_b, &doc_b.to_string(), &doc_b_state).unwrap();
+      store
+        .save_doc(&key_b, &doc_b.to_string(), &doc_b_state)
+        .unwrap();
 
       let legacy_doc = doc_from_markdown("# Pre-111 Quarantined", Some(30));
-      store.save_doc(&legacy_bare, &doc_legacy.to_string(), &legacy_doc).unwrap();
+      store
+        .save_doc(&legacy_bare, &doc_legacy.to_string(), &legacy_doc)
+        .unwrap();
     }
 
     // Reopen through pure-Rust `VaultStore`:
     let vault = VaultStore::open_at(&db_str).unwrap();
-    vault.save_view(&key_a, &make_view(ws_a, doc_a, "A Private", "page", None, "0000000010")).unwrap();
-    vault.save_view(&key_b, &make_view(ws_b, doc_b, "B Private", "page", None, "0000000010")).unwrap();
     vault
-      .save_view(&legacy_bare, &make_view(ws_a, doc_legacy, "Legacy Row", "page", None, "0000000010"))
+      .save_view(
+        &key_a,
+        &make_view(ws_a, doc_a, "A Private", "page", None, "0000000010"),
+      )
+      .unwrap();
+    vault
+      .save_view(
+        &key_b,
+        &make_view(ws_b, doc_b, "B Private", "page", None, "0000000010"),
+      )
+      .unwrap();
+    vault
+      .save_view(
+        &legacy_bare,
+        &make_view(ws_a, doc_legacy, "Legacy Row", "page", None, "0000000010"),
+      )
       .unwrap();
 
     // 1. Account A sees ONLY A's views/docs, never B's or quarantined legacy rows.
@@ -2623,8 +3008,15 @@ mod tests {
       Some(storage),
     );
     let effects = engine.handle_event(SyncEvent::Connect);
-    assert!(effects.iter().any(|e| matches!(e, SyncEffect::Ready { .. })));
-    assert!(!engine.outbox_empty(), "Flutter 0.14.11 unpushed outbox edit must be queued for replay");
+    assert!(
+      effects
+        .iter()
+        .any(|e| matches!(e, SyncEffect::Ready { .. }))
+    );
+    assert!(
+      !engine.outbox_empty(),
+      "Flutter 0.14.11 unpushed outbox edit must be queued for replay"
+    );
     assert!(engine.all_blocks_json().contains("offline edit"));
 
     let _ = std::fs::remove_dir_all(&root);

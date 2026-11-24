@@ -136,7 +136,9 @@ jobs:
       - name: Test workspace (Postgres-backed)
         run: |
           source scripts/lib-local.sh && source scripts/lib-receipt.sh
-          cargo_receipt 500 cargo test --workspace --locked
+          cargo_receipt 550 cargo test --workspace --locked
+          cargo_receipt 70 cargo test -p mica-editor --locked
+          cargo_receipt 30 cargo test -p mica-client --locked
       - name: Test mica-core gated SQLite store
         run: |
           source scripts/lib-local.sh && source scripts/lib-receipt.sh
@@ -160,7 +162,7 @@ jobs:
       - name: Install Linux GUI & wasm32 build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends brotli clang libgtk-3-dev libwebkit2gtk-4.1-dev libxkbcommon-dev
+          sudo apt-get install -y --no-install-recommends brotli clang pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-dev
           rustup target add wasm32-unknown-unknown
           bash scripts/install-web-tools.sh
       - uses: Swatinem/rust-cache@v2
@@ -172,7 +174,7 @@ jobs:
       - name: Test clients/mica_rust (unit + storage/sync + headless E2E)
         run: |
           source scripts/lib-local.sh && source scripts/lib-receipt.sh
-          cargo_receipt 15 cargo test --manifest-path clients/mica_rust/Cargo.toml --locked
+          cargo_receipt 110 cargo test --manifest-path clients/mica_rust/Cargo.toml --locked
       - name: Build native desktop binary
         run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --locked
       - name: Build pure-Rust WebAssembly bundle
@@ -238,3 +240,15 @@ jobs:
           docker build -f deploy/Dockerfile.web -t mica-web:ci .
           docker build -f deploy/Dockerfile.cli -t mica-cli:ci .
           docker build -f deploy/Dockerfile.api -t mica-api:ci .
+      - name: Boot CI container stack & run Playwright pure-Rust Web E2E
+        run: |
+          bash scripts/ci-container-stack.sh up
+          bash scripts/web-entry-cache-check.sh http://127.0.0.1
+          (cd e2e && npm ci --no-audit --no-fund && npx playwright install chromium --with-deps)
+          node e2e/web_e2e.mjs --base http://127.0.0.1 --email e2e@mica.test --password E2ePassword123! --register
+      - name: Dump CI stack logs on failure
+        if: failure()
+        run: bash scripts/ci-container-stack.sh logs 120 || true
+      - name: Tear down CI container stack
+        if: always()
+        run: bash scripts/ci-container-stack.sh down || true

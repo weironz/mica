@@ -6,9 +6,7 @@ use serde_json::{Map, Value, json};
 use crate::commands::PasteInput;
 use crate::diff_ops::{compute_move_blocks_target, diff_block_ops};
 use crate::marks::{marks_from_data, marks_to_json, shift_marks};
-use crate::model::{
-  BlockSpec, DocOp, EditorBlock, MAX_NESTING_DEPTH, normalize_data_object,
-};
+use crate::model::{BlockSpec, DocOp, EditorBlock, MAX_NESTING_DEPTH, normalize_data_object};
 use crate::paste::{
   html_nodes_to_markdown, looks_like_image_url, looks_like_url, normalize_line_endings,
   parse_paste_blocks, paste_merges_inline, pasted_formula_source, retag_mislabeled_fences,
@@ -443,36 +441,34 @@ impl EditorSession {
         row,
         col,
         direction,
-      } => {
-        match table.navigate(row, col, direction) {
-          TableNavResult::Cell { row: nr, col: nc } => {
-            self.selection = Some(DocSelection::table_cell(block_index, nr, nc));
-          }
-          TableNavResult::InsertRowAndFocus { row: nr, col: nc } => {
-            table.insert_row(nr);
-            mutated = true;
-            self.selection = Some(DocSelection::table_cell(block_index, nr, nc));
-          }
-          TableNavResult::ExitBefore => {
-            if block_index > 0 {
-              let prev = block_index - 1;
-              self.collapse_to(DocPosition::new(prev, self.blocks[prev].utf16_len()));
-            }
-          }
-          TableNavResult::ExitAfter => {
-            if block_index + 1 < self.blocks.len() {
-              self.collapse_to(DocPosition::new(block_index + 1, 0));
-            } else {
-              let created = EditorBlock::new(self.gen_block_id(), "paragraph", "");
-              let insert_at = block_index + 1;
-              ctx.ops.push(self.insert_op(&created, insert_at));
-              self.blocks.insert(insert_at, created);
-              self.collapse_to(DocPosition::new(insert_at, 0));
-              ctx.typing_block = None;
-            }
+      } => match table.navigate(row, col, direction) {
+        TableNavResult::Cell { row: nr, col: nc } => {
+          self.selection = Some(DocSelection::table_cell(block_index, nr, nc));
+        }
+        TableNavResult::InsertRowAndFocus { row: nr, col: nc } => {
+          table.insert_row(nr);
+          mutated = true;
+          self.selection = Some(DocSelection::table_cell(block_index, nr, nc));
+        }
+        TableNavResult::ExitBefore => {
+          if block_index > 0 {
+            let prev = block_index - 1;
+            self.collapse_to(DocPosition::new(prev, self.blocks[prev].utf16_len()));
           }
         }
-      }
+        TableNavResult::ExitAfter => {
+          if block_index + 1 < self.blocks.len() {
+            self.collapse_to(DocPosition::new(block_index + 1, 0));
+          } else {
+            let created = EditorBlock::new(self.gen_block_id(), "paragraph", "");
+            let insert_at = block_index + 1;
+            ctx.ops.push(self.insert_op(&created, insert_at));
+            self.blocks.insert(insert_at, created);
+            self.collapse_to(DocPosition::new(insert_at, 0));
+            ctx.typing_block = None;
+          }
+        }
+      },
       TableOp::CopyArea { r0, c0, r1, c1 } => {
         ctx.clipboard_out = Some(table.copy_area(r0, c0, r1, c1));
       }
@@ -613,8 +609,18 @@ impl EditorSession {
         if !sel.is_collapsed() {
           self.delete_current_selection(ctx);
         }
-        let cur = self.selection.as_ref().map_or(DocPosition::new(idx, 0), DocSelection::focus_pos);
-        self.cmd_set_link(cur.node, cur.offset, cur.offset, Some(trimmed), Some(trimmed), ctx);
+        let cur = self
+          .selection
+          .as_ref()
+          .map_or(DocPosition::new(idx, 0), DocSelection::focus_pos);
+        self.cmd_set_link(
+          cur.node,
+          cur.offset,
+          cur.offset,
+          Some(trimmed),
+          Some(trimmed),
+          ctx,
+        );
       }
       return;
     }
@@ -702,7 +708,10 @@ impl EditorSession {
     let focus_idx = self
       .selection
       .as_ref()
-      .map_or_else(|| self.blocks.len().saturating_sub(1), DocSelection::focus_node)
+      .map_or_else(
+        || self.blocks.len().saturating_sub(1),
+        DocSelection::focus_node,
+      )
       .min(self.blocks.len().saturating_sub(1));
 
     let mut first = 0usize;
@@ -725,8 +734,8 @@ impl EditorSession {
       focus_idx + 1
     };
     for spec in &specs[first..] {
-      let created = EditorBlock::new(self.gen_block_id(), &spec.kind, &spec.text)
-        .with_data(spec.data.clone());
+      let created =
+        EditorBlock::new(self.gen_block_id(), &spec.kind, &spec.text).with_data(spec.data.clone());
       ctx.ops.push(self.insert_op(&created, insert_at));
       self.blocks.insert(insert_at, created);
       insert_at += 1;
@@ -765,7 +774,9 @@ impl EditorSession {
     self.blocks[block_index]
       .data_map_mut()
       .insert("checked".to_string(), Value::Bool(next));
-    ctx.ops.push(Self::update_text_data_op(&self.blocks[block_index]));
+    ctx
+      .ops
+      .push(Self::update_text_data_op(&self.blocks[block_index]));
     ctx.typing_block = None;
   }
 
@@ -846,7 +857,9 @@ impl EditorSession {
           .insert("language".to_string(), Value::String(lang.to_string()));
       }
     }
-    ctx.ops.push(Self::update_text_data_op(&self.blocks[block_index]));
+    ctx
+      .ops
+      .push(Self::update_text_data_op(&self.blocks[block_index]));
     ctx.typing_block = None;
   }
 

@@ -84,7 +84,10 @@ fn assert_session_invariants(s: &EditorSession) {
         let e_text = &s.blocks()[end.node].text;
         assert!(start.offset <= utf16_len(s_text));
         assert!(end.offset <= utf16_len(e_text));
-        assert_eq!(snap_utf16_boundary(s_text, start.offset, false), start.offset);
+        assert_eq!(
+          snap_utf16_boundary(s_text, start.offset, false),
+          start.offset
+        );
         assert_eq!(snap_utf16_boundary(e_text, end.offset, false), end.offset);
       }
       NormalizedSelection::BlockAtom { block_index }

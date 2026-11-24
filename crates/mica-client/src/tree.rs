@@ -40,9 +40,12 @@ impl PageTreeModel {
 
   pub fn replace_views(&mut self, views: Vec<View>) {
     self.views = views.into_iter().map(|v| (v.id, v)).collect();
-    self
-      .expanded_folders
-      .retain(|id| self.views.get(id).is_some_and(|v| !v.is_deleted && v.object_type == "folder"));
+    self.expanded_folders.retain(|id| {
+      self
+        .views
+        .get(id)
+        .is_some_and(|v| !v.is_deleted && v.object_type == "folder")
+    });
   }
 
   pub fn upsert_view(&mut self, view: View) {
@@ -83,7 +86,11 @@ impl PageTreeModel {
   /// Recycle-bin entries sorted by `updated_at` descending.
   pub fn trashed_views(&self) -> Vec<&View> {
     let mut out: Vec<&View> = self.views.values().filter(|v| v.is_deleted).collect();
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.name.cmp(&b.name)));
+    out.sort_by(|a, b| {
+      b.updated_at
+        .cmp(&a.updated_at)
+        .then_with(|| a.name.cmp(&b.name))
+    });
     out
   }
 

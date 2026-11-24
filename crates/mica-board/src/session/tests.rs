@@ -266,8 +266,14 @@ fn hit_test_node_respects_z_order() {
     strokes: vec![],
   };
   let s = BoardSession::new(snap);
-  assert_eq!(s.hit_test_node([100.0, 100.0]).map(|n| n.id.as_str()), Some("high"));
-  assert_eq!(s.hit_test_node([60.0, 60.0]).map(|n| n.id.as_str()), Some("low"));
+  assert_eq!(
+    s.hit_test_node([100.0, 100.0]).map(|n| n.id.as_str()),
+    Some("high")
+  );
+  assert_eq!(
+    s.hit_test_node([60.0, 60.0]).map(|n| n.id.as_str()),
+    Some("low")
+  );
   assert!(s.hit_test_node([10.0, 10.0]).is_none());
 }
 
@@ -284,10 +290,19 @@ fn hit_test_node_frame_title_bar_and_border_only() {
   let mut s = BoardSession::new(snap);
   s.set_viewport(1.0, [0.0, 0.0]);
   // Title bar (top 30px) hits frame.
-  assert_eq!(s.hit_test_node([200.0, 115.0]).map(|n| n.id.as_str()), Some("fr"));
+  assert_eq!(
+    s.hit_test_node([200.0, 115.0]).map(|n| n.id.as_str()),
+    Some("fr")
+  );
   // Border band (within outer +6 / inner -14) hits frame.
-  assert_eq!(s.hit_test_node([105.0, 200.0]).map(|n| n.id.as_str()), Some("fr"));
-  assert_eq!(s.hit_test_node([250.0, 298.0]).map(|n| n.id.as_str()), Some("fr"));
+  assert_eq!(
+    s.hit_test_node([105.0, 200.0]).map(|n| n.id.as_str()),
+    Some("fr")
+  );
+  assert_eq!(
+    s.hit_test_node([250.0, 298.0]).map(|n| n.id.as_str()),
+    Some("fr")
+  );
   // Deep interior misses frame so user can marquee/click inside.
   assert!(s.hit_test_node([250.0, 200.0]).is_none());
 }
@@ -320,7 +335,10 @@ fn hit_test_node_skips_collapsed_descendants() {
     let m1 = s.node_by_id("m1").unwrap();
     [m1.x + 10.0, m1.y + 10.0]
   };
-  assert_eq!(s.hit_test_node(child_pos).map(|n| n.id.as_str()), Some("m1"));
+  assert_eq!(
+    s.hit_test_node(child_pos).map(|n| n.id.as_str()),
+    Some("m1")
+  );
   s.dispatch(BoardCommand::ToggleCollapse {
     node_id: "m0".to_string(),
   });
@@ -416,7 +434,10 @@ fn hit_test_resize_handle_all_8_directions_single_selection_only() {
     ([100.0, 130.0], ResizeHandle::W),
   ];
   for (pt, expected) in cases {
-    assert_eq!(s.hit_test_resize_handle(pt), Some(("a".to_string(), expected)));
+    assert_eq!(
+      s.hit_test_resize_handle(pt),
+      Some(("a".to_string(), expected))
+    );
   }
   // Multi-selection disables resize handles.
   s.dispatch(BoardCommand::SelectNode {
@@ -430,7 +451,10 @@ fn hit_test_resize_handle_all_8_directions_single_selection_only() {
 fn hit_test_edge_straight_and_orthogonal_routed_polyline() {
   let s = two_node_session();
   // Straight edge from (220, 130) to (320, 130).
-  assert_eq!(s.hit_test_edge([270.0, 132.0]).map(|e| e.id.as_str()), Some("e1"));
+  assert_eq!(
+    s.hit_test_edge([270.0, 132.0]).map(|e| e.id.as_str()),
+    Some("e1")
+  );
   assert!(s.hit_test_edge([270.0, 160.0]).is_none());
 
   // Orthogonal routed edge in flowchart template.
@@ -535,7 +559,13 @@ fn drag_smart_snap_left_center_right_within_6px() {
   s.dispatch(pointer_down(150.0, 125.0));
   let patch = s.pointer_move(297.0, 125.0, 297.0, 125.0, false);
   assert!((s.node_by_id("a").unwrap().x - 250.0).abs() < 1e-6);
-  assert!(patch.active_overlay.snap_guides.iter().any(|g| g.vertical && (g.coord - 250.0).abs() < 1e-6));
+  assert!(
+    patch
+      .active_overlay
+      .snap_guides
+      .iter()
+      .any(|g| g.vertical && (g.coord - 250.0).abs() < 1e-6)
+  );
 }
 
 #[test]
@@ -557,7 +587,13 @@ fn drag_smart_snap_top_center_bottom_within_6px() {
   s.dispatch(pointer_down(150.0, 125.0));
   let patch = s.pointer_move(150.0, 221.0, 150.0, 221.0, false);
   assert!((s.node_by_id("a").unwrap().y - 200.0).abs() < 1e-6);
-  assert!(patch.active_overlay.snap_guides.iter().any(|g| !g.vertical && (g.coord - 200.0).abs() < 1e-6));
+  assert!(
+    patch
+      .active_overlay
+      .snap_guides
+      .iter()
+      .any(|g| !g.vertical && (g.coord - 200.0).abs() < 1e-6)
+  );
 }
 
 #[test]
@@ -578,7 +614,13 @@ fn drag_smart_snap_no_stickiness_when_slowly_moving_past_guide() {
   s.dispatch(pointer_down(150.0, 125.0));
   // Move 1px at a time for 10 steps (+10px total > 6px threshold).
   for step in 1..=10 {
-    s.pointer_move(150.0 + step as f64, 125.0, 150.0 + step as f64, 125.0, false);
+    s.pointer_move(
+      150.0 + step as f64,
+      125.0,
+      150.0 + step as f64,
+      125.0,
+      false,
+    );
   }
   // Because snapping uses unsnapped origin + total_delta, it MUST escape the guide at +10px!
   assert!((s.node_by_id("a").unwrap().x - 110.0).abs() < 1e-6);
@@ -817,7 +859,10 @@ fn resize_updates_incident_edge_routes_and_pushes_single_undo() {
   s.dispatch(pointer_down(220.0, 160.0)); // SE
   let p = s.pointer_move(260.0, 160.0, 260.0, 160.0, false);
   let delta = p.delta.expect("resize delta");
-  let route = delta.updated_routes.get("e1").expect("incident edge e1 rerouted");
+  let route = delta
+    .updated_routes
+    .get("e1")
+    .expect("incident edge e1 rerouted");
   assert!((route[0][0] - 260.0).abs() < 1e-6);
   s.dispatch(BoardCommand::PointerUp);
   assert_eq!(s.undo_len(), 1);
@@ -911,7 +956,10 @@ fn pointer_hover_updates_hovered_node_and_skips_during_drag() {
     screen_x: 350.0,
     screen_y: 120.0,
   });
-  assert_eq!(p_ignored.active_overlay.hovered_node_id.as_deref(), Some("a"));
+  assert_eq!(
+    p_ignored.active_overlay.hovered_node_id.as_deref(),
+    Some("a")
+  );
   s.dispatch(BoardCommand::PointerUp);
 }
 
@@ -957,7 +1005,10 @@ fn connector_drag_in_connector_tool_mode_starts_from_right_anchor() {
     tool: BoardTool::Connector,
   });
   s.dispatch(pointer_down(150.0, 130.0));
-  let pc = s.active_overlay().pending_connector.expect("pending connector");
+  let pc = s
+    .active_overlay()
+    .pending_connector
+    .expect("pending connector");
   assert_eq!(pc.from_node_id, "a");
   assert_eq!(pc.from_anchor, "r");
 }
@@ -984,10 +1035,24 @@ fn connector_drag_ignores_self_and_frame_targets() {
   s.dispatch(pointer_down(220.0, 130.0));
   // Over self: no target.
   let p_self = s.pointer_move(150.0, 130.0, 150.0, 130.0, false);
-  assert!(p_self.active_overlay.pending_connector.unwrap().target_node_id.is_none());
+  assert!(
+    p_self
+      .active_overlay
+      .pending_connector
+      .unwrap()
+      .target_node_id
+      .is_none()
+  );
   // Over frame title bar: still no target.
   let p_fr = s.pointer_move(350.0, 95.0, 350.0, 95.0, false);
-  assert!(p_fr.active_overlay.pending_connector.unwrap().target_node_id.is_none());
+  assert!(
+    p_fr
+      .active_overlay
+      .pending_connector
+      .unwrap()
+      .target_node_id
+      .is_none()
+  );
   s.dispatch(BoardCommand::PointerUp);
   assert!(s.snapshot().edges.is_empty());
 }
@@ -1385,7 +1450,10 @@ fn mindmap_tab_adds_child_and_enters_inline_edit() {
   assert_eq!(s.snapshot().nodes.len(), 5);
   assert_eq!(s.snapshot().edges.len(), 4);
   let new_id = patch.active_overlay.selected_node_ids[0].clone();
-  assert_eq!(s.node_by_id(&new_id).unwrap().parent_id.as_deref(), Some("m1"));
+  assert_eq!(
+    s.node_by_id(&new_id).unwrap().parent_id.as_deref(),
+    Some("m1")
+  );
   assert_eq!(s.editing_node_id(), Some(new_id.as_str()));
   assert!(matches!(
     patch.ui_effects.first(),
@@ -1407,7 +1475,10 @@ fn mindmap_enter_adds_sibling_on_mind_node_and_edits_normal_node() {
     read_only: false,
   });
   let sib_id = p.active_overlay.selected_node_ids[0].clone();
-  assert_eq!(s.node_by_id(&sib_id).unwrap().parent_id.as_deref(), Some("m0"));
+  assert_eq!(
+    s.node_by_id(&sib_id).unwrap().parent_id.as_deref(),
+    Some("m0")
+  );
   assert_eq!(s.editing_node_id(), Some(sib_id.as_str()));
 
   // On a regular whiteboard node, Enter starts inline editing instead of adding sibling.
@@ -1535,7 +1606,12 @@ fn delete_selection_cascades_collapsed_and_expanded_descendants_and_edges() {
   assert!(s.node_by_id("m1").is_none());
   assert!(s.node_by_id(&gc_id).is_none());
   // All incident edges removed too.
-  assert!(!s.snapshot().edges.iter().any(|e| e.to_id == "m1" || e.from_id == "m1"));
+  assert!(
+    !s.snapshot()
+      .edges
+      .iter()
+      .any(|e| e.to_id == "m1" || e.from_id == "m1")
+  );
   assert_eq!(s.snapshot().nodes.len(), 3); // m0, m2, m3 remain
 }
 
@@ -1632,7 +1708,13 @@ fn update_selected_edge_routing_clears_waypoints_and_reroutes() {
   assert!(e.style.dashed);
   assert_eq!(e.arrow_end, "diamond");
   assert_eq!(e.arrow_start, "dot");
-  let route = patch.delta.unwrap().updated_routes.get("fe1").unwrap().clone();
+  let route = patch
+    .delta
+    .unwrap()
+    .updated_routes
+    .get("fe1")
+    .unwrap()
+    .clone();
   assert_eq!(route.len(), 4);
 }
 
@@ -1909,7 +1991,10 @@ fn add_mind_sibling_on_root_adds_child_instead() {
   });
   assert_eq!(s.snapshot().nodes.len(), before + 1);
   let new_id = &p.active_overlay.selected_node_ids[0];
-  assert_eq!(s.node_by_id(new_id).unwrap().parent_id.as_deref(), Some("m0"));
+  assert_eq!(
+    s.node_by_id(new_id).unwrap().parent_id.as_deref(),
+    Some("m0")
+  );
 }
 
 #[test]
@@ -1984,7 +2069,9 @@ fn dispatch_json_covers_all_core_commands() {
     r#"{"type":"fitToContent","viewport":[1280.0,800.0]}"#,
   ];
   for c in cmds {
-    let out = s.dispatch_json(c).unwrap_or_else(|e| panic!("failed {c}: {e}"));
+    let out = s
+      .dispatch_json(c)
+      .unwrap_or_else(|e| panic!("failed {c}: {e}"));
     let _: BoardPatch = serde_json::from_str(&out).expect("valid patch json");
   }
 }

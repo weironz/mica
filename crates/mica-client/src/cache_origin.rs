@@ -68,7 +68,9 @@ pub fn normalize_server_url(server_url: &str) -> Result<String, CacheOriginError
 
   if host_raw.is_empty()
     || host_raw == "[]"
-    || host_raw.bytes().any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+    || host_raw
+      .bytes()
+      .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
   {
     return Err(CacheOriginError::InvalidServerUrl(server_url.to_string()));
   }
@@ -196,7 +198,10 @@ mod tests {
     assert_eq!(key_a, r#"["https://mica.example.com","user-a"]"#);
     assert_eq!(key_a, key_a2);
     assert_ne!(key_a, key_b);
-    assert_ne!(key_a, legacy_cloud_cache_origin("https://mica.example.com").unwrap());
+    assert_ne!(
+      key_a,
+      legacy_cloud_cache_origin("https://mica.example.com").unwrap()
+    );
 
     assert!(is_account_scoped_cloud_origin(&key_a));
     assert!(!is_account_scoped_cloud_origin("https://mica.example.com"));

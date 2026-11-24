@@ -166,10 +166,7 @@ impl EditorBlock {
 
   /// Kinds that continue into the same block kind on Enter (until empty).
   pub fn continues_on_enter(kind: &str) -> bool {
-    matches!(
-      kind,
-      "bulleted_list" | "numbered_list" | "todo" | "quote"
-    )
+    matches!(kind, "bulleted_list" | "numbered_list" | "todo" | "quote")
   }
 
   pub fn heading_level(&self) -> u32 {

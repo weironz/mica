@@ -3,7 +3,9 @@
 //! Keeps URL construction and payload shapes single-source across Rust clients
 //! (desktop, Web WASM, and future pure-Rust shell) without pulling an HTTP runtime.
 
-use mica_api_types::{AuthResponse, BatchOutcome, View, ViewListResponse, Workspace, WorkspaceListResponse};
+use mica_api_types::{
+  AuthResponse, BatchOutcome, View, ViewListResponse, Workspace, WorkspaceListResponse,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -114,6 +116,10 @@ mod tests {
       "wss://notes.example.com/api/ws/documents/00000000-0000-0000-0000-000000000000?token=tok"
     );
     let http = ApiEndpoints::new("http://localhost:8080");
-    assert!(http.views_events_ws(doc, "t").starts_with("ws://localhost:8080/"));
+    assert!(
+      http
+        .views_events_ws(doc, "t")
+        .starts_with("ws://localhost:8080/")
+    );
   }
 }

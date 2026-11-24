@@ -19,8 +19,8 @@ use crate::model::{BoardEdge, BoardNode, BoardSnapshot, BoardSvgTheme};
 use crate::routing::route_edge;
 use crate::svg::render_board_svg;
 
-use catalog::{DEFAULT_PAN, DEFAULT_VIEWPORT, MAX_HISTORY};
 pub use catalog::{BOARD_SHAPES, BOARD_TECH_ICONS, ShapeMeta, TechIconMeta};
+use catalog::{DEFAULT_PAN, DEFAULT_VIEWPORT, MAX_HISTORY};
 pub use types::{
   ActiveOverlay, ActiveStrokeState, BoardCommand, BoardPatch, BoardTool, DragState, GestureState,
   MarqueeState, PanState, PendingConnector, Rect, ResizeHandle, ResizeState, SnapGuide,
@@ -120,7 +120,8 @@ impl BoardSession {
   /// Parse a board JSON string into a `BoardSession`.
   /// Falls back to `BoardSnapshot::template_whiteboard()` if JSON is invalid.
   pub fn from_json(json: &str) -> Self {
-    let snap = BoardSnapshot::parse_json(json).unwrap_or_else(|_| BoardSnapshot::template_whiteboard());
+    let snap =
+      BoardSnapshot::parse_json(json).unwrap_or_else(|_| BoardSnapshot::template_whiteboard());
     Self::new(snap)
   }
 
@@ -321,9 +322,17 @@ impl BoardSession {
       self.node_index.insert(n.id.clone(), idx);
     }
     for (idx, e) in self.snapshot.edges.iter().enumerate() {
-      self.edges_by_node.entry(e.from_id.clone()).or_default().push(idx);
+      self
+        .edges_by_node
+        .entry(e.from_id.clone())
+        .or_default()
+        .push(idx);
       if e.to_id != e.from_id {
-        self.edges_by_node.entry(e.to_id.clone()).or_default().push(idx);
+        self
+          .edges_by_node
+          .entry(e.to_id.clone())
+          .or_default()
+          .push(idx);
       }
     }
     self.collapsed_descendants = compute_collapsed_descendants(&self.snapshot);
@@ -361,7 +370,10 @@ impl BoardSession {
     updated
   }
 
-  pub(crate) fn reroute_incident_edges(&mut self, node_ids: &[String]) -> HashMap<String, Vec<[f64; 2]>> {
+  pub(crate) fn reroute_incident_edges(
+    &mut self,
+    node_ids: &[String],
+  ) -> HashMap<String, Vec<[f64; 2]>> {
     let mut edge_indices: Vec<usize> = Vec::new();
     for nid in node_ids {
       if let Some(list) = self.edges_by_node.get(nid) {

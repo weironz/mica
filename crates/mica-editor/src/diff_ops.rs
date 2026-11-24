@@ -206,7 +206,11 @@ pub fn compute_move_blocks_target(
   result.extend(moved);
   result.extend(remaining);
 
-  if result.iter().map(|b| &b.id).eq(blocks.iter().map(|b| &b.id)) {
+  if result
+    .iter()
+    .map(|b| &b.id)
+    .eq(blocks.iter().map(|b| &b.id))
+  {
     return None;
   }
   Some(result)

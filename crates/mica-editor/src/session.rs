@@ -147,13 +147,11 @@ impl EditorSession {
           children: vec![empty_id.clone()],
         });
       }
-      parsed.blocks.push(mica_core::Block::new(empty_id, "paragraph"));
+      parsed
+        .blocks
+        .push(mica_core::Block::new(empty_id, "paragraph"));
     }
-    let doc = MicaDoc::from_blocks_with_client_id(
-      &parsed.root_block_id,
-      &parsed.blocks,
-      client_id,
-    );
+    let doc = MicaDoc::from_blocks_with_client_id(&parsed.root_block_id, &parsed.blocks, client_id);
     Self::from_doc(doc)
   }
 
@@ -659,7 +657,8 @@ impl EditorSession {
         return false;
       }
       let old_len = self.blocks[idx].utf16_len();
-      let (new_text, s, e) = utf16_replace_range(&self.blocks[idx].text, start.offset, end.offset, text);
+      let (new_text, s, e) =
+        utf16_replace_range(&self.blocks[idx].text, start.offset, end.offset, text);
       let new_len = utf16_len(&new_text);
       let delta = new_len as i64 - old_len as i64;
       let mut marks = shift_marks(
@@ -732,8 +731,10 @@ impl EditorSession {
     if !end_is_unit {
       let base = s + text_u16;
       for m in self.blocks[end.node].marks() {
-        let ms = (m.start as i64 - e as i64 + base as i64).clamp(base as i64, merged_len as i64) as u32;
-        let me = (m.end as i64 - e as i64 + base as i64).clamp(base as i64, merged_len as i64) as u32;
+        let ms =
+          (m.start as i64 - e as i64 + base as i64).clamp(base as i64, merged_len as i64) as u32;
+        let me =
+          (m.end as i64 - e as i64 + base as i64).clamp(base as i64, merged_len as i64) as u32;
         if me > ms {
           merged_marks.push(m.with_range(ms, me));
         }
@@ -882,10 +883,8 @@ impl EditorSession {
           )
         }
       };
-      let mapped = DocSelection::from_positions(
-        map_pos(range.anchor_pos()),
-        map_pos(range.focus_pos()),
-      );
+      let mapped =
+        DocSelection::from_positions(map_pos(range.anchor_pos()), map_pos(range.focus_pos()));
       self.splice_range(&mapped, &inserted, &[], true, false, ctx);
       return;
     }
@@ -994,7 +993,8 @@ impl EditorSession {
       same_node.then(|| sel.end_pos().offset),
       (sel_start == sel_end).then(|| sel_end.min(new_len)),
     );
-    let inserted_end = (old_end as i64 + new_len as i64 - utf16_len(&old) as i64).max(prefix as i64) as u32;
+    let inserted_end =
+      (old_end as i64 + new_len as i64 - utf16_len(&old) as i64).max(prefix as i64) as u32;
     let inserted_slice = utf16_slice(text, prefix, inserted_end);
     let replace_sel = DocSelection::from_positions(
       DocPosition::new(idx, prefix),
@@ -1369,10 +1369,8 @@ impl EditorSession {
 
     if caret > 0 {
       let prev = utf16_prev_boundary(&self.blocks[idx].text, caret);
-      let del_range = DocSelection::from_positions(
-        DocPosition::new(idx, prev),
-        DocPosition::new(idx, caret),
-      );
+      let del_range =
+        DocSelection::from_positions(DocPosition::new(idx, prev), DocPosition::new(idx, caret));
       self.splice_range(&del_range, "", &[], true, true, ctx);
       self.refresh_trigger_effects(ctx);
       return;
@@ -1472,7 +1470,9 @@ impl EditorSession {
     self.blocks[idx - 1].set_marks(&merged_marks);
     let removed_id = self.blocks.remove(idx).id;
 
-    ctx.ops.push(Self::update_text_data_op(&self.blocks[idx - 1]));
+    ctx
+      .ops
+      .push(Self::update_text_data_op(&self.blocks[idx - 1]));
     ctx.ops.push(DocOp::DeleteBlock {
       block_id: removed_id,
     });
@@ -1507,10 +1507,8 @@ impl EditorSession {
 
     if caret < len {
       let next = utf16_next_boundary(&self.blocks[idx].text, caret);
-      let del_range = DocSelection::from_positions(
-        DocPosition::new(idx, caret),
-        DocPosition::new(idx, next),
-      );
+      let del_range =
+        DocSelection::from_positions(DocPosition::new(idx, caret), DocPosition::new(idx, next));
       self.splice_range(&del_range, "", &[], true, true, ctx);
       return;
     }
@@ -1656,15 +1654,8 @@ impl EditorSession {
     }
     for r in ranges {
       let b = &mut self.blocks[r.block_index];
-      let next_marks = crate::marks::apply_or_remove_mark(
-        &b.marks(),
-        r.start,
-        r.end,
-        kind,
-        href,
-        None,
-        add,
-      );
+      let next_marks =
+        crate::marks::apply_or_remove_mark(&b.marks(), r.start, r.end, kind, href, None, add);
       b.set_marks(&next_marks);
       ctx.ops.push(Self::update_text_data_op(b));
     }
@@ -1734,12 +1725,19 @@ impl EditorSession {
     };
     self.blocks = read_body_blocks(&self.doc, &self.root_block_id);
     if self.blocks.is_empty() {
-      self.blocks.push(EditorBlock::new(self.gen_block_id(), "paragraph", ""));
+      self
+        .blocks
+        .push(EditorBlock::new(self.gen_block_id(), "paragraph", ""));
     }
     ctx.ops = diff_block_ops(&self.root_block_id, prev_blocks, &self.blocks);
     self.selection = restored_sel
       .restore(&self.blocks)
-      .or_else(|| self.selection.as_ref().and_then(|s| s.clamp_and_snap(&self.blocks)))
+      .or_else(|| {
+        self
+          .selection
+          .as_ref()
+          .and_then(|s| s.clamp_and_snap(&self.blocks))
+      })
       .or_else(|| default_initial_selection(&self.blocks));
   }
 
@@ -1816,7 +1814,10 @@ impl EditorSession {
         }
         let mut by_block: BTreeMap<usize, Vec<(u32, u32)>> = BTreeMap::new();
         for m in &matches {
-          by_block.entry(m.block_index).or_default().push((m.start, m.end));
+          by_block
+            .entry(m.block_index)
+            .or_default()
+            .push((m.start, m.end));
         }
         let mut count = 0usize;
         for (idx, spans) in by_block {
@@ -1865,11 +1866,8 @@ impl EditorSession {
       ctx.error = Some("AI edit conflict: empty preview or mismatched root".to_string());
       return;
     }
-    let original: HashMap<&str, &EditorBlock> = snapshot
-      .blocks
-      .iter()
-      .map(|b| (b.id.as_str(), b))
-      .collect();
+    let original: HashMap<&str, &EditorBlock> =
+      snapshot.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
     let positions: HashMap<&str, usize> = self
       .blocks
       .iter()
@@ -1969,8 +1967,8 @@ impl EditorSession {
 
     let mut insert_at = idx + 1;
     for spec in &specs[1..] {
-      let created = EditorBlock::new(self.gen_block_id(), &spec.kind, &spec.text)
-        .with_data(spec.data.clone());
+      let created =
+        EditorBlock::new(self.gen_block_id(), &spec.kind, &spec.text).with_data(spec.data.clone());
       ctx.ops.push(self.insert_op(&created, insert_at));
       self.blocks.insert(insert_at, created);
       insert_at += 1;

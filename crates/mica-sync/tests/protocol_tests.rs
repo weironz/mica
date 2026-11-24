@@ -1,14 +1,14 @@
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use mica_core::{Block, MicaDoc};
 use mica_sync::{
-  derive_sync_phase, frame_ping, frame_presence_update, frame_sync_bootstrap, frame_sync_pull,
-  frame_sync_push, is_empty_yrs_update, local_update_retry_delay_ms, merge_run_length,
-  merge_yrs_updates, push_slice, reconnect_backoff_ms, repair_sv_for, IdbMirrorOp, OutboxEntry,
-  PresenceUser, RemoteEntry, SyncCursor, SyncEffect, SyncEngine, SyncEvent, SyncPhase, TimerKind,
-  EMPTY_YRS_UPDATE, MERGE_MAX_BYTES,
+  EMPTY_YRS_UPDATE, IdbMirrorOp, MERGE_MAX_BYTES, OutboxEntry, PresenceUser, RemoteEntry,
+  SyncCursor, SyncEffect, SyncEngine, SyncEvent, SyncPhase, TimerKind, derive_sync_phase,
+  frame_ping, frame_presence_update, frame_sync_bootstrap, frame_sync_pull, frame_sync_push,
+  is_empty_yrs_update, local_update_retry_delay_ms, merge_run_length, merge_yrs_updates,
+  push_slice, reconnect_backoff_ms, repair_sv_for,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn sample_doc() -> MicaDoc {
   MicaDoc::from_blocks(
@@ -55,11 +55,31 @@ fn push_slice_respects_window_and_frees_rejected_slots() {
     rejected: bool,
   }
   let queue = vec![
-    Entry { id: 1, sent: true, rejected: false },
-    Entry { id: 2, sent: true, rejected: true },  // rejected: does not occupy slot
-    Entry { id: 3, sent: false, rejected: false },
-    Entry { id: 4, sent: false, rejected: false },
-    Entry { id: 5, sent: false, rejected: false },
+    Entry {
+      id: 1,
+      sent: true,
+      rejected: false,
+    },
+    Entry {
+      id: 2,
+      sent: true,
+      rejected: true,
+    }, // rejected: does not occupy slot
+    Entry {
+      id: 3,
+      sent: false,
+      rejected: false,
+    },
+    Entry {
+      id: 4,
+      sent: false,
+      rejected: false,
+    },
+    Entry {
+      id: 5,
+      sent: false,
+      rejected: false,
+    },
   ];
   let slice = push_slice(&queue, |e| e.sent, |e| e.sent && !e.rejected, 3);
   let ids: Vec<usize> = slice.into_iter().map(|e| e.id).collect();

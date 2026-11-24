@@ -1,16 +1,16 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use mica_core::{Block, MicaDoc};
 use mica_sync::{
-  IdbHydrateSnapshot, IdbMirrorOp, LogSizes, MemoryMirrorStorage, OutboxEntry, PresenceUser,
-  StorageError, StoredDoc, SyncConfig, SyncCursor, SyncEffect, SyncEngine, SyncEvent, SyncPhase,
-  SyncStorage, TimerKind, COMPACT_CHECK_EVERY, COMPACT_THRESHOLD, LAG_RESYNC_DEBOUNCE_MS,
-  MAX_AUTO_REHEAL, MAX_PUSH_REJECTS, MAX_REPAIRS, MERGE_MAX_BYTES, PING_EVERY_MS, PUSH_WINDOW,
+  COMPACT_CHECK_EVERY, COMPACT_THRESHOLD, IdbHydrateSnapshot, IdbMirrorOp, LAG_RESYNC_DEBOUNCE_MS,
+  LogSizes, MAX_AUTO_REHEAL, MAX_PUSH_REJECTS, MAX_REPAIRS, MERGE_MAX_BYTES, MemoryMirrorStorage,
+  OutboxEntry, PING_EVERY_MS, PUSH_WINDOW, PresenceUser, StorageError, StoredDoc, SyncConfig,
+  SyncCursor, SyncEffect, SyncEngine, SyncEvent, SyncPhase, SyncStorage, TimerKind,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn make_doc(text: &str) -> MicaDoc {
   MicaDoc::from_blocks(
@@ -255,7 +255,10 @@ fn corrupt_local_cache_falls_through_to_cold_bootstrap() {
 
 #[test]
 fn io_failure_during_seed_emits_fault_and_falls_back_to_cold_bootstrap() {
-  let mut flaky = FlakyStorage::new(Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+  let mut flaky = FlakyStorage::new(
+    Arc::new(AtomicBool::new(false)),
+    Arc::new(AtomicBool::new(false)),
+  );
   flaky.fail_load_io = true;
   let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(flaky)));
 
@@ -270,7 +273,10 @@ fn io_failure_during_seed_emits_fault_and_falls_back_to_cold_bootstrap() {
 #[test]
 fn rebootstrap_merges_unconditionally_even_when_base_rid_not_ahead() {
   let mut server_doc = make_doc("base");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 20);
 
   // Server has an extra edit, but reports base_rid == 15 (< cursor 20).
@@ -284,7 +290,10 @@ fn rebootstrap_merges_unconditionally_even_when_base_rid_not_ahead() {
     })
     .to_string(),
   });
-  assert!(e.iter().any(|x| matches!(x, SyncEffect::RemoteBlocksChanged { .. })));
+  assert!(
+    e.iter()
+      .any(|x| matches!(x, SyncEffect::RemoteBlocksChanged { .. }))
+  );
   // Cursor did not regress, yet content merged (red line #1).
   assert_eq!(engine.cursor(), 20);
   assert_eq!(engine.doc().unwrap().to_blocks()[1].text, "base+backfill");
@@ -295,7 +304,10 @@ fn rebootstrap_merges_unconditionally_even_when_base_rid_not_ahead() {
 #[test]
 fn sync_updates_paginates_while_cursor_advances_and_stops_on_empty() {
   let mut server_doc = make_doc("p");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   let u2 = edit_doc(&mut server_doc, "2");
@@ -332,7 +344,10 @@ fn sync_updates_paginates_while_cursor_advances_and_stops_on_empty() {
 #[test]
 fn sync_updates_stops_pagination_when_cursor_does_not_advance() {
   let mut server_doc = make_doc("p");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 10);
 
   // Duplicate rid <= cursor (10) -> no forward cursor progress -> no follow-up pull.
@@ -351,7 +366,10 @@ fn sync_updates_stops_pagination_when_cursor_does_not_advance() {
 #[test]
 fn remote_content_vs_structural_changes_and_json_accessors() {
   let mut server_doc = make_doc("alpha");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   // Content edit on p1 -> changed_ids == Some(["p1"]).
@@ -393,15 +411,17 @@ fn remote_content_vs_structural_changes_and_json_accessors() {
   assert_eq!(engine.changed_blocks_json(), None);
   let all: Vec<Value> = serde_json::from_str(&engine.all_blocks_json()).unwrap();
   assert_eq!(all.len(), 3);
-  let by_id: Vec<Value> =
-    serde_json::from_str(&engine.blocks_by_id_json(&["p2".into()])).unwrap();
+  let by_id: Vec<Value> = serde_json::from_str(&engine.blocks_by_id_json(&["p2".into()])).unwrap();
   assert_eq!(by_id[0]["text"], "beta");
 }
 
 #[test]
 fn ridless_sync_update_applies_without_persisting_or_advancing_cursor() {
   let mut server_doc = make_doc("hi");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 5);
 
   let u = edit_doc(&mut server_doc, "!");
@@ -419,7 +439,10 @@ fn ridless_sync_update_applies_without_persisting_or_advancing_cursor() {
 #[test]
 fn durable_outbox_64_window_pacing_on_demerged_backlog() {
   let server_doc = make_doc("w");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   // Disconnect and create 70 offline edits.
@@ -471,7 +494,8 @@ fn durable_outbox_64_window_pacing_on_demerged_backlog() {
   for clock in 2..=70 {
     engine.handle_event(SyncEvent::SocketFrame {
       epoch: 2,
-      json: json!({ "type": "sync.ack", "ack_id": clock.to_string(), "rid": clock + 1 }).to_string(),
+      json: json!({ "type": "sync.ack", "ack_id": clock.to_string(), "rid": clock + 1 })
+        .to_string(),
     });
   }
   assert!(engine.outbox_empty());
@@ -537,7 +561,10 @@ fn online_only_outbox_window_restore_and_rejected_slot_release() {
 #[test]
 fn backlog_under_8_pushes_individually_and_8_or_more_merges() {
   let server_doc = make_doc("m");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
   engine.handle_event(SyncEvent::SocketClosed {
     epoch: 1,
@@ -647,7 +674,10 @@ fn issue_159_live_edit_during_capped_merge_window_does_not_skip_unsent_clocks() 
 #[test]
 fn poison_edit_demerge_isolates_bad_clock_and_stalls_after_budget() {
   let server_doc = make_doc("p");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
   engine.handle_event(SyncEvent::SocketClosed {
     epoch: 1,
@@ -721,7 +751,14 @@ fn poison_edit_demerge_isolates_bad_clock_and_stalls_after_budget() {
   let live = engine.handle_event(SyncEvent::ApplyLocalDiff(d11));
   assert!(ws_pushes(&live).is_empty());
   assert_eq!(
-    engine.storage().unwrap().outbox_after(4).unwrap().last().unwrap().clock,
+    engine
+      .storage()
+      .unwrap()
+      .outbox_after(4)
+      .unwrap()
+      .last()
+      .unwrap()
+      .clock,
     11
   );
 }
@@ -762,7 +799,10 @@ fn corrupt_entry_in_backlog_falls_back_to_individual_pushes() {
 #[test]
 fn out_of_order_acked_ahead_advances_contiguously() {
   let server_doc = make_doc("o");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   for ch in ["1", "2", "3"] {
@@ -798,7 +838,10 @@ fn out_of_order_acked_ahead_advances_contiguously() {
 fn b11_repair_on_missing_ack_is_capped_at_3_and_resets_on_reconnect() {
   let server_doc = make_doc("r");
   let empty_sv = STANDARD.encode(MicaDoc::from_update(&[0, 0]).unwrap().state_vector());
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   for i in 1..=5 {
@@ -916,7 +959,10 @@ fn b11_repair_on_sync_base_ahead_only_when_outbox_empty() {
 #[test]
 fn integrity_fault_reheals_up_to_3_times_then_circuit_breaks_and_resets_on_good_base() {
   let server_doc = make_doc("ok");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   let bad_update = json!({
@@ -964,12 +1010,18 @@ fn integrity_fault_reheals_up_to_3_times_then_circuit_breaks_and_resets_on_good_
     reason: "bad_remote_update".into(),
     count: 1,
   }));
-  assert_eq!(ws_frames(&after_reset), vec![json!({ "type": "sync.bootstrap" })]);
+  assert_eq!(
+    ws_frames(&after_reset),
+    vec![json!({ "type": "sync.bootstrap" })]
+  );
 }
 
 #[test]
 fn bad_base_on_cold_start_emits_fault_and_retries() {
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   engine.handle_event(SyncEvent::Connect);
   engine.handle_event(SyncEvent::SocketOpened { epoch: 1 });
 
@@ -993,7 +1045,10 @@ fn bad_base_on_cold_start_emits_fault_and_retries() {
 #[test]
 fn mirror_write_failed_marks_broken_and_next_remote_update_self_heals_via_save_base() {
   let mut server_doc = make_doc("web");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   let e_fail = engine.handle_event(SyncEvent::MirrorWriteFailed);
@@ -1014,7 +1069,10 @@ fn mirror_write_failed_marks_broken_and_next_remote_update_self_heals_via_save_b
     })
     .to_string(),
   });
-  assert!(!engine.storage().unwrap().is_broken(), "save_base recovered broken mirror");
+  assert!(
+    !engine.storage().unwrap().is_broken(),
+    "save_base recovered broken mirror"
+  );
   assert!(e_heal.contains(&SyncEffect::Fault {
     reason: "persist_failed".into(),
     count: 2,
@@ -1093,7 +1151,10 @@ fn auto_compaction_fires_on_32nd_append_over_256_rows() {
 #[test]
 fn compact_now_folds_and_emits_compact_mirror_op() {
   let mut server_doc = make_doc("fold");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   let u2 = edit_doc(&mut server_doc, "+end");
@@ -1195,7 +1256,10 @@ fn flush_for_exit_persists_pending_diff_without_socket_or_compaction() {
   // Storage becomes healthy right before exit.
   fail_outbox.store(false, Ordering::SeqCst);
   let exit_effects = engine.handle_event(SyncEvent::FlushForExit);
-  assert!(ws_frames(&exit_effects).is_empty(), "no WS send on FlushForExit");
+  assert!(
+    ws_frames(&exit_effects).is_empty(),
+    "no WS send on FlushForExit"
+  );
   assert!(exit_effects.contains(&SyncEffect::CancelTimer {
     kind: TimerKind::LocalUpdateRetry,
   }));
@@ -1209,11 +1273,22 @@ fn flush_for_exit_persists_pending_diff_without_socket_or_compaction() {
 #[test]
 fn empty_local_diff_is_ignored() {
   let server_doc = make_doc("noop");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
-  assert!(engine.handle_event(SyncEvent::ApplyLocalDiff(vec![])).is_empty());
-  assert!(engine.handle_event(SyncEvent::ApplyLocalDiff(vec![0, 0])).is_empty());
+  assert!(
+    engine
+      .handle_event(SyncEvent::ApplyLocalDiff(vec![]))
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::ApplyLocalDiff(vec![0, 0]))
+      .is_empty()
+  );
   assert!(engine.outbox_empty());
 }
 
@@ -1222,7 +1297,10 @@ fn empty_local_diff_is_ignored() {
 #[test]
 fn heartbeat_pings_refreshes_on_pong_and_closes_stale_socket_unix_epoch_clock() {
   let server_doc = make_doc("hb");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   // Use realistic Unix epoch timestamps (~2026) to prove zero clock-origin assumptions.
@@ -1329,7 +1407,10 @@ fn reconnect_backoff_escalates_and_resets_after_valid_frame() {
 #[test]
 fn stale_epoch_events_are_silently_ignored() {
   let server_doc = make_doc("ep");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   // Move to epoch 2.
@@ -1339,40 +1420,54 @@ fn stale_epoch_events_are_silently_ignored() {
   assert_eq!(engine.epoch(), 2);
 
   // Old epoch 1 events must produce zero effects and mutate nothing.
-  assert!(engine.handle_event(SyncEvent::SocketOpened { epoch: 1 }).is_empty());
-  assert!(engine
-    .handle_event(SyncEvent::SocketFrame {
-      epoch: 1,
-      json: r#"{"type":"pong"}"#.into(),
-    })
-    .is_empty());
-  assert!(engine
-    .handle_event(SyncEvent::SocketClosed {
-      epoch: 1,
-      reason: "old".into(),
-    })
-    .is_empty());
-  assert!(engine
-    .handle_event(SyncEvent::Tick {
-      now_ms: 99_999,
-      timer_kind: TimerKind::Heartbeat,
-      epoch: 1,
-    })
-    .is_empty());
-  assert!(engine
-    .handle_event(SyncEvent::Tick {
-      now_ms: 99_999,
-      timer_kind: TimerKind::Reconnect,
-      epoch: 1,
-    })
-    .is_empty());
-  assert!(engine
-    .handle_event(SyncEvent::Tick {
-      now_ms: 99_999,
-      timer_kind: TimerKind::LagResync,
-      epoch: 1,
-    })
-    .is_empty());
+  assert!(
+    engine
+      .handle_event(SyncEvent::SocketOpened { epoch: 1 })
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::SocketFrame {
+        epoch: 1,
+        json: r#"{"type":"pong"}"#.into(),
+      })
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::SocketClosed {
+        epoch: 1,
+        reason: "old".into(),
+      })
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::Tick {
+        now_ms: 99_999,
+        timer_kind: TimerKind::Heartbeat,
+        epoch: 1,
+      })
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::Tick {
+        now_ms: 99_999,
+        timer_kind: TimerKind::Reconnect,
+        epoch: 1,
+      })
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::Tick {
+        now_ms: 99_999,
+        timer_kind: TimerKind::LagResync,
+        epoch: 1,
+      })
+      .is_empty()
+  );
   assert_eq!(engine.epoch(), 2);
   assert!(!engine.is_online());
 }
@@ -1380,7 +1475,10 @@ fn stale_epoch_events_are_silently_ignored() {
 #[test]
 fn lag_notice_resyncs_immediately_and_debounces_burst_with_trailing_edge() {
   let server_doc = make_doc("lag");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   let lag_frame = json!({
@@ -1536,18 +1634,22 @@ fn malformed_json_and_non_object_frames_are_ignored() {
   engine.handle_event(SyncEvent::Connect);
   engine.handle_event(SyncEvent::SocketOpened { epoch: 1 });
 
-  assert!(engine
-    .handle_event(SyncEvent::SocketFrame {
-      epoch: 1,
-      json: "not json{".into(),
-    })
-    .is_empty());
-  assert!(engine
-    .handle_event(SyncEvent::SocketFrame {
-      epoch: 1,
-      json: "[1, 2, 3]".into(),
-    })
-    .is_empty());
+  assert!(
+    engine
+      .handle_event(SyncEvent::SocketFrame {
+        epoch: 1,
+        json: "not json{".into(),
+      })
+      .is_empty()
+  );
+  assert!(
+    engine
+      .handle_event(SyncEvent::SocketFrame {
+        epoch: 1,
+        json: "[1, 2, 3]".into(),
+      })
+      .is_empty()
+  );
   assert!(!engine.is_online());
 }
 
@@ -1605,10 +1707,15 @@ fn two_replicas_offline_concurrent_edits_converge_identically() {
   desktop.handle_event(SyncEvent::SocketOpened { epoch: 2 });
   let d_effects = desktop.handle_event(SyncEvent::SocketFrame {
     epoch: 2,
-    json: json!({ "type": "sync.base", "base": STANDARD.encode(&initial_state), "base_rid": 1 }).to_string(),
+    json: json!({ "type": "sync.base", "base": STANDARD.encode(&initial_state), "base_rid": 1 })
+      .to_string(),
   });
   let d_push_bytes = STANDARD
-    .decode(ws_pushes(&d_effects)[0]["payload"]["update"].as_str().unwrap())
+    .decode(
+      ws_pushes(&d_effects)[0]["payload"]["update"]
+        .as_str()
+        .unwrap(),
+    )
     .unwrap();
   hub_doc.apply_update(&d_push_bytes).unwrap();
   desktop.handle_event(SyncEvent::SocketFrame {
@@ -1620,10 +1727,16 @@ fn two_replicas_offline_concurrent_edits_converge_identically() {
   web.handle_event(SyncEvent::SocketOpened { epoch: 2 });
   let w_effects = web.handle_event(SyncEvent::SocketFrame {
     epoch: 2,
-    json: json!({ "type": "sync.base", "base": STANDARD.encode(hub_doc.encode_state()), "base_rid": 2 }).to_string(),
+    json:
+      json!({ "type": "sync.base", "base": STANDARD.encode(hub_doc.encode_state()), "base_rid": 2 })
+        .to_string(),
   });
   let w_push_bytes = STANDARD
-    .decode(ws_pushes(&w_effects)[0]["payload"]["update"].as_str().unwrap())
+    .decode(
+      ws_pushes(&w_effects)[0]["payload"]["update"]
+        .as_str()
+        .unwrap(),
+    )
     .unwrap();
   hub_doc.apply_update(&w_push_bytes).unwrap();
   web.handle_event(SyncEvent::SocketFrame {
@@ -1642,8 +1755,14 @@ fn two_replicas_offline_concurrent_edits_converge_identically() {
     .to_string(),
   });
 
-  assert_eq!(desktop.doc().unwrap().to_blocks()[1].text, "[Desktop] Hello [Web]");
-  assert_eq!(web.doc().unwrap().to_blocks()[1].text, "[Desktop] Hello [Web]");
+  assert_eq!(
+    desktop.doc().unwrap().to_blocks()[1].text,
+    "[Desktop] Hello [Web]"
+  );
+  assert_eq!(
+    web.doc().unwrap().to_blocks()[1].text,
+    "[Desktop] Hello [Web]"
+  );
   assert_eq!(hub_doc.to_blocks()[1].text, "[Desktop] Hello [Web]");
   assert_eq!(desktop.phase(), SyncPhase::Synced);
   assert_eq!(web.phase(), SyncPhase::Synced);
@@ -1696,13 +1815,15 @@ fn presence_update_and_clear_cursor_payload() {
     })
     .to_string(),
   });
-  assert!(e_peer.contains(&SyncEffect::PresenceChanged(vec![PresenceUser {
-    connection_id: "conn-2".into(),
-    user_id: "u2".into(),
-    name: "Carol".into(),
-    cursor_block_id: Some("p1".into()),
-    cursor_offset: Some(2),
-  }])));
+  assert!(
+    e_peer.contains(&SyncEffect::PresenceChanged(vec![PresenceUser {
+      connection_id: "conn-2".into(),
+      user_id: "u2".into(),
+      name: "Carol".into(),
+      cursor_block_id: Some("p1".into()),
+      cursor_offset: Some(2),
+    }]))
+  );
 
   // Set then clear local cursor -> cleared frame omits cursor key.
   engine.handle_event(SyncEvent::SendPresenceCursor {
@@ -1722,7 +1843,10 @@ fn presence_update_and_clear_cursor_payload() {
 #[test]
 fn sync_updates_batch_with_bad_item_persists_prefix_faults_and_halts_pagination() {
   let mut server_doc = make_doc("batch");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 1);
 
   let u2 = edit_doc(&mut server_doc, "+good");
@@ -1819,16 +1943,23 @@ fn local_update_retry_caps_at_5_attempts() {
     timer_kind: TimerKind::LocalUpdateRetry,
     epoch: 1,
   });
-  assert!(!final_retry
-    .iter()
-    .any(|e| matches!(e, SyncEffect::ScheduleTimer { kind: TimerKind::LocalUpdateRetry, .. })));
+  assert!(!final_retry.iter().any(|e| matches!(
+    e,
+    SyncEffect::ScheduleTimer {
+      kind: TimerKind::LocalUpdateRetry,
+      ..
+    }
+  )));
   assert!(!engine.outbox_empty());
 }
 
 #[test]
 fn bad_base_on_rebootstrap_preserves_existing_doc_and_emits_fault() {
   let server_doc = make_doc("intact");
-  let mut engine = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine, &server_doc, 5);
 
   let e = engine.handle_event(SyncEvent::SocketFrame {
@@ -1851,7 +1982,10 @@ fn bad_base_on_rebootstrap_preserves_existing_doc_and_emits_fault() {
 #[test]
 fn memory_mirror_snapshot_rehydrate_simulates_web_tab_reload() {
   let mut server_doc = make_doc("tab1");
-  let mut engine1 = SyncEngine::new(SyncConfig::default(), Some(Box::new(MemoryMirrorStorage::new())));
+  let mut engine1 = SyncEngine::new(
+    SyncConfig::default(),
+    Some(Box::new(MemoryMirrorStorage::new())),
+  );
   bootstrap_engine(&mut engine1, &server_doc, 1);
 
   let u2 = edit_doc(&mut server_doc, " + remote");

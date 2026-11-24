@@ -9,7 +9,11 @@ use mica_editor::*;
 use serde_json::json;
 
 fn caret(session: &EditorSession) -> DocPosition {
-  match session.selection().expect("selection expected").normalized() {
+  match session
+    .selection()
+    .expect("selection expected")
+    .normalized()
+  {
     NormalizedSelection::Text { end, .. } => end,
     other => panic!("expected text selection, got {other:?}"),
   }
@@ -353,9 +357,21 @@ fn paste_multiline_markdown_creates_structured_blocks_and_is_single_undo() {
       text: "## Section\n\n- Alpha\n- Beta\n\n```rust\nlet x = 1;\n```".into(),
     },
   });
-  assert!(s.blocks().iter().any(|b| b.kind == "heading" && b.text == "Section"));
-  assert!(s.blocks().iter().any(|b| b.kind == "bulleted_list" && b.text == "Alpha"));
-  assert!(s.blocks().iter().any(|b| b.kind == "code_block" && b.text.contains("let x = 1;")));
+  assert!(
+    s.blocks()
+      .iter()
+      .any(|b| b.kind == "heading" && b.text == "Section")
+  );
+  assert!(
+    s.blocks()
+      .iter()
+      .any(|b| b.kind == "bulleted_list" && b.text == "Alpha")
+  );
+  assert!(
+    s.blocks()
+      .iter()
+      .any(|b| b.kind == "code_block" && b.text.contains("let x = 1;"))
+  );
 
   s.dispatch(EditorCommand::Undo);
   assert_eq!(s.blocks().len(), 1);
@@ -412,7 +428,11 @@ fn paste_html_tree_preserves_headings_links_and_lists() {
       plain: "HTML Title\nVisit Mica".into(),
     },
   });
-  assert!(s.blocks().iter().any(|b| b.kind == "heading" && b.text == "HTML Title"));
+  assert!(
+    s.blocks()
+      .iter()
+      .any(|b| b.kind == "heading" && b.text == "HTML Title")
+  );
   let item = s
     .blocks()
     .iter()
@@ -469,7 +489,10 @@ fn slash_and_page_link_triggers_respect_word_boundaries() {
   // Mid-URL slash must NOT trigger slash menu.
   assert!(detect_slash_trigger(&blk("https://mica.dev/docs"), 21).is_none());
   // Start of line or after space triggers slash menu.
-  assert_eq!(detect_slash_trigger(&blk("/tbl"), 4), Some((0, 4, "tbl".into())));
+  assert_eq!(
+    detect_slash_trigger(&blk("/tbl"), 4),
+    Some((0, 4, "tbl".into()))
+  );
   assert_eq!(
     detect_slash_trigger(&blk("hi /code"), 8),
     Some((3, 8, "code".into()))
@@ -493,7 +516,7 @@ fn caret_tracks_cleanly_after_typing_and_splitting_chinese_text() {
     selection: Some(DocSelection::caret(0, 2)),
   });
   s.dispatch(EditorCommand::InsertText {
-    text: "😀".into(),
+    text: "😀".into()
   });
   assert_eq!(s.blocks()[0].text, "你好😀世界");
   assert_eq!(caret(&s), DocPosition::new(0, 4));

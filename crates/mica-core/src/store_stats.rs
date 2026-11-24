@@ -591,17 +591,57 @@ mod tests {
 
     // Manual creation + two edits in the same hour and next hour on same doc
     store
-      .record_writing_activity_at("local", "ws-1", "doc-1", ActivitySource::Manual, true, 1, 50, 0, now - 7_200)
+      .record_writing_activity_at(
+        "local",
+        "ws-1",
+        "doc-1",
+        ActivitySource::Manual,
+        true,
+        1,
+        50,
+        0,
+        now - 7_200,
+      )
       .unwrap();
     store
-      .record_writing_activity_at("local", "ws-1", "doc-1", ActivitySource::Manual, false, 2, 30, 10, now - 7_100)
+      .record_writing_activity_at(
+        "local",
+        "ws-1",
+        "doc-1",
+        ActivitySource::Manual,
+        false,
+        2,
+        30,
+        10,
+        now - 7_100,
+      )
       .unwrap();
     store
-      .record_writing_activity_at("local", "ws-1", "doc-1", ActivitySource::Manual, false, 1, 20, 5, now - 3_600)
+      .record_writing_activity_at(
+        "local",
+        "ws-1",
+        "doc-1",
+        ActivitySource::Manual,
+        false,
+        1,
+        20,
+        5,
+        now - 3_600,
+      )
       .unwrap();
     // Bulk import in same workspace
     store
-      .record_writing_activity_at("local", "ws-1", "doc-imp", ActivitySource::Import, true, 0, 800, 0, now - 1_800)
+      .record_writing_activity_at(
+        "local",
+        "ws-1",
+        "doc-imp",
+        ActivitySource::Import,
+        true,
+        0,
+        800,
+        0,
+        now - 1_800,
+      )
       .unwrap();
 
     let excl = store

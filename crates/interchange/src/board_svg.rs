@@ -458,7 +458,11 @@ mod tests {
       .filter(|e| e.name.starts_with("assets/") && e.name.ends_with(".svg"))
       .map(|e| e.name.as_str())
       .collect();
-    assert_eq!(svg_names.len(), 3, "1 plain svg + 2 distinct board svgs: {svg_names:?}");
+    assert_eq!(
+      svg_names.len(),
+      3,
+      "1 plain svg + 2 distinct board svgs: {svg_names:?}"
+    );
     let md_root = String::from_utf8(
       md_entries
         .iter()
@@ -477,9 +481,18 @@ mod tests {
         .clone(),
     )
     .unwrap();
-    assert!(md_root.contains("![系统架构](assets/系统架构.svg)"), "{md_root}");
-    assert!(md_root.contains("{broken json"), "malformed board fence must be preserved");
-    assert!(md_nested.contains("![系统架构](../assets/系统架构-1.svg)"), "{md_nested}");
+    assert!(
+      md_root.contains("![系统架构](assets/系统架构.svg)"),
+      "{md_root}"
+    );
+    assert!(
+      md_root.contains("{broken json"),
+      "malformed board fence must be preserved"
+    );
+    assert!(
+      md_nested.contains("![系统架构](../assets/系统架构-1.svg)"),
+      "{md_nested}"
+    );
 
     // 3. Re-importing the portable Markdown ZIP restores editable ```mica-board blocks losslessly!
     let zip_bytes = build_zip(&md_entries);
@@ -489,9 +502,15 @@ mod tests {
     let imported_root = plan.pages.iter().find(|p| p.title == "首页").unwrap();
     let root_boards = extract_board_snapshots(&imported_root.markdown);
     assert_eq!(root_boards, vec![b1]);
-    assert!(imported_root.markdown.contains("![普通图](assets/plain.svg)"));
     assert!(
-      imported_root.markdown.contains("![字面示例](assets/系统架构.svg)"),
+      imported_root
+        .markdown
+        .contains("![普通图](assets/plain.svg)")
+    );
+    assert!(
+      imported_root
+        .markdown
+        .contains("![字面示例](assets/系统架构.svg)"),
       "image example inside fenced code block must not be rewritten"
     );
     assert!(imported_root.markdown.contains("{broken json"));
@@ -525,7 +544,11 @@ mod tests {
     let zip_bytes = build_zip(&entries);
     let plan = plan_import(read_zip(&zip_bytes).unwrap(), false, ImportMode::AsIs).unwrap();
     let page = &plan.pages[0];
-    assert!(page.markdown.contains("````mica-board"), "{}", page.markdown);
+    assert!(
+      page.markdown.contains("````mica-board"),
+      "{}",
+      page.markdown
+    );
     assert_eq!(extract_board_snapshots(&page.markdown), vec![board]);
   }
 }

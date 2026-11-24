@@ -8,7 +8,11 @@ use mica_editor::*;
 use serde_json::json;
 
 fn caret(session: &EditorSession) -> DocPosition {
-  match session.selection().expect("selection expected").normalized() {
+  match session
+    .selection()
+    .expect("selection expected")
+    .normalized()
+  {
     NormalizedSelection::Text { end, .. } => end,
     other => panic!("expected text selection, got {other:?}"),
   }

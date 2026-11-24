@@ -71,23 +71,16 @@ pub enum StorageError {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum IdbMirrorOp {
   /// Atomically write `base` + `cursor`.
-  SaveBase {
-    state: Vec<u8>,
-    cursor: SyncCursor,
-  },
+  SaveBase { state: Vec<u8>, cursor: SyncCursor },
   /// Atomically write the full `outbox` row list snapshot.
-  AppendOutbox {
-    rows: Vec<OutboxEntry>,
-  },
+  AppendOutbox { rows: Vec<OutboxEntry> },
   /// Atomically write the full `remote` row list + `cursor` snapshot.
   AppendRemote {
     rows: Vec<RemoteEntry>,
     cursor: SyncCursor,
   },
   /// Atomically write the `cursor` snapshot.
-  AdvanceCursor {
-    cursor: SyncCursor,
-  },
+  AdvanceCursor { cursor: SyncCursor },
   /// Atomically write the folded `base`, cleared `remote`, trimmed `outbox`,
   /// and `cursor`.
   Compact {

@@ -80,8 +80,8 @@ mod imp {
   use std::task::{Context, Poll, Waker};
 
   use mica_sync::{IdbHydrateSnapshot, IdbMirrorOp};
-  use wasm_bindgen::{JsCast, JsValue};
   use wasm_bindgen::closure::Closure;
+  use wasm_bindgen::{JsCast, JsValue};
   use wasm_bindgen_futures::{JsFuture, future_to_promise};
   use web_sys::{
     Event, IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode, IdbVersionChangeEvent,
@@ -195,16 +195,17 @@ mod imp {
       _onupgrade: None,
     }));
 
-    let onupgrade = Closure::<dyn FnMut(IdbVersionChangeEvent)>::new(move |ev: IdbVersionChangeEvent| {
-      if let Some(target) = ev.target()
-        && let Ok(req) = target.dyn_into::<IdbOpenDbRequest>()
-        && let Ok(val) = req.result()
-        && let Ok(db) = val.dyn_into::<IdbDatabase>()
-        && !db.object_store_names().contains(STORE_DOCS)
-      {
-        let _ = db.create_object_store(STORE_DOCS);
-      }
-    });
+    let onupgrade =
+      Closure::<dyn FnMut(IdbVersionChangeEvent)>::new(move |ev: IdbVersionChangeEvent| {
+        if let Some(target) = ev.target()
+          && let Ok(req) = target.dyn_into::<IdbOpenDbRequest>()
+          && let Ok(val) = req.result()
+          && let Ok(db) = val.dyn_into::<IdbDatabase>()
+          && !db.object_store_names().contains(STORE_DOCS)
+        {
+          let _ = db.create_object_store(STORE_DOCS);
+        }
+      });
 
     let req_ok = open_req.clone();
     let st_ok = Rc::clone(&state);
@@ -287,7 +288,11 @@ mod imp {
     });
 
     let promise_val = req_fn
-      .call2(&locks, &JsValue::from_str(lock_name), cb.as_ref().unchecked_ref())
+      .call2(
+        &locks,
+        &JsValue::from_str(lock_name),
+        cb.as_ref().unchecked_ref(),
+      )
       .map_err(|e| format!("navigator.locks.request failed: {e:?}"))?;
     let promise: js_sys::Promise = promise_val
       .dyn_into()
@@ -424,7 +429,10 @@ mod tests {
 
     // Offline edit while disconnected:
     let sv0 = engine1.doc().unwrap().state_vector();
-    engine1.doc_mut().unwrap().text_insert("b1", 14, " + offline edit");
+    engine1
+      .doc_mut()
+      .unwrap()
+      .text_insert("b1", 14, " + offline edit");
     let diff = engine1.doc().unwrap().encode_diff(&sv0).unwrap();
     let effects = engine1.handle_event(SyncEvent::ApplyLocalDiff(diff));
     for ef in effects {
@@ -447,8 +455,19 @@ mod tests {
       Some(Box::new(storage2)),
     );
     let boot_effects = engine2.handle_event(SyncEvent::Connect);
-    assert!(boot_effects.iter().any(|e| matches!(e, SyncEffect::Ready { .. })));
-    assert!(!engine2.outbox_empty(), "offline edit must survive reload in IDB outbox");
-    assert!(engine2.all_blocks_json().contains("Before offline + offline edit"));
+    assert!(
+      boot_effects
+        .iter()
+        .any(|e| matches!(e, SyncEffect::Ready { .. }))
+    );
+    assert!(
+      !engine2.outbox_empty(),
+      "offline edit must survive reload in IDB outbox"
+    );
+    assert!(
+      engine2
+        .all_blocks_json()
+        .contains("Before offline + offline edit")
+    );
   }
 }

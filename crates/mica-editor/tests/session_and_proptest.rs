@@ -7,7 +7,11 @@ use proptest::prelude::*;
 use serde_json::json;
 
 fn caret(session: &EditorSession) -> DocPosition {
-  match session.selection().expect("selection expected").normalized() {
+  match session
+    .selection()
+    .expect("selection expected")
+    .normalized()
+  {
     NormalizedSelection::Text { end, .. } => end,
     other => panic!("expected text selection, got {other:?}"),
   }
@@ -197,9 +201,8 @@ fn paste_markdown_copy_cut_and_set_link() {
     },
   });
   assert!(s.blocks()[0].text.contains("Hello Rust"));
-  let rust_start = utf16_len(
-    &s.blocks()[0].text[..s.blocks()[0].text.find("Rust").expect("Rust present")],
-  );
+  let rust_start =
+    utf16_len(&s.blocks()[0].text[..s.blocks()[0].text.find("Rust").expect("Rust present")]);
   assert!(range_has_mark(
     &s.blocks()[0].marks(),
     rust_start,

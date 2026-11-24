@@ -28,19 +28,19 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use mica_core::MicaDoc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::protocol::{
-  derive_sync_phase, frame_ping, frame_presence_update, frame_sync_bootstrap, frame_sync_pull,
-  frame_sync_push, is_empty_yrs_update, local_update_retry_delay_ms, merge_run_length,
-  merge_yrs_updates, push_slice, reconnect_backoff_ms, repair_sv_for, PresenceUser, SyncPhase,
-  TimerKind, COMPACT_CHECK_EVERY, COMPACT_THRESHOLD, LAG_RESYNC_DEBOUNCE_MS,
-  LOCAL_UPDATE_MAX_RETRIES, MAX_AUTO_REHEAL, MAX_PUSH_REJECTS, MAX_REPAIRS, MERGE_MAX_BYTES,
-  MERGE_MIN_RUN, PING_EVERY_MS, PUSH_WINDOW, STALE_MS,
+  COMPACT_CHECK_EVERY, COMPACT_THRESHOLD, LAG_RESYNC_DEBOUNCE_MS, LOCAL_UPDATE_MAX_RETRIES,
+  MAX_AUTO_REHEAL, MAX_PUSH_REJECTS, MAX_REPAIRS, MERGE_MAX_BYTES, MERGE_MIN_RUN, PING_EVERY_MS,
+  PUSH_WINDOW, PresenceUser, STALE_MS, SyncPhase, TimerKind, derive_sync_phase, frame_ping,
+  frame_presence_update, frame_sync_bootstrap, frame_sync_pull, frame_sync_push,
+  is_empty_yrs_update, local_update_retry_delay_ms, merge_run_length, merge_yrs_updates,
+  push_slice, reconnect_backoff_ms, repair_sv_for,
 };
 use crate::storage::{IdbMirrorOp, StorageError, SyncStorage};
 
@@ -1043,7 +1043,10 @@ impl SyncEngine {
     });
   }
 
-  fn flush_pending_local_diff(&mut self, effects: &mut Vec<SyncEffect>) -> Result<(), StorageError> {
+  fn flush_pending_local_diff(
+    &mut self,
+    effects: &mut Vec<SyncEffect>,
+  ) -> Result<(), StorageError> {
     let Some(diff) = self.pending_local_diff.clone() else {
       return Ok(());
     };
@@ -1076,7 +1079,11 @@ impl SyncEngine {
     }
   }
 
-  fn enqueue_diff(&mut self, diff: &[u8], effects: &mut Vec<SyncEffect>) -> Result<(), StorageError> {
+  fn enqueue_diff(
+    &mut self,
+    diff: &[u8],
+    effects: &mut Vec<SyncEffect>,
+  ) -> Result<(), StorageError> {
     if self.use_append_log() {
       let clock = self.storage.as_mut().unwrap().append_outbox(diff)?;
       self.maybe_compact(effects);
@@ -1378,10 +1385,7 @@ impl SyncEngine {
     if !self.socket_open {
       return;
     }
-    let cursor = self
-      .presence_cursor
-      .as_ref()
-      .map(|(b, o)| (b.as_str(), *o));
+    let cursor = self.presence_cursor.as_ref().map(|(b, o)| (b.as_str(), *o));
     self.send_ws(frame_presence_update(name, cursor), effects);
   }
 

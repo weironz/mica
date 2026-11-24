@@ -403,7 +403,12 @@ pub fn selection_slices(
         return vec![(start.node, start.offset, end.offset)];
       }
       let mut out = vec![(start.node, start.offset, blocks[start.node].utf16_len())];
-      for (i, b) in blocks.iter().enumerate().take(end.node + 1).skip(start.node + 1) {
+      for (i, b) in blocks
+        .iter()
+        .enumerate()
+        .take(end.node + 1)
+        .skip(start.node + 1)
+      {
         let to = if i == end.node {
           end.offset
         } else {
@@ -548,7 +553,9 @@ pub fn selection_clipboard_text(
               continue;
             }
             let hard_break = ch == '\\'
-              && chars.get(k + 1).is_some_and(|&(_, next_ch)| next_ch == '\n')
+              && chars
+                .get(k + 1)
+                .is_some_and(|&(_, next_ch)| next_ch == '\n')
               && !marks.iter().any(|m| {
                 u16_pos >= m.start
                   && u16_pos < m.end

@@ -8,9 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{
-  BlockPatch, BlockSpec, ClipboardPayload, DocOp, EditorBlock, EditorEffect,
-};
+use crate::model::{BlockPatch, BlockSpec, ClipboardPayload, DocOp, EditorBlock, EditorEffect};
 use crate::selection::{ActiveMarks, DocSelection};
 use crate::table::TableOp;
 

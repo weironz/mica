@@ -785,20 +785,21 @@ pub async fn push_update_checked(
     .ok_or(ApiError::NotFound)?;
 
   let base = ensure_base_tx(&mut tx, document_id).await?;
-  let prev_word_count: Option<i32> = sqlx::query_scalar(
-    "SELECT word_count FROM document_yrs_base WHERE document_id = $1",
-  )
-  .bind(document_id)
-  .fetch_optional(&mut *tx)
-  .await?
-  .flatten();
+  let prev_word_count: Option<i32> =
+    sqlx::query_scalar("SELECT word_count FROM document_yrs_base WHERE document_id = $1")
+      .bind(document_id)
+      .fetch_optional(&mut *tx)
+      .await?
+      .flatten();
 
   // Validate + fold: reconstruct the base, merge the update.
   let mut doc = guarded_from_update(&base.state)
     .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
   let prev_words = match prev_word_count {
     Some(w) => w,
-    None => mica_core::word_count::count_doc(&doc).words.min(i32::MAX as u64) as i32,
+    None => mica_core::word_count::count_doc(&doc)
+      .words
+      .min(i32::MAX as u64) as i32,
   };
   guarded_apply(&mut doc, update).map_err(|_| ApiError::BadRequest("invalid yrs update".into()))?;
   // An update whose dependencies the base lacks is parked by yrs as PENDING

@@ -1,0 +1,12 @@
+# Overlay on deploy/docker-compose.single.yml for CI container + Playwright Web E2E.
+# Consumes the locally built `mica-api:ci` and `mica-web:ci` images directly so
+# CI tests the exact self-contained production images (including Brotli `.br`
+# precompression and strict CSP sha256 headers).
+services:
+  api:
+    image: mica-api:ci
+    environment:
+      MICA_REGISTRATION_ENABLED: "true"
+
+  web:
+    image: mica-web:ci

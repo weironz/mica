@@ -450,9 +450,11 @@ mod imp {
         let q_err = Rc::clone(&queue);
         let onerror = Closure::<dyn FnMut(ErrorEvent)>::new(move |ev: ErrorEvent| {
           let msg = ev.message();
-          q_err
-            .borrow_mut()
-            .push(WsEvent::Error(if msg.is_empty() { "websocket error".into() } else { msg }));
+          q_err.borrow_mut().push(WsEvent::Error(if msg.is_empty() {
+            "websocket error".into()
+          } else {
+            msg
+          }));
         });
         ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
 
@@ -470,7 +472,10 @@ mod imp {
       }
     }
 
-    let handle = WsHandle { inner: Rc::clone(&inner), queue: Rc::clone(&queue) };
+    let handle = WsHandle {
+      inner: Rc::clone(&inner),
+      queue: Rc::clone(&queue),
+    };
     let receiver = WsReceiver { inner, queue };
     (handle, receiver)
   }
@@ -535,7 +540,10 @@ mod tests {
     }
     fn block_on_once<F: Future>(fut: F) -> F::Output {
       let mut fut = Box::pin(fut);
-      let wake = Arc::new(CondWaker { ready: Mutex::new(false), cv: Condvar::new() });
+      let wake = Arc::new(CondWaker {
+        ready: Mutex::new(false),
+        cv: Condvar::new(),
+      });
       let waker = Waker::from(Arc::clone(&wake));
       let mut cx = Context::from_waker(&waker);
       loop {
@@ -561,7 +569,11 @@ mod tests {
       let (stream, _) = listener.accept().unwrap();
       #[allow(clippy::result_large_err)]
       let mut ws = tungstenite::accept_hdr(stream, |req: &Request, resp: Response| {
-        if let Some(h) = req.headers().get("authorization").and_then(|v| v.to_str().ok()) {
+        if let Some(h) = req
+          .headers()
+          .get("authorization")
+          .and_then(|v| v.to_str().ok())
+        {
           *seen_auth_srv.lock().unwrap() = h.to_string();
         }
         Ok(resp)

@@ -75,8 +75,8 @@ pub async fn fetch_request(
   json_body: Option<&str>,
   timeout_secs: u64,
 ) -> Result<String, String> {
-  use wasm_bindgen::{JsCast, JsValue};
   use wasm_bindgen::closure::Closure;
+  use wasm_bindgen::{JsCast, JsValue};
   use wasm_bindgen_futures::JsFuture;
   use web_sys::{AbortController, Headers, Request, RequestCredentials, RequestInit, Response};
 
@@ -93,8 +93,8 @@ pub async fn fetch_request(
   }
 
   let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
-  let controller = AbortController::new()
-    .map_err(|e| format!("failed to construct AbortController: {e:?}"))?;
+  let controller =
+    AbortController::new().map_err(|e| format!("failed to construct AbortController: {e:?}"))?;
   let ctrl_abort = controller.clone();
   let timed_out = std::rc::Rc::new(std::cell::Cell::new(false));
   let timed_out_cb = std::rc::Rc::clone(&timed_out);
@@ -186,8 +186,12 @@ pub fn web_download_bytes(filename: &str, mime: &str, bytes: &[u8]) -> Result<()
     use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
 
     let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
-    let document = window.document().ok_or_else(|| "document unavailable".to_string())?;
-    let body = document.body().ok_or_else(|| "document.body unavailable".to_string())?;
+    let document = window
+      .document()
+      .ok_or_else(|| "document unavailable".to_string())?;
+    let body = document
+      .body()
+      .ok_or_else(|| "document.body unavailable".to_string())?;
 
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::new();
@@ -225,7 +229,10 @@ pub fn web_download_bytes(filename: &str, mime: &str, bytes: &[u8]) -> Result<()
 /// selected files into `(filename, bytes)` pairs via `FileReader`.
 /// Returns `Ok(Vec::new())` if the user cancels.
 #[cfg(target_arch = "wasm32")]
-pub async fn web_pick_files(accept: &str, multiple: bool) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub async fn web_pick_files(
+  accept: &str,
+  multiple: bool,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
   use std::cell::RefCell;
   use std::future::Future;
   use std::pin::Pin;
@@ -242,7 +249,11 @@ pub async fn web_pick_files(accept: &str, multiple: bool) -> Result<Vec<(String,
     input: Option<HtmlInputElement>,
     _on_change: Option<Closure<dyn FnMut(Event)>>,
     _on_cancel: Option<Closure<dyn FnMut(Event)>>,
-    _readers: Vec<(FileReader, Closure<dyn FnMut(Event)>, Closure<dyn FnMut(Event)>)>,
+    _readers: Vec<(
+      FileReader,
+      Closure<dyn FnMut(Event)>,
+      Closure<dyn FnMut(Event)>,
+    )>,
   }
 
   impl PickState {
@@ -283,8 +294,12 @@ pub async fn web_pick_files(accept: &str, multiple: bool) -> Result<Vec<(String,
   }
 
   let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
-  let document = window.document().ok_or_else(|| "document unavailable".to_string())?;
-  let body = document.body().ok_or_else(|| "document.body unavailable".to_string())?;
+  let document = window
+    .document()
+    .ok_or_else(|| "document unavailable".to_string())?;
+  let body = document
+    .body()
+    .ok_or_else(|| "document.body unavailable".to_string())?;
 
   let el = document
     .create_element("input")
@@ -352,30 +367,24 @@ pub async fn web_pick_files(accept: &str, multiple: bool) -> Result<Vec<(String,
       let rem_ok = Rc::clone(&remaining);
       let st_ok = Rc::clone(&st_change);
       let name_ok = name.clone();
-      let onload = Closure::<dyn FnMut(Event)>::new(move |_e: Event| {
-        match r_ok.result() {
-          Ok(buf) => {
-            let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-            col_ok.borrow_mut()[idx] = Some((name_ok.clone(), bytes));
-            let done = {
-              let mut rem = rem_ok.borrow_mut();
-              *rem = rem.saturating_sub(1);
-              *rem == 0
-            };
-            if done {
-              let out: Vec<(String, Vec<u8>)> = col_ok
-                .borrow_mut()
-                .drain(..)
-                .flatten()
-                .collect();
-              st_ok.borrow_mut().finish(Ok(out));
-            }
+      let onload = Closure::<dyn FnMut(Event)>::new(move |_e: Event| match r_ok.result() {
+        Ok(buf) => {
+          let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+          col_ok.borrow_mut()[idx] = Some((name_ok.clone(), bytes));
+          let done = {
+            let mut rem = rem_ok.borrow_mut();
+            *rem = rem.saturating_sub(1);
+            *rem == 0
+          };
+          if done {
+            let out: Vec<(String, Vec<u8>)> = col_ok.borrow_mut().drain(..).flatten().collect();
+            st_ok.borrow_mut().finish(Ok(out));
           }
-          Err(err) => {
-            st_ok
-              .borrow_mut()
-              .finish(Err(format!("failed to read selected file {name_ok}: {err:?}")));
-          }
+        }
+        Err(err) => {
+          st_ok.borrow_mut().finish(Err(format!(
+            "failed to read selected file {name_ok}: {err:?}"
+          )));
         }
       });
 
@@ -390,9 +399,9 @@ pub async fn web_pick_files(accept: &str, multiple: bool) -> Result<Vec<(String,
       reader.set_onload(Some(onload.as_ref().unchecked_ref()));
       reader.set_onerror(Some(onerror.as_ref().unchecked_ref()));
       if let Err(err) = reader.read_as_array_buffer(&file) {
-        st_change
-          .borrow_mut()
-          .finish(Err(format!("read_as_array_buffer failed for {name}: {err:?}")));
+        st_change.borrow_mut().finish(Err(format!(
+          "read_as_array_buffer failed for {name}: {err:?}"
+        )));
         return;
       }
       readers.push((reader, onload, onerror));

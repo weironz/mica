@@ -44,8 +44,8 @@ pub struct ActivityQuery {
 pub(crate) fn validate_activity_query(
   query: &ActivityQuery,
 ) -> ApiResult<(&'static str, u32, i32, bool)> {
-  let (range_label, range_days) = parse_activity_range(query.range.as_deref())
-    .ok_or_else(|| {
+  let (range_label, range_days) =
+    parse_activity_range(query.range.as_deref()).ok_or_else(|| {
       ApiError::BadRequest("invalid range; expected one of 1d, 7d, 30d, 90d, 365d".into())
     })?;
   let tz_offset = query.tz_offset.unwrap_or(0);
@@ -149,11 +149,7 @@ pub async fn overview(
     .map(|(id, imgs, atts, bytes)| {
       (
         id,
-        (
-          imgs.max(0) as u64,
-          atts.max(0) as u64,
-          bytes.max(0) as u64,
-        ),
+        (imgs.max(0) as u64, atts.max(0) as u64, bytes.max(0) as u64),
       )
     })
     .collect();
