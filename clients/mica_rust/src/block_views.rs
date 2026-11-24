@@ -366,8 +366,19 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
     )
 }
 
+/// Left inset in pixels for a non-list block attached as a child of a list item
+/// (`data.li = level`), aligning its left edge with the owning list item's text
+/// column (matches `origin/main` Flutter `26.0 + 24.0 * li`).
+pub(crate) fn list_continuation_inset_px(block: &EditorBlock) -> f32 {
+  block
+    .li_level()
+    .map(|lv| 26.0 + 24.0 * lv as f32)
+    .unwrap_or(0.0)
+}
+
 fn render_block_body(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> AnyElement {
-  match effective_block_kind(&block) {
+  let li_inset = list_continuation_inset_px(&block);
+  let inner = match effective_block_kind(&block) {
     "code_block" => render_code_block_view(env, at, block).into_element(),
     "board" => render_board_block_view(env, at, block).into_element(),
     "mermaid" => render_mermaid_block_view(env, at, block).into_element(),
@@ -376,6 +387,16 @@ fn render_block_body(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> 
     "table" => crate::table_view::render_table_block_view(env, at, block).into_element(),
     "divider" => render_divider_block_view(env, at).into_element(),
     _ => render_prose_block_view(env, at, block).into_element(),
+  };
+  if li_inset > 0.0 {
+    view()
+      .test_id("list-nested-block")
+      .w_full()
+      .pl(px(li_inset))
+      .child(inner)
+      .into_element()
+  } else {
+    inner
   }
 }
 
@@ -3408,6 +3429,18 @@ mod tests {
     let (w, h) = parse_svg_aspect_size(r#"<svg viewBox="0 0 800 200"></svg>"#, 680.0, 320.0);
     assert!((w - 680.0).abs() < 1.0);
     assert!((h - 170.0).abs() < 1.0);
+  }
+
+  #[test]
+  fn list_continuation_inset_matches_list_text_column() {
+    let plain = EditorBlock::new("b0", "code_block", "fn main() {}");
+    assert_eq!(list_continuation_inset_px(&plain), 0.0);
+
+    for (li, expected) in [(0u32, 26.0f32), (1, 50.0), (2, 74.0)] {
+      let mut blk = EditorBlock::new("b1", "code_block", "let x = 1;");
+      blk.data = serde_json::json!({ "li": li });
+      assert_eq!(list_continuation_inset_px(&blk), expected);
+    }
   }
 
   #[test]

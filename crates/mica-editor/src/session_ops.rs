@@ -115,7 +115,7 @@ impl EditorSession {
     }
   }
 
-  fn owning_item_indent_at(&self, i: usize) -> Option<u32> {
+  pub(crate) fn owning_item_indent_at(&self, i: usize) -> Option<u32> {
     for p in (0..i).rev() {
       let n = &self.blocks[p];
       if n.is_list_kind() {
@@ -255,13 +255,27 @@ impl EditorSession {
       return;
     }
     let existing_marks = self.blocks[idx].data_map().get("marks").cloned();
+    let prev_li = self.blocks[idx].li_level();
+    let prev_is_list = self.blocks[idx].is_list_kind();
+    let attach_owner = if kind == "code_block" && prev_is_list {
+      self.owning_item_indent_at(idx)
+    } else {
+      None
+    };
     let mut new_data = normalize_data_object(data.unwrap_or_else(|| json!({})));
-    if EditorBlock::is_inline_text_kind(kind)
-      && let Value::Object(m) = &mut new_data
-      && !m.contains_key("marks")
-      && let Some(marks) = existing_marks
-    {
-      m.insert("marks".to_string(), marks);
+    if let Value::Object(m) = &mut new_data {
+      if EditorBlock::is_inline_text_kind(kind)
+        && !m.contains_key("marks")
+        && let Some(marks) = existing_marks
+      {
+        m.insert("marks".to_string(), marks);
+      }
+      if EditorBlock::is_attachable_kind(kind)
+        && !m.contains_key("li")
+        && let Some(lv) = prev_li.or(attach_owner)
+      {
+        m.insert("li".to_string(), json!(lv));
+      }
     }
     let b = &mut self.blocks[idx];
     b.kind = kind.to_string();
@@ -806,12 +820,24 @@ impl EditorSession {
       new_len,
       true,
     );
+    let prev_li = self.blocks[idx].li_level();
+    let prev_is_list = self.blocks[idx].is_list_kind();
+    let attach_owner = if kind == "code_block" && prev_is_list {
+      self.owning_item_indent_at(idx)
+    } else {
+      None
+    };
     let mut next_data = normalize_data_object(data);
-    if EditorBlock::is_inline_text_kind(kind)
-      && !shifted_marks.is_empty()
-      && let Value::Object(m) = &mut next_data
-    {
-      m.insert("marks".to_string(), marks_to_json(&shifted_marks));
+    if let Value::Object(m) = &mut next_data {
+      if EditorBlock::is_inline_text_kind(kind) && !shifted_marks.is_empty() {
+        m.insert("marks".to_string(), marks_to_json(&shifted_marks));
+      }
+      if EditorBlock::is_attachable_kind(kind)
+        && !m.contains_key("li")
+        && let Some(lv) = prev_li.or(attach_owner)
+      {
+        m.insert("li".to_string(), json!(lv));
+      }
     }
     let b = &mut self.blocks[idx];
     b.kind = kind.to_string();

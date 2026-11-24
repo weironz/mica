@@ -345,7 +345,17 @@ pub fn visible_ordinal(blocks: &[EditorBlock], index: usize) -> Option<u64> {
       break;
     }
     // Deeper nested children belong to the preceding sibling item — skip them.
-    if prev.indent() > target_indent || prev.li_level() > target_li {
+    // A continuation block (`data.li = Some(l)`) belongs to an item at indent
+    // `l`: skip when `l >= target_indent`, break when `l < target_indent` (an
+    // outer item's continuation terminates an inner sub-list).
+    if let Some(li) = prev.li_level() {
+      if li >= target_indent {
+        cursor -= 1;
+        continue;
+      }
+      break;
+    }
+    if prev.indent() > target_indent {
       cursor -= 1;
       continue;
     }

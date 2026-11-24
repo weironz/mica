@@ -602,3 +602,141 @@ fn empty_first_line_dropped_by_backspace_and_delete_preserving_next_block_kind()
   assert_eq!(blank.blocks().len(), 1);
   assert_eq!(caret(&blank), DocPosition::new(0, 0));
 }
+
+#[test]
+fn list_nested_code_blocks_via_fence_slash_indent_and_html_paste() {
+  // 1. Typing ``` on an empty continuation list item under `1. 第一步` creates
+  //    a code_block attached to that list item (`li == Some(0)`), keeps the
+  //    subsequent numbered item at ordinal 2, and exports valid indented MD.
+  let mut s = EditorSession::from_markdown("1. 第一步\n2. 第二步");
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, 3)),
+  });
+  s.dispatch(EditorCommand::SplitBlock);
+  assert_eq!(s.blocks()[1].kind, "numbered_list");
+  s.dispatch(EditorCommand::InsertText { text: "```".into() });
+  assert_eq!(s.blocks()[1].kind, "code_block");
+  assert_eq!(s.blocks()[1].li_level(), Some(0));
+  assert_eq!(visible_ordinal(s.blocks(), 2), Some(2));
+
+  s.dispatch(EditorCommand::InsertText {
+    text: "rust".into(),
+  });
+  s.dispatch(EditorCommand::SplitBlock);
+  assert_eq!(
+    s.blocks()[1]
+      .data_map()
+      .get("language")
+      .and_then(|v| v.as_str()),
+    Some("rust")
+  );
+  s.dispatch(EditorCommand::InsertText {
+    text: "fn main() {}".into(),
+  });
+
+  let exported = s.export_markdown(&std::collections::BTreeMap::new());
+  let reparsed = EditorSession::from_markdown(&exported);
+  assert_eq!(reparsed.blocks().len(), 3, "exported:\n{exported}");
+  assert_eq!(reparsed.blocks()[0].kind, "numbered_list");
+  assert_eq!(reparsed.blocks()[1].kind, "code_block");
+  assert_eq!(reparsed.blocks()[1].li_level(), Some(0));
+  assert_eq!(reparsed.blocks()[1].text, "fn main() {}");
+  assert_eq!(reparsed.blocks()[2].kind, "numbered_list");
+  assert_eq!(visible_ordinal(reparsed.blocks(), 2), Some(2));
+
+  // 2. Unordered list + Slash command `/code` attaches code_block (`li == 0`),
+  //    Shift+Tab detaches it, and Tab at offset 0 re-attaches it.
+  let mut u = EditorSession::from_markdown("- 项目 A");
+  u.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, 4)),
+  });
+  u.dispatch(EditorCommand::SplitBlock);
+  u.dispatch(EditorCommand::ApplySlashCommand {
+    start: 0,
+    end: 0,
+    kind: "code_block".into(),
+    data: serde_json::json!({ "language": "bash" }),
+  });
+  assert_eq!(u.blocks()[1].kind, "code_block");
+  assert_eq!(u.blocks()[1].li_level(), Some(0));
+
+  u.dispatch(EditorCommand::Indent { delta: -1 });
+  assert_eq!(u.blocks()[1].li_level(), None);
+  u.dispatch(EditorCommand::Indent { delta: 1 });
+  assert_eq!(u.blocks()[1].li_level(), Some(0));
+
+  // 3. Inner continuation (`li == 1`) keeps the inner sub-list numbering going,
+  //    while an outer continuation (`li == 0`) breaks the inner sub-list (`indent == 1`)
+  //    without breaking the outer list (`indent == 0`).
+  let nested_blocks = vec![
+    EditorBlock::new("b0", "numbered_list", "Outer 1"),
+    EditorBlock::new("b1", "numbered_list", "Inner 1").with_data(json!({ "indent": 1 })),
+    EditorBlock::new("b2", "code_block", "inner code").with_data(json!({ "li": 1 })),
+    EditorBlock::new("b3", "numbered_list", "Inner 2").with_data(json!({ "indent": 1 })),
+    EditorBlock::new("b4", "code_block", "outer code").with_data(json!({ "li": 0 })),
+    EditorBlock::new("b5", "numbered_list", "Inner restart").with_data(json!({ "indent": 1 })),
+    EditorBlock::new("b6", "numbered_list", "Outer 2"),
+  ];
+  assert_eq!(visible_ordinal(&nested_blocks, 1), Some(1));
+  assert_eq!(visible_ordinal(&nested_blocks, 3), Some(2));
+  assert_eq!(visible_ordinal(&nested_blocks, 5), Some(1));
+  assert_eq!(visible_ordinal(&nested_blocks, 6), Some(2));
+
+  // 4. Pasting AI-chat HTML `<ol><li><p>...</p><div class="code-block">...</div></li></ol>`
+  //    creates a nested code block with `li == Some(0)` instead of flattening it inline.
+  let html_tree = json!({
+    "e": "div",
+    "a": {},
+    "c": [
+      {
+        "e": "ol",
+        "a": {},
+        "c": [
+          {
+            "e": "li",
+            "a": {},
+            "c": [
+              { "e": "p", "a": {}, "c": [{ "t": "步骤一" }] },
+              {
+                "e": "div",
+                "a": { "class": "code-block" },
+                "c": [
+                  { "e": "div", "a": { "class": "header" }, "c": [{ "t": "JavaScript" }] },
+                  {
+                    "e": "pre",
+                    "a": {},
+                    "c": [{ "e": "code", "a": {}, "c": [{ "t": "console.log(1);" }] }]
+                  }
+                ]
+              }
+            ]
+          },
+          { "e": "li", "a": {}, "c": [{ "t": "步骤二" }] }
+        ]
+      }
+    ]
+  });
+  let mut p = EditorSession::from_markdown("");
+  p.dispatch(EditorCommand::Paste {
+    input: PasteInput::Html {
+      html_node_json: html_tree,
+      plain: "1. 步骤一\nconsole.log(1);".into(),
+    },
+  });
+  assert_eq!(p.blocks().len(), 3, "{:?}", p.blocks());
+  assert_eq!(p.blocks()[0].kind, "numbered_list");
+  assert_eq!(p.blocks()[0].text, "步骤一");
+  assert_eq!(p.blocks()[1].kind, "code_block");
+  assert_eq!(p.blocks()[1].li_level(), Some(0));
+  assert_eq!(
+    p.blocks()[1]
+      .data_map()
+      .get("language")
+      .and_then(|v| v.as_str()),
+    Some("javascript")
+  );
+  assert_eq!(p.blocks()[1].text, "console.log(1);");
+  assert_eq!(p.blocks()[2].kind, "numbered_list");
+  assert_eq!(p.blocks()[2].text, "步骤二");
+  assert_eq!(visible_ordinal(p.blocks(), 2), Some(2));
+}

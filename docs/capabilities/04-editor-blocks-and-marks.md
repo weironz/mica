@@ -36,6 +36,7 @@
 
 - **反例 1（引用套两层）**：外层 `RichEditor` 的 blockquote 样式与自定义 quote 视图各自画一条左竖线，粘贴引用出现双竖线。切换到 `mica-editor` 自渲染后必须保证唯一单层左条。
 - **反例 2（浮动菜单固定在顶部）**：将气泡菜单绝对定位写死 `.top(8px)` 居中，导致用户滚动到页面中部/底部选中文字时，菜单远远飘在屏幕最顶端，极难操作。
+- **反例 3（列表嵌套代码块视觉贴左且粘贴被拍平）**：L3 视图层未消费 `data.li` 缩进偏移（应为 `26 + 24 * li` px 对齐列表正文列），且 AI 对话/富文本 HTML 中包裹在 `<div class="code-block">` 内的 `<pre>` 被 `direct_inline` 拍平成列表首行纯文本；同时在列表续行直接输入 `` ``` `` 或 `/code` 未自动继承/附着 `data.li`。
 
 ---
 
@@ -44,7 +45,7 @@
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
 | `CAP-04-01` 全量文本块与 5 种 Callout | P0 | 全端 | ✅ | `block_views::tests::callout_kind_and_svg_viewbox_parsing` + `app_flows` |
-| `CAP-04-02` 列表缩进与容器附着 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` |
+| `CAP-04-02` 列表缩进与容器附着 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` + `mica-editor::list_nested_code_blocks_via_fence_slash_indent_and_html_paste` + `mica-md::list_nested_wrapped_code_blocks_roundtrip_with_li` + `block_views::tests::list_continuation_inset_matches_list_text_column` |
 | `CAP-04-03` 行内 marks 与链接编辑 | P0 | 全端 | ✅ | `mica-editor::mark_apply_toggle_remove_and_normalize_merge_adjacent` |
 | `CAP-04-04` 22 项斜杠菜单与过滤 | P0 | 全端 | ✅ | `editor_slash::tests` + `editor_positioning::schedule_slash_anchor_update`（`measure()` 实时锚定光标下方/上方） |
 | `CAP-04-05` 贴近选区的浮动气泡菜单 | P0 | 桌面/Web | ✅ | `editor_view.rs::schedule_bubble_anchor_update`（待桌面真机复测各种滚动位置） |
@@ -57,3 +58,4 @@
 
 - **2026-11-23**：沉淀单层引用、22 项斜杠菜单、贴近选区动态定位浮动气泡栏及响应式格式条规格（对应 `3f033c30` / `ff104b87`）。
 - **2026-11-23（补齐迭代）**：将 `/` 斜杠菜单锚点升级为 `editor_positioning::schedule_slash_anchor_update` 动态测量光标屏幕位置并自动上下避让（`CAP-04-04`）。
+- **2026-11-24（列表嵌套代码块修复）**：补齐 L3 `data.li` 左缩进（`26 + 24 * li` px）、L1 HTML 粘贴支持 `<div class="code-block"><pre>` 卡片嵌套与语言头回退、L2 列表续行输入 `` ``` `` / `~~~` / `/code` 自动附着 `data.li` 及 `visible_ordinal` 外层续块截断子列表序号修复（`CAP-04-02`）。

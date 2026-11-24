@@ -603,6 +603,68 @@ fn list_items<'a>(list: &'a HtmlNode, out: &mut Vec<&'a HtmlNode>) {
   }
 }
 
+const LIST_BLOCK_CHILDREN: &[&str] = &["ul", "ol", "pre", "blockquote", "table"];
+
+fn is_list_block_child(node: &HtmlNode) -> bool {
+  node.is_element() && (LIST_BLOCK_CHILDREN.contains(&node.tag()) || is_list_block_wrapper(node))
+}
+
+fn is_list_block_wrapper(node: &HtmlNode) -> bool {
+  if !node.is_element() {
+    return false;
+  }
+  let tag = node.tag();
+  if LIST_BLOCK_CHILDREN.contains(&tag) || INLINE_TAGS.contains(&tag) {
+    return false;
+  }
+  node.find_descendant(LIST_BLOCK_CHILDREN).is_some()
+}
+
+/// True when `node` is a container card wrapping only code-block chrome (e.g.
+/// `<div class="code-block"><div class="header">JS</div><pre>...</pre></div>`),
+/// without prose paragraphs or other block constructs that belong to the `<li>`
+/// inline text.
+fn is_code_card_wrapper(node: &HtmlNode) -> bool {
+  is_list_block_wrapper(node)
+    && node.find_descendant(&["pre"]).is_some()
+    && node
+      .find_descendant(&[
+        "p",
+        "ul",
+        "ol",
+        "blockquote",
+        "table",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+      ])
+      .is_none()
+}
+
+/// Extract a language hint from a code-block card wrapper (e.g. AI chats wrap
+/// `<div class="header">JavaScript</div><pre><code>...</code></pre>`).
+fn wrapper_code_language_hint(wrapper: &HtmlNode) -> Option<String> {
+  wrapper.find_descendant(&["pre"])?;
+  for child in wrapper.children() {
+    if child.tag() == "pre" || child.find_descendant(&["pre"]).is_some() {
+      continue;
+    }
+    let raw = collapse_trim(&child.text());
+    let first_tok = raw.split_whitespace().next().unwrap_or("");
+    if first_tok.is_empty() || first_tok.len() > 20 {
+      continue;
+    }
+    let canon = crate::highlight::canonical_code_language(first_tok);
+    if !canon.is_empty() && canon != "text" && canon != "plain" && canon != "plaintext" {
+      return Some(canon.to_string());
+    }
+  }
+  None
+}
+
 fn code_text(node: &HtmlNode) -> String {
   fn append_newline(sb: &mut String) {
     if !sb.is_empty() && !sb.ends_with('\n') {
@@ -885,22 +947,77 @@ impl Converter {
       let child_indent = self.cap_quote_indent(format!("{indent}{}", " ".repeat(width)));
       last_child_indent = child_indent.clone();
       for child in item.children() {
-        match child.tag() {
-          "ul" | "ol" => self.list(child, out, child.tag() == "ol", &child_indent),
-          "pre" => self.fenced_code(child, out, &child_indent),
-          "blockquote" => self.emit_quote(child, out, &child_indent),
-          "table" => {
-            let mut sb = String::new();
-            self.table(child, &mut sb);
-            for line in sb.trim_end_matches(is_trim_ws).split('\n') {
-              writeln(out, &format!("{child_indent}{line}"));
-            }
-          }
-          _ => {}
-        }
+        self.emit_list_item_child(child, out, &child_indent, None);
       }
       index += 1;
     }
+  }
+
+  /// Emit nested block children inside an `<li>` — including blocks wrapped
+  /// inside container elements such as `<div class="code-block"><pre>...</pre></div>`
+  /// emitted by AI chats and modern rich-text web editors.
+  fn emit_list_item_child(
+    &mut self,
+    child: &HtmlNode,
+    out: &mut String,
+    child_indent: &str,
+    fallback_lang: Option<&str>,
+  ) {
+    match child.tag() {
+      "ul" | "ol" => self.list(child, out, child.tag() == "ol", child_indent),
+      "pre" => self.fenced_code_with_fallback(child, out, child_indent, fallback_lang),
+      "blockquote" => self.emit_quote(child, out, child_indent),
+      "table" => {
+        let mut sb = String::new();
+        self.table(child, &mut sb);
+        for line in sb.trim_end_matches(is_trim_ws).split('\n') {
+          writeln(out, &format!("{child_indent}{line}"));
+        }
+      }
+      _ if is_list_block_wrapper(child) => {
+        let wrapper_lang = if is_code_card_wrapper(child) {
+          wrapper_code_language_hint(child)
+        } else {
+          None
+        };
+        let lang = wrapper_lang.as_deref().or(fallback_lang);
+        for grand in child.children() {
+          if is_list_block_child(grand) {
+            self.emit_list_item_child(grand, out, child_indent, lang);
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn fenced_code_with_fallback(
+    &mut self,
+    pre: &HtmlNode,
+    out: &mut String,
+    indent: &str,
+    fallback_lang: Option<&str>,
+  ) {
+    let class = format!(
+      "{} {}",
+      pre.attr("class").unwrap_or(""),
+      pre
+        .find_descendant(&["code"])
+        .and_then(|c| c.attr("class"))
+        .unwrap_or("")
+    );
+    let mut lang = code_language(&class);
+    if lang.is_empty()
+      && let Some(fb) = fallback_lang
+    {
+      lang = fb.to_string();
+    }
+    writeln(out, &format!("{indent}```{lang}"));
+    let text = code_text(pre);
+    for line in text.trim_end_matches(is_trim_ws).split('\n') {
+      writeln(out, &format!("{indent}{line}"));
+    }
+    writeln(out, &format!("{indent}```"));
   }
 
   /// Word/WPS "flat" list paragraphs: each item is a `<p
@@ -1022,21 +1139,30 @@ impl Converter {
   }
 
   /// An item's own inline content: its block children (lists, code, quotes,
-  /// tables) are emitted as child blocks instead.
+  /// tables, and code-block card wrappers) are emitted as child blocks instead.
   fn direct_inline(&mut self, item: &HtmlNode) -> String {
     let mut sb = String::new();
-    for child in item.nodes() {
-      if child.is_element()
-        && matches!(
+    self.gather_direct_inline(item, &mut sb);
+    collapse_trim(&sb)
+  }
+
+  fn gather_direct_inline(&mut self, parent: &HtmlNode, sb: &mut String) {
+    for child in parent.nodes() {
+      if child.is_element() {
+        if matches!(
           child.tag(),
           "ul" | "ol" | "pre" | "blockquote" | "table" | "input"
-        )
-      {
-        continue;
+        ) || is_code_card_wrapper(child)
+        {
+          continue;
+        }
+        if is_list_block_wrapper(child) {
+          self.gather_direct_inline(child, sb);
+          continue;
+        }
       }
-      self.gather_one(child, &mut sb);
+      self.gather_one(child, sb);
     }
-    collapse_trim(&sb)
   }
 
   fn gather(&mut self, node: &HtmlNode, sb: &mut String) {
@@ -1175,5 +1301,154 @@ mod tests {
     assert_eq!(code_language(" language-rust"), "rust");
     assert_eq!(code_language("x lang-c++ y"), "c++");
     assert_eq!(code_language("highlight"), "");
+  }
+
+  #[test]
+  fn list_nested_wrapped_code_blocks_roundtrip_with_li() {
+    let html = HtmlNode::Element {
+      e: "ol".into(),
+      a: BTreeMap::new(),
+      c: vec![
+        HtmlNode::Element {
+          e: "li".into(),
+          a: BTreeMap::new(),
+          c: vec![
+            HtmlNode::Element {
+              e: "p".into(),
+              a: BTreeMap::new(),
+              c: vec![HtmlNode::Text {
+                t: "准备环境".into(),
+              }],
+            },
+            HtmlNode::Element {
+              e: "div".into(),
+              a: BTreeMap::from([("class".into(), "code-block".into())]),
+              c: vec![
+                HtmlNode::Element {
+                  e: "div".into(),
+                  a: BTreeMap::from([("class".into(), "header".into())]),
+                  c: vec![
+                    HtmlNode::Text {
+                      t: "JavaScript ".into(),
+                    },
+                    HtmlNode::Element {
+                      e: "button".into(),
+                      a: BTreeMap::new(),
+                      c: vec![HtmlNode::Text { t: "Copy".into() }],
+                    },
+                  ],
+                },
+                HtmlNode::Element {
+                  e: "pre".into(),
+                  a: BTreeMap::new(),
+                  c: vec![HtmlNode::Element {
+                    e: "code".into(),
+                    a: BTreeMap::new(),
+                    c: vec![HtmlNode::Text {
+                      t: "console.log(1);\n".into(),
+                    }],
+                  }],
+                },
+              ],
+            },
+          ],
+        },
+        HtmlNode::Element {
+          e: "li".into(),
+          a: BTreeMap::new(),
+          c: vec![HtmlNode::Element {
+            e: "div".into(),
+            a: BTreeMap::new(),
+            c: vec![
+              HtmlNode::Element {
+                e: "p".into(),
+                a: BTreeMap::new(),
+                c: vec![HtmlNode::Text {
+                  t: "运行脚本".into(),
+                }],
+              },
+              HtmlNode::Element {
+                e: "ul".into(),
+                a: BTreeMap::new(),
+                c: vec![HtmlNode::Element {
+                  e: "li".into(),
+                  a: BTreeMap::new(),
+                  c: vec![
+                    HtmlNode::Text {
+                      t: "子步骤".into()
+                    },
+                    HtmlNode::Element {
+                      e: "div".into(),
+                      a: BTreeMap::from([("class".into(), "code-card".into())]),
+                      c: vec![
+                        HtmlNode::Element {
+                          e: "div".into(),
+                          a: BTreeMap::new(),
+                          c: vec![HtmlNode::Text { t: "Python".into() }],
+                        },
+                        HtmlNode::Element {
+                          e: "div".into(),
+                          a: BTreeMap::new(),
+                          c: vec![HtmlNode::Element {
+                            e: "pre".into(),
+                            a: BTreeMap::new(),
+                            c: vec![HtmlNode::Element {
+                              e: "code".into(),
+                              a: BTreeMap::new(),
+                              c: vec![HtmlNode::Text {
+                                t: "print(42)\n".into(),
+                              }],
+                            }],
+                          }],
+                        },
+                      ],
+                    },
+                  ],
+                }],
+              },
+            ],
+          }],
+        },
+      ],
+    };
+
+    let body = HtmlNode::Element {
+      e: "body".into(),
+      a: BTreeMap::new(),
+      c: vec![html],
+    };
+    let md = html_to_markdown(&body);
+    assert!(
+      md.contains("1. 准备环境\n   ```javascript\n   console.log(1);\n   ```"),
+      "{md}"
+    );
+    assert!(
+      md.contains("2. 运行脚本\n   - 子步骤\n     ```python\n     print(42)\n     ```"),
+      "{md}"
+    );
+
+    let blocks = crate::parse_body(&md, crate::ParseMode::Fragment);
+    assert_eq!(blocks.len(), 5, "{blocks:?}");
+    assert_eq!(blocks[0].kind, "numbered_list");
+    assert_eq!(blocks[0].text, "准备环境");
+    assert_eq!(blocks[1].kind, "code_block");
+    assert_eq!(blocks[1].text, "console.log(1);");
+    assert_eq!(
+      blocks[1].data.get("language").and_then(|v| v.as_str()),
+      Some("javascript")
+    );
+    assert_eq!(blocks[1].data.get("li").and_then(|v| v.as_u64()), Some(0));
+
+    assert_eq!(blocks[2].kind, "numbered_list");
+    assert_eq!(blocks[2].text, "运行脚本");
+    assert_eq!(blocks[3].kind, "bulleted_list");
+    assert_eq!(blocks[3].text, "子步骤");
+    assert_eq!(blocks[4].kind, "code_block");
+    assert_eq!(blocks[4].text, "print(42)");
+    assert_eq!(
+      blocks[4].data.get("language").and_then(|v| v.as_str()),
+      Some("python")
+    );
+    assert_eq!(blocks[4].data.get("li").and_then(|v| v.as_u64()), Some(1));
   }
 }

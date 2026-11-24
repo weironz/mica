@@ -131,23 +131,31 @@ pub fn match_input_rule(block: &EditorBlock, caret: u32) -> Option<InputRuleMatc
     if caret == 3 && (text == "---" || text == "***" || text == "___") {
       return Some(InputRuleMatch::InsertDivider);
     }
-  } else if block.kind == "bulleted_list" {
-    // Chained todo rule after `- ` converted to bulleted_list: `[ ] ` / `[x] `.
-    for (pat, checked) in [
-      ("[ ] ", false),
-      ("[] ", false),
-      ("[x] ", true),
-      ("[X] ", true),
-    ] {
-      let pat_u16 = utf16_len(pat);
-      if caret == pat_u16 && text.starts_with(pat) {
-        let mut data = serde_json::Map::new();
-        data.insert("checked".to_string(), Value::Bool(checked));
-        if block.indent() > 0 {
-          data.insert("indent".to_string(), json!(block.indent()));
+  } else if block.is_list_kind() {
+    if block.kind == "bulleted_list" {
+      // Chained todo rule after `- ` converted to bulleted_list: `[ ] ` / `[x] `.
+      for (pat, checked) in [
+        ("[ ] ", false),
+        ("[] ", false),
+        ("[x] ", true),
+        ("[X] ", true),
+      ] {
+        let pat_u16 = utf16_len(pat);
+        if caret == pat_u16 && text.starts_with(pat) {
+          let mut data = serde_json::Map::new();
+          data.insert("checked".to_string(), Value::Bool(checked));
+          if block.indent() > 0 {
+            data.insert("indent".to_string(), json!(block.indent()));
+          }
+          return Some(convert("todo", Value::Object(data), pat_u16));
         }
-        return Some(convert("todo", Value::Object(data), pat_u16));
       }
+    }
+
+    // Code fence inside a list: typing ``` or ~~~ on an empty continuation
+    // list item converts it into a code block attached to the preceding item.
+    if caret == 3 && (text == "```" || text == "~~~") {
+      return Some(convert("code_block", json!({}), 3));
     }
   }
 
