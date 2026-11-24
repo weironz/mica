@@ -183,7 +183,7 @@ jobs:
           bash scripts/build-web-rust.sh
 
   mcp:
-    name: MCP (mica-cli mcp conformance)
+    name: MCP (official inspector against mica-cli mcp)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.mcp == 'true'
     needs: paths
@@ -193,28 +193,30 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - name: Build mica-cli
         run: cargo build --locked -p mica-cli
-      - name: Verify MCP tools/list over stdio
+      - name: tools/list must survive a conforming client
+        env:
+          MICA_API_BASE_URL: https://mica.invalid
+          MICA_PAT: dummy-not-used-for-handshake
         run: |
+          set -euo pipefail
+          npx -y @modelcontextprotocol/inspector@1 --cli \
+            ./target/debug/mica-cli mcp --method tools/list > tools.json
           python3 - <<'EOF'
-          import json, subprocess
-          p = subprocess.Popen(
-              ["target/debug/mica-cli", "mcp"],
-              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-          )
-          req = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ci", "version": "1.0"}}}
-          p.stdin.write(json.dumps(req) + "\n")
-          p.stdin.flush()
-          init_resp = json.loads(p.stdout.readline())
-          assert "result" in init_resp, init_resp
-          p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n")
-          p.stdin.flush()
-          list_resp = json.loads(p.stdout.readline())
-          tools = list_resp["result"]["tools"]
-          assert len(tools) >= 5, f"expected >= 5 tools, got {len(tools)}"
-          p.terminate()
-          print(f"{len(tools)} MCP tools verified")
+          import json
+          tools = json.load(open("tools.json"))["tools"]
+          assert tools, "the inspector returned no tools"
+          for t in tools:
+              assert t["inputSchema"].get("type") == "object", t["name"]
+              out = t.get("outputSchema")
+              assert out is None or out.get("type") == "object", (
+                  f"{t['name']}: outputSchema must be an object schema or absent"
+              )
+          print(f"{len(tools)} tools accepted by the official client")
           EOF
 
   container:

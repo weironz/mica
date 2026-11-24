@@ -50,6 +50,14 @@ async function ensureUserRegistered(base, email, password) {
     const txt = await resp.text().catch(() => '');
     throw new Error(`seed register failed: HTTP ${resp.status} ${txt}`);
   }
+  if (resp.status === 200) {
+    const data = await resp.json().catch(() => null);
+    if (data && data.verified === false) {
+      throw new Error(
+        `seed register returned verified=false (instance must be fresh with MICA_REGISTRATION_ENABLED unset so first operator auto-verifies)`
+      );
+    }
+  }
 }
 
 async function readIdbDocs(page) {

@@ -5,8 +5,6 @@
 services:
   api:
     image: mica-api:ci
-    environment:
-      MICA_REGISTRATION_ENABLED: "true"
 
   web:
     image: mica-web:ci
