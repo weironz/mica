@@ -12,6 +12,6 @@ index_status=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE"/)
 echo "index:  $index_status"
 [[ "$index_status" == 200 ]] || { echo "INDEX FAILED: $SITE/ returned $index_status"; exit 1; }
 index_html=$(curl -fsS "$SITE"/)
-[[ "$index_html" == *mica_rust.wasm* ]] \
+[[ "$index_html" == *mica_rust_bg.wasm* ]] \
   || { echo "INDEX FAILED: $SITE/ did not serve the pure-Rust Web entry page"; exit 1; }
-echo "bundle: $(curl -fsS "$SITE"/mica_rust.wasm | md5sum | cut -c1-12)…"
+echo "bundle: $(curl -fsS "$SITE"/mica_rust_bg.wasm | md5sum | cut -c1-12)…"

@@ -9,11 +9,12 @@
 >
 > 2026-08-03 建档,当时搬进 68 条。
 
-## 2026-11-22 全栈纯 Rust 切换（`feat/fullstack-rust-architecture`）
+## 0.15.0
 
-- 🚀 **全栈 Rust 三层标杆架构重构与 Flutter 彻底退役** [#172](https://github.com/weironz/mica/issues/172)（2026-11-22 核实完成）。
-  完整建成 L1 数据引擎 + L2 四个无头纯 Rust 客户端内核（`crates/mica-board::session`、`crates/mica-sync`、`crates/mica-editor`、`crates/mica-client`）+ L3 纯 Rust 原生客户端（`clients/mica_rust`，路线二-B：自有 `mica-editor` + NSH 原生 `virtual_list` / IME 代理 / `Canvas` / `AtomicBlockRenderer` 注册表 / `/` 斜杠菜单 / 表格编辑 / SQLite 本地持久化 `VaultStore` / 云端 `CloudConnector` / 桌面与 WebAssembly 双目标）。
-  彻底删除 `clients/mica_flutter/`、`crates/doc-wasm/`、`crates/board-wasm/`、`.fvmrc`、`flutter_rust_bridge`、Cargokit 与全部 Dart/Flutter 脚本、CI/Release 流程与棘轮巨石债务，CI / Release / Docker / nginx / Inno Setup / `.deb` 全部切换至 100% 纯 Rust。详见 [设计方案](../architecture/fullstack-rust-architecture.md) 与 [P0 实证报告](../reviews/fullstack-rust-p0-spike-2026-11-22.md)。
+- 🚀 **全栈 Rust 三层标杆架构重构与 Flutter 彻底退役** [#172](https://github.com/weironz/mica/issues/172)（2026-11-24 全部 P0–P2 闸门验收完成）。
+  完整建成 L1 数据引擎 + L2 四个无头纯 Rust 客户端内核（`crates/mica-board::session`、`crates/mica-sync`、`crates/mica-editor`、`crates/mica-client`）+ L3 纯 Rust 原生客户端（`clients/mica_rust`，桌面与 WebAssembly 双目标）；完成 `#111` 账号隔离云端缓存键、Web 异步 `fetch` + IndexedDB 持久化与旧 Flutter Web `mica-localfirst` 未同步编辑迁移、Web 首包 Brotli-11 压至 `3.75 MiB`（≤ 4.0 MiB 硬门禁）+ 按需加载 `mica_preview/{math,mermaid}` + 严格 `sha256` CSP、Windows 自动更新与单实例（`#179`）及覆盖升级/回滚物理机演练。
+  彻底删除 `clients/mica_flutter/`、`crates/doc-wasm/`、`crates/board-wasm/`、`.fvmrc`、`flutter_rust_bridge`、Cargokit 与全部 Dart/Flutter 债务；详见 [设计方案](../architecture/fullstack-rust-architecture.md) 与 [分支评审与验收记录](../reviews/fullstack-rust-branch-review-2026-11-24.md)。
+- 📊 **使用统计与 Prometheus 可观测性扩展** [#191](https://github.com/weironz/mica/issues/191)（2026-11-24 随 `v0.15.0` 合入发布）：新增迁移 `0040_usage_stats.sql`（`document_yrs_base` 字数/字符数投影与 `writing_activity_doc_hourly` 活跃度分桶）、`/api/stats/{overview,activity}` 接口及客户端统计页、`/metrics` 指标扩展（含 A1b 评审优化 O(N+E) 孤儿页 CTE 与热路径单次查询复用）。
 
 ## 0.14.7
 

@@ -13,8 +13,8 @@ old=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 sed -i "0,/^version = \"$old\"/s//version = \"$version\"/" Cargo.toml
 sed -i "0,/^version = \"$old\"/s//version = \"$version\"/" clients/mica_rust/Cargo.toml
 sed -i "s/#define AppVersion \"$old\"/#define AppVersion \"$version\"/" clients/mica_rust/installer/mica.iss
-cargo check -p mica-api-server >/dev/null
-cargo check --manifest-path clients/mica_rust/Cargo.toml --lib >/dev/null
+cargo update --workspace
+cargo update --manifest-path clients/mica_rust/Cargo.toml --workspace
 
 for doc in README.md docs/ops/deploy.md; do
   [ -f "$doc" ] || { echo "REFUSED: $doc is missing — the quickstart gate reads its RELEASE= pin" >&2; exit 1; }
