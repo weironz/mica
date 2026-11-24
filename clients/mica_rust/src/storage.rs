@@ -90,10 +90,16 @@ impl PrefsState {
 
   #[cfg(not(target_arch = "wasm32"))]
   fn load_from(path: PathBuf) -> Self {
-    let entries = std::fs::read_to_string(&path)
-      .ok()
-      .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
-      .unwrap_or_default();
+    let entries = if path.exists() {
+      std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+        .unwrap_or_default()
+    } else if let Some(legacy_prefs) = legacy_flutter_prefs_path() {
+      seed_non_secret_prefs_from_legacy(&legacy_prefs)
+    } else {
+      BTreeMap::new()
+    };
     Self { entries, path: Some(path) }
   }
 
@@ -184,19 +190,22 @@ impl std::fmt::Debug for VaultStore {
 }
 
 impl VaultStore {
-  /// Open the platform-default vault (`<data_local_dir>/mica/vault.sqlite` on
-  /// desktop), falling back to an in-memory vault on failure. Always in-memory
-  /// on `wasm32`.
+  /// Open the platform-default desktop SQLite vault, seamlessly adopting the
+  /// canonical legacy Flutter desktop database (`<app_dir>/mica/local/store.db`)
+  /// when present, preserving early pure-Rust `vault.sqlite` installs, and
+  /// honoring `MICA_DATA_DIR`. Always in-memory on `wasm32`.
   pub fn open_default() -> Self {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      if let Some(base) = dirs_next::data_local_dir() {
-        let db_path = base.join("mica").join("vault.sqlite");
-        if let Some(path_str) = db_path.to_str()
-          && let Ok(vault) = Self::open_at(path_str)
-        {
-          return vault;
-        }
+      let env_override = std::env::var("MICA_DATA_DIR").ok();
+      if let Some(db_path) = resolve_default_vault_path(
+        env_override.as_deref(),
+        legacy_flutter_db_path(),
+        early_rust_db_path(),
+      ) && let Some(path_str) = db_path.to_str()
+        && let Ok(vault) = Self::open_at(path_str)
+      {
+        return vault;
       }
       Self::in_memory()
     }
@@ -1776,6 +1785,98 @@ impl VaultStore {
   }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn legacy_flutter_db_path() -> Option<PathBuf> {
+  #[cfg(any(target_os = "windows", target_os = "macos"))]
+  let base = dirs_next::config_dir()?;
+  #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+  let base = dirs_next::data_dir()?;
+  Some(base.join("mica").join("local").join("store.db"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn early_rust_db_path() -> Option<PathBuf> {
+  Some(dirs_next::data_local_dir()?.join("mica").join("vault.sqlite"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn legacy_flutter_prefs_path() -> Option<PathBuf> {
+  Some(dirs_next::config_dir()?.join("mica").join("prefs.json"))
+}
+
+/// Pure, testable desktop SQLite vault path resolution:
+/// 1. `MICA_DATA_DIR` override -> `<MICA_DATA_DIR>/store.db`
+/// 2. Existing canonical legacy Flutter DB (`<app_dir>/mica/local/store.db`)
+/// 3. Existing early pure-Rust DB (`<data_local_dir>/mica/vault.sqlite`)
+/// 4. Fresh install default -> canonical `<app_dir>/mica/local/store.db`
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_default_vault_path(
+  env_override: Option<&str>,
+  legacy_db: Option<PathBuf>,
+  early_rust_db: Option<PathBuf>,
+) -> Option<PathBuf> {
+  if let Some(dir) = env_override.map(str::trim).filter(|s| !s.is_empty()) {
+    return Some(PathBuf::from(dir).join("store.db"));
+  }
+  if let Some(ref legacy) = legacy_db
+    && legacy.exists()
+  {
+    return Some(legacy.clone());
+  }
+  if let Some(ref early) = early_rust_db
+    && early.exists()
+  {
+    return Some(early.clone());
+  }
+  legacy_db.or(early_rust_db)
+}
+
+/// One-time import of allowlisted, strictly non-secret UI preferences from
+/// legacy Flutter `<config_dir>/mica/prefs.json`. Never reads or migrates
+/// tokens, credentials, or auth secrets.
+#[cfg(not(target_arch = "wasm32"))]
+fn seed_non_secret_prefs_from_legacy(legacy_path: &Path) -> BTreeMap<String, String> {
+  let mut out = BTreeMap::new();
+  let Ok(raw) = std::fs::read_to_string(legacy_path) else {
+    return out;
+  };
+  let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&raw) else {
+    return out;
+  };
+  if let Some(b) = map.get("darkMode").and_then(serde_json::Value::as_bool) {
+    out.insert("darkMode".to_string(), if b { "true" } else { "false" }.to_string());
+  }
+  if let Some(w) = map.get(PREF_PAGE_WIDTH).and_then(serde_json::Value::as_f64)
+    && w.is_finite()
+    && (400.0..=2400.0).contains(&w)
+  {
+    out.insert(PREF_PAGE_WIDTH.to_string(), w.to_string());
+  }
+  if let Some(w) = map.get(PREF_SIDEBAR_WIDTH).and_then(serde_json::Value::as_f64)
+    && w.is_finite()
+    && (180.0..=640.0).contains(&w)
+  {
+    out.insert(PREF_SIDEBAR_WIDTH.to_string(), w.to_string());
+  }
+  if let Some(arr) = map.get(PREF_KNOWN_SERVERS).and_then(serde_json::Value::as_array) {
+    let mut servers = Vec::new();
+    for item in arr {
+      if let Some(s) = item.as_str() {
+        let norm = normalize_origin(s);
+        if !norm.is_empty() && !servers.iter().any(|x| x == &norm) {
+          servers.push(norm);
+        }
+      }
+    }
+    if !servers.is_empty()
+      && let Ok(encoded) = serde_json::to_string(&servers)
+    {
+      out.insert(PREF_KNOWN_SERVERS.to_string(), encoded);
+    }
+  }
+  out
+}
+
 fn normalize_origin(origin: &str) -> String {
   origin.trim().trim_end_matches('/').to_string()
 }
@@ -2217,5 +2318,158 @@ mod tests {
     vault.delete_workspace(DEFAULT_ORIGIN, ws).unwrap();
     assert!(vault.list_views(DEFAULT_ORIGIN).into_iter().all(|v| v.workspace_id != ws));
     assert!(vault.load_markdown(DEFAULT_ORIGIN, doc_id).is_none());
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn default_vault_path_adopts_legacy_store_db_and_preserves_early_rust_fallback() {
+    let root = std::env::temp_dir().join(format!("mica_vault_path_test_{}", Uuid::new_v4()));
+    let legacy_db = root.join("roaming").join("mica").join("local").join("store.db");
+    let early_db = root.join("local").join("mica").join("vault.sqlite");
+    let custom_dir = root.join("custom");
+
+    // 1. MICA_DATA_DIR always takes precedence.
+    assert_eq!(
+      resolve_default_vault_path(
+        Some(custom_dir.to_str().unwrap()),
+        Some(legacy_db.clone()),
+        Some(early_db.clone()),
+      ),
+      Some(custom_dir.join("store.db"))
+    );
+
+    // 2. Fresh install (neither exists) defaults to canonical legacy path `store.db`.
+    assert_eq!(
+      resolve_default_vault_path(None, Some(legacy_db.clone()), Some(early_db.clone())),
+      Some(legacy_db.clone())
+    );
+
+    // 3. Early pure-Rust install (`vault.sqlite` exists, `store.db` does not) is preserved.
+    std::fs::create_dir_all(early_db.parent().unwrap()).unwrap();
+    std::fs::write(&early_db, b"").unwrap();
+    assert_eq!(
+      resolve_default_vault_path(None, Some(legacy_db.clone()), Some(early_db.clone())),
+      Some(early_db.clone())
+    );
+
+    // 4. Legacy Flutter `store.db` takes precedence once present.
+    std::fs::create_dir_all(legacy_db.parent().unwrap()).unwrap();
+    std::fs::write(&legacy_db, b"").unwrap();
+    assert_eq!(
+      resolve_default_vault_path(None, Some(legacy_db.clone()), Some(early_db.clone())),
+      Some(legacy_db.clone())
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn opening_legacy_local_store_db_preserves_notes_folders_and_snapshots() {
+    let root = std::env::temp_dir().join(format!("mica_legacy_db_test_{}", Uuid::new_v4()));
+    let legacy_db = root.join("mica").join("local").join("store.db");
+    std::fs::create_dir_all(legacy_db.parent().unwrap()).unwrap();
+    let db_str = legacy_db.to_str().unwrap().to_string();
+
+    let ws_id = Uuid::new_v4();
+    let folder_id = Uuid::new_v4();
+    let doc_id = Uuid::new_v4();
+    let page_id = Uuid::new_v4();
+
+    // Seed directly with `mica_core::LocalStore` (exact engine used by legacy Flutter FFI).
+    {
+      let store = LocalStore::open(&db_str).unwrap();
+      store
+        .save_workspace(&LocalWorkspace {
+          id: ws_id.to_string(),
+          name: "旧版 Flutter 本地工作区".to_string(),
+          position: "0000000010".to_string(),
+          origin: DEFAULT_ORIGIN.to_string(),
+          role: "owner".to_string(),
+        })
+        .unwrap();
+      store
+        .save_view(&LocalView {
+          id: folder_id.to_string(),
+          workspace_id: ws_id.to_string(),
+          parent_id: None,
+          object_id: folder_id.to_string(),
+          object_type: "folder".to_string(),
+          name: "历史笔记".to_string(),
+          position: "0000000010".to_string(),
+          trashed: false,
+          origin: DEFAULT_ORIGIN.to_string(),
+        })
+        .unwrap();
+      store
+        .save_view(&LocalView {
+          id: page_id.to_string(),
+          workspace_id: ws_id.to_string(),
+          parent_id: Some(folder_id.to_string()),
+          object_id: doc_id.to_string(),
+          object_type: "page".to_string(),
+          name: "重要记录".to_string(),
+          position: "0000000010".to_string(),
+          trashed: false,
+          origin: DEFAULT_ORIGIN.to_string(),
+        })
+        .unwrap();
+      let doc = doc_from_markdown("# 旧版标题\n\n这段内容来自 v0.14.11 Flutter 本地库。", Some(1));
+      store.save_doc(DEFAULT_ORIGIN, &doc_id.to_string(), &doc).unwrap();
+      store
+        .create_local_version(DEFAULT_ORIGIN, &doc_id.to_string(), "v0.14.11 快照")
+        .unwrap();
+    }
+
+    // Reopen through pure-Rust `VaultStore` and confirm zero-migration readability.
+    {
+      let vault = VaultStore::open_at(&db_str).unwrap();
+      let workspaces = vault.list_workspaces(DEFAULT_ORIGIN);
+      assert!(workspaces.iter().any(|(id, name)| *id == ws_id && name == "旧版 Flutter 本地工作区"));
+      let views = vault.list_views(DEFAULT_ORIGIN);
+      assert_eq!(views.len(), 2);
+      assert!(views.iter().any(|v| v.id == page_id && v.parent_view_id == Some(folder_id)));
+      let md = vault.load_markdown(DEFAULT_ORIGIN, doc_id).unwrap();
+      assert!(md.contains("这段内容来自 v0.14.11 Flutter 本地库。"));
+      let versions = vault.list_versions(DEFAULT_ORIGIN, doc_id);
+      assert!(versions.iter().any(|(_, label, _)| label == "v0.14.11 快照"));
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn legacy_prefs_seed_imports_only_non_secret_ui_fields() {
+    let root = std::env::temp_dir().join(format!("mica_legacy_prefs_test_{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let legacy_json = root.join("prefs.json");
+    std::fs::write(
+      &legacy_json,
+      r#"{
+        "darkMode": true,
+        "pageWidth": 960,
+        "sidebarWidth": 320,
+        "knownServers": ["https://notes.mica.dev/", "https://notes.mica.dev"],
+        "serverCredentials": "[{\"token\":\"secret-should-not-import\"}]",
+        "accessToken": "secret-jwt",
+        "refreshToken": "secret-refresh"
+      }"#,
+    )
+    .unwrap();
+
+    let seeded = seed_non_secret_prefs_from_legacy(&legacy_json);
+    assert_eq!(seeded.get("darkMode").map(String::as_str), Some("true"));
+    assert_eq!(seeded.get(PREF_PAGE_WIDTH).map(String::as_str), Some("960"));
+    assert_eq!(seeded.get(PREF_SIDEBAR_WIDTH).map(String::as_str), Some("320"));
+    assert_eq!(
+      seeded.get(PREF_KNOWN_SERVERS).map(String::as_str),
+      Some(r#"["https://notes.mica.dev"]"#)
+    );
+    assert!(!seeded.contains_key(PREF_SERVER_CREDENTIALS));
+    assert!(!seeded.contains_key("accessToken"));
+    assert!(!seeded.contains_key("refreshToken"));
+
+    let _ = std::fs::remove_dir_all(&root);
   }
 }
