@@ -1427,6 +1427,16 @@ impl VaultStore {
         .filter(|((o, _), _)| o == origin)
         .map(|((_, id), (name, _))| (*id, name.clone()))
         .collect();
+      let mut seen_ws: HashSet<Uuid> = ws_ids.iter().map(|(id, _)| *id).collect();
+      for ((o, _), v) in &mem.views {
+        if o == origin && seen_ws.insert(v.workspace_id) {
+          let label = self
+            .get_pref(&format!("workspaceName:{origin}:{}", v.workspace_id))
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "Mica 本地工作区".to_string());
+          ws_ids.push((v.workspace_id, label));
+        }
+      }
       ws_ids.sort_by(|a, b| a.1.cmp(&b.1));
       for (ws_id, ws_name) in ws_ids {
         let mut live_pages = 0u64;

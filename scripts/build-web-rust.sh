@@ -74,6 +74,17 @@ if '__nsh_imports' not in src:
     )
 open(path, "w", encoding="utf-8", newline="\n").write(src)
 PY
+# Stamp content hash onto index.html asset URLs so browsers never reuse a stale .wasm across rebuilds.
+wasm_hash=$(sha256sum "$out/mica_rust_bg.wasm" | cut -c1-10)
+python3 - "$out/index.html" "$wasm_hash" <<'PY'
+import sys
+path, h = sys.argv[1], sys.argv[2]
+src = open(path, "r", encoding="utf-8").read()
+src = src.replace("./mica_rust_bg.wasm", f"./mica_rust_bg.wasm?v={h}")
+src = src.replace("./mica_rust.js", f"./mica_rust.js?v={h}")
+src = src.replace("./nsh.js", f"./nsh.js?v={h}")
+open(path, "w", encoding="utf-8", newline="\n").write(src)
+PY
 chmod -R a+rX "$out"
 
 raw_bytes=$(wc -c < "$out/mica_rust_bg.wasm")
