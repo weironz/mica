@@ -45,6 +45,7 @@ mica-core = { path = "../../crates/mica-core", features = ["store"] }
 mica-md = { path = "../../crates/md-core", features = ["render"] }
 mica-sync = { path = "../../crates/mica-sync", features = ["sqlite"] }
 dirs-next = "2"
+sha2 = "0.10"
 tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 ureq = { version = "3", features = ["json"] }
 

@@ -45,6 +45,7 @@ pub mod search_view;
 pub mod settings_view;
 pub mod share_dialog;
 pub mod sidebar;
+pub mod single_instance;
 pub mod storage;
 pub mod table_view;
 pub mod text_geometry;
@@ -53,6 +54,7 @@ pub mod touch_selection;
 pub mod transfer;
 pub mod transfer_dialog;
 pub mod tree_dnd;
+pub mod updater;
 pub mod usage_stats_view;
 pub mod version_history;
 pub mod web_idb;
@@ -2876,6 +2878,120 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   settings_props_val.usage_stats = Some(usage_stats_props);
   let settings_props = Rc::new(settings_props_val);
 
+  // Desktop auto-updater state + callbacks (Web reports server-managed updates)
+  let available_update: Signal<Option<updater::UpdateInfo>> = signal(None);
+  let update_busy = signal(false);
+  #[cfg(not(target_arch = "wasm32"))]
+  let update_check_gen = signal(0u64);
+
+  let run_check_update: Rc<dyn Fn(bool)> = Rc::new(move |open_dialog: bool| {
+    if open_dialog {
+      about_modal_open.set(true);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      update_status.set(format!("Web 版随服务器自动更新（v{APP_VERSION}）"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      if update_busy.get_untracked() {
+        return;
+      }
+      let epoch = update_check_gen.get_untracked().wrapping_add(1);
+      update_check_gen.set(epoch);
+      update_busy.set(true);
+      update_status.set("正在检查更新…".to_string());
+      app_owner.run(move || {
+        spawn(async move {
+          let res = net::run_blocking(|| updater::check_for_update_blocking(APP_VERSION)).await;
+          if update_check_gen.get_untracked() != epoch {
+            return;
+          }
+          update_busy.set(false);
+          match res {
+            Ok(Some(info)) => {
+              let ver = info.version.clone();
+              available_update.set(Some(info));
+              update_status.set(format!("发现新版本 v{ver}（当前 v{APP_VERSION}）"));
+            }
+            Ok(None) => {
+              available_update.set(None);
+              update_status.set(format!("已是最新版本（v{APP_VERSION}）"));
+            }
+            Err(err) => update_status.set(format!("检查更新失败：{err}")),
+          }
+        });
+      });
+    }
+  });
+
+  let on_install_update: Rc<dyn Fn()> = {
+    let br_upd = bridge.clone();
+    Rc::new(move || {
+      #[cfg(target_arch = "wasm32")]
+      {
+        let _ = &br_upd;
+        update_status.set(format!("Web 版随服务器自动更新（v{APP_VERSION}）"));
+      }
+      #[cfg(not(target_arch = "wasm32"))]
+      {
+        if update_busy.get_untracked() {
+          return;
+        }
+        let Some(info) = available_update.get_untracked() else {
+          return;
+        };
+        if !updater::update_supported() {
+          update_status.set(updater::UpdateError::UnsupportedPlatform.to_string());
+          return;
+        }
+        br_upd.flush_pending_persist();
+        update_busy.set(true);
+        let ver = info.version.clone();
+        update_status.set(format!("正在下载并校验 v{ver} 安装包…"));
+        let pid = std::process::id();
+        app_owner.run(move || {
+          spawn(async move {
+            let res = net::run_blocking(move || {
+              updater::download_and_launch_installer_blocking(&info, pid, |_| {})
+            })
+            .await;
+            match res {
+              Ok(_) => {
+                update_status.set(format!("正在启动 v{ver} 安装程序并重启…"));
+                std::process::exit(0);
+              }
+              Err(err) => {
+                update_busy.set(false);
+                update_status.set(err.to_string());
+              }
+            }
+          });
+        });
+      }
+    })
+  };
+
+  // Gentle non-intrusive startup update check on desktop (5s delay).
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    app_owner.run(move || {
+      spawn(async move {
+        timer(std::time::Duration::from_secs(5)).await;
+        if update_busy.get_untracked() || available_update.get_untracked().is_some() {
+          return;
+        }
+        if let Ok(Some(info)) =
+          net::run_blocking(|| updater::check_for_update_blocking(APP_VERSION)).await
+        {
+          let ver = info.version.clone();
+          available_update.set(Some(info));
+          update_status.set(format!("发现新版本 v{ver}"));
+        }
+      });
+    });
+  }
+
   // App Menu, Account Menu, World Switcher, Version History, Share, AI & Workspace Settings states
   let app_menu_cb = AppMenuCallbacks {
     on_new_page: on_new_page.clone(),
@@ -2898,7 +3014,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_go_back: on_nav_back.clone(),
     on_go_forward: on_nav_forward.clone(),
     on_open_about: Rc::new(move || about_modal_open.set(true)),
-    on_check_update: Rc::new(move || update_status.set(format!("已是最新版本（v{APP_VERSION}）"))),
+    on_check_update: {
+      let chk = run_check_update.clone();
+      Rc::new(move || chk(true))
+    },
   };
   {
     let back_sig = app_menu_cb.can_go_back;
@@ -2924,10 +3043,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       account_menu_open.set(false);
       world_switcher_open.set(true);
     }),
-    on_check_update: Rc::new(move || {
-      update_status.set(format!("已是最新版本（v{APP_VERSION}）"));
-      about_modal_open.set(true);
-    }),
+    on_check_update: {
+      let chk = run_check_update.clone();
+      Rc::new(move || chk(true))
+    },
     on_sign_out: do_cloud_logout.clone(),
     on_sign_in: Rc::new(move || {
       account_menu_open.set(false);
@@ -3996,13 +4115,19 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     }))
     // 4. Top-left Application Menu & About modal
     .child(app_menu::app_menu_popover(app_menu_open, dark_mode, app_menu_cb))
-    .child(app_menu::about_modal_view(
-      about_modal_open,
+    .child(app_menu::about_modal_view(app_menu::AboutModalProps {
+      open: about_modal_open,
       dark_mode,
-      APP_VERSION,
+      app_version: APP_VERSION,
       update_status,
-      Rc::new(move || update_status.set(format!("已是最新版本（v{APP_VERSION}）"))),
-    ))
+      available_update,
+      update_busy,
+      on_check_update: {
+        let chk = run_check_update.clone();
+        Rc::new(move || chk(false))
+      },
+      on_install_update,
+    }))
     // 5. 320px Workspace Switcher Popover & Stacked-Card Account Menu Popover
     .child(sidebar::workspace_switcher_popover(
       workspace_menu_open,

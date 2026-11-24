@@ -1,9 +1,11 @@
 //! Comprehensive unit & persistence tests for `storage.rs` (`VaultStore`) and
 //! `net.rs` (`CloudConnector`).
 
+#[allow(dead_code)]
 #[path = "../src/storage.rs"]
 mod storage;
 
+#[allow(dead_code)]
 #[path = "../src/net.rs"]
 mod net;
 
@@ -264,8 +266,43 @@ fn vault_sqlite_sync_storage_integrates_with_cloud_connector_sync_engine() {
   );
 }
 
+fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+  use std::sync::{Arc, Condvar, Mutex};
+  use std::task::{Context, Poll, Wake, Waker};
+  struct CondWaker {
+    ready: Mutex<bool>,
+    cv: Condvar,
+  }
+  impl Wake for CondWaker {
+    fn wake(self: Arc<Self>) {
+      *self.ready.lock().unwrap() = true;
+      self.cv.notify_all();
+    }
+  }
+  let wake = Arc::new(CondWaker {
+    ready: Mutex::new(false),
+    cv: Condvar::new(),
+  });
+  let waker = Waker::from(wake.clone());
+  let mut cx = Context::from_waker(&waker);
+  let mut fut = std::pin::pin!(fut);
+  loop {
+    match fut.as_mut().poll(&mut cx) {
+      Poll::Ready(out) => return out,
+      Poll::Pending => {
+        let mut g = wake.ready.lock().unwrap();
+        while !*g {
+          g = wake.cv.wait(g).unwrap();
+        }
+        *g = false;
+      }
+    }
+  }
+}
+
 #[test]
 fn cloud_connector_health_and_login_against_local_http_server() {
+  block_on(async {
   // 1. Health check success
   let (health_url, health_handle) = spawn_one_shot_http_server(
     "200 OK",
@@ -281,7 +318,7 @@ fn cloud_connector_health_and_login_against_local_http_server() {
     connector.endpoints().health(),
     format!("{health_url}/api/health")
   );
-  let summary = connector.check_health().expect("health check should succeed");
+  let summary = connector.check_health().await.expect("health check should succeed");
   assert_eq!(summary, "ok (v0.14.11)");
   let req = health_handle.join().unwrap();
   assert!(req.starts_with("GET /api/health "));
@@ -317,6 +354,7 @@ fn cloud_connector_health_and_login_against_local_http_server() {
 
   let signed_in_email = auth_conn
     .login("alice@mica.dev", "super-secret")
+    .await
     .expect("login should succeed");
   assert_eq!(signed_in_email, "alice@mica.dev");
   assert!(auth_conn.is_authenticated());
@@ -344,10 +382,12 @@ fn cloud_connector_health_and_login_against_local_http_server() {
   assert_eq!(auth_conn.server_url(), "https://other.mica.dev");
   assert!(!auth_conn.is_authenticated());
   assert_eq!(auth_conn.claims().capture().origin, WorldOrigin::Local);
+  });
 }
 
 #[test]
 fn cloud_connector_validation_serde_and_memory_sync_engine() {
+  block_on(async {
   let cfg = CloudConfig {
     server_url: "https://mica.example".to_string(),
     access_token: Some("tok".to_string()),
@@ -358,17 +398,18 @@ fn cloud_connector_validation_serde_and_memory_sync_engine() {
   assert_eq!(round_trip, cfg);
 
   let mut empty_conn = CloudConnector::new(CloudConfig::default());
-  assert!(empty_conn.check_health().is_err());
-  assert!(empty_conn.login("a@b.c", "pw").is_err());
+  assert!(empty_conn.check_health().await.is_err());
+  assert!(empty_conn.login("a@b.c", "pw").await.is_err());
 
   empty_conn.set_server_url("http://127.0.0.1:1");
-  assert!(empty_conn.login("", "pw").is_err());
-  assert!(empty_conn.login("a@b.c", "").is_err());
+  assert!(empty_conn.login("", "pw").await.is_err());
+  assert!(empty_conn.login("a@b.c", "").await.is_err());
 
   let mut engine = empty_conn.create_doc_sync("doc-mem", 77, "Bob");
   let effects = CloudConnector::push_local_update(&mut engine, sample_update("Memory diff"));
   assert!(!effects.is_empty());
   assert!(!engine.outbox_empty());
+  });
 }
 
 fn read_full_http_request(stream: &mut std::net::TcpStream) -> String {
@@ -562,61 +603,64 @@ fn cloud_workspaces_views_documents_and_vault_mirror_end_to_end() {
     access_token: None,
     email: None,
   });
-  assert_eq!(conn.login("will@cloudcele.com", "pw").unwrap(), "will@cloudcele.com");
-  assert_eq!(conn.access_token(), Some("jwt-access-1"));
-  assert_eq!(conn.refresh_token(), Some("jwt-refresh-1"));
+  block_on(async {
+    assert_eq!(conn.login("will@cloudcele.com", "pw").await.unwrap(), "will@cloudcele.com");
+    assert_eq!(conn.access_token(), Some("jwt-access-1"));
+    assert_eq!(conn.refresh_token(), Some("jwt-refresh-1"));
 
-  let workspaces = conn.list_workspaces().unwrap();
-  assert_eq!(workspaces.len(), 2);
-  assert_eq!(workspaces[0].name, "云端研发工作区");
-  assert_eq!(workspaces[0].page_count, 3);
-  assert_eq!(workspaces[1].name, "云端个人笔记");
+    let workspaces = conn.list_workspaces().await.unwrap();
+    assert_eq!(workspaces.len(), 2);
+    assert_eq!(workspaces[0].name, "云端研发工作区");
+    assert_eq!(workspaces[0].page_count, 3);
+    assert_eq!(workspaces[1].name, "云端个人笔记");
 
-  let ws1_views = conn.list_views(ws1_id).unwrap();
-  let ws2_views = conn.list_views(ws2_id).unwrap();
-  assert_eq!(ws1_views.len(), 2);
-  assert_eq!(ws2_views.len(), 1);
+    let ws1_views = conn.list_views(ws1_id).await.unwrap();
+    let ws2_views = conn.list_views(ws2_id).await.unwrap();
+    assert_eq!(ws1_views.len(), 2);
+    assert_eq!(ws2_views.len(), 1);
 
-  let md = conn.fetch_document_markdown(ws1_id, doc_id).unwrap();
-  assert!(md.contains("来自 mica.cloudcele.com 的正文"));
+    let md = conn.fetch_document_markdown(ws1_id, doc_id).await.unwrap();
+    assert!(md.contains("来自 mica.cloudcele.com 的正文"));
 
-  conn
-    .save_document_markdown(ws1_id, doc_id, "# 架构总览\n\n已更新")
-    .unwrap();
+    conn
+      .save_document_markdown(ws1_id, doc_id, "# 架构总览\n\n已更新")
+      .await
+      .unwrap();
 
-  conn.refresh_session().unwrap();
-  assert_eq!(conn.access_token(), Some("jwt-access-2"));
-  assert_eq!(conn.refresh_token(), Some("jwt-refresh-2"));
+    conn.refresh_session().await.unwrap();
+    assert_eq!(conn.access_token(), Some("jwt-access-2"));
+    assert_eq!(conn.refresh_token(), Some("jwt-refresh-2"));
 
-  // Mirror into VaultStore and verify credential persistence + per-workspace isolation.
-  let vault = VaultStore::in_memory();
-  vault
-    .save_server_credential_with_refresh(
-      &base_url,
-      "will@cloudcele.com",
-      conn.access_token().unwrap(),
-      conn.refresh_token().unwrap(),
-    )
-    .unwrap();
-  let (saved_email, saved_tok, saved_rt) = vault.saved_server_credential_full(&base_url).unwrap();
-  assert_eq!(saved_email, "will@cloudcele.com");
-  assert_eq!(saved_tok, "jwt-access-2");
-  assert_eq!(saved_rt, "jwt-refresh-2");
+    // Mirror into VaultStore and verify credential persistence + per-workspace isolation.
+    let vault = VaultStore::in_memory();
+    vault
+      .save_server_credential_with_refresh(
+        &base_url,
+        "will@cloudcele.com",
+        conn.access_token().unwrap(),
+        conn.refresh_token().unwrap(),
+      )
+      .unwrap();
+    let (saved_email, saved_tok, saved_rt) = vault.saved_server_credential_full(&base_url).unwrap();
+    assert_eq!(saved_email, "will@cloudcele.com");
+    assert_eq!(saved_tok, "jwt-access-2");
+    assert_eq!(saved_rt, "jwt-refresh-2");
 
-  let ws_pairs: Vec<(Uuid, String)> = workspaces.iter().map(|w| (w.id, w.name.clone())).collect();
-  vault.replace_origin_workspaces(&base_url, &ws_pairs).unwrap();
-  assert_eq!(vault.list_workspaces(&base_url).len(), 2);
+    let ws_pairs: Vec<(Uuid, String)> = workspaces.iter().map(|w| (w.id, w.name.clone())).collect();
+    vault.replace_origin_workspaces(&base_url, &ws_pairs).unwrap();
+    assert_eq!(vault.list_workspaces(&base_url).len(), 2);
 
-  vault.replace_workspace_views(&base_url, ws1_id, &ws1_views).unwrap();
-  vault.replace_workspace_views(&base_url, ws2_id, &ws2_views).unwrap();
+    vault.replace_workspace_views(&base_url, ws1_id, &ws1_views).unwrap();
+    vault.replace_workspace_views(&base_url, ws2_id, &ws2_views).unwrap();
 
-  // Multi-workspace isolation: ws1 and ws2 under the same cloud origin never mix.
-  let stored_ws1 = vault.list_workspace_views(&base_url, ws1_id);
-  let stored_ws2 = vault.list_workspace_views(&base_url, ws2_id);
-  assert_eq!(stored_ws1.len(), 2);
-  assert_eq!(stored_ws2.len(), 1);
-  assert_eq!(stored_ws2[0].name, "灵感随记");
-  assert!(vault.list_views(DEFAULT_ORIGIN).is_empty());
+    // Multi-workspace isolation: ws1 and ws2 under the same cloud origin never mix.
+    let stored_ws1 = vault.list_workspace_views(&base_url, ws1_id);
+    let stored_ws2 = vault.list_workspace_views(&base_url, ws2_id);
+    assert_eq!(stored_ws1.len(), 2);
+    assert_eq!(stored_ws2.len(), 1);
+    assert_eq!(stored_ws2[0].name, "灵感随记");
+    assert!(vault.list_views(DEFAULT_ORIGIN).is_empty());
+  });
 
   let reqs = handle.join().unwrap();
   assert!(reqs[1].starts_with("GET /api/workspaces "));
@@ -731,30 +775,33 @@ fn cloud_crud_mutations_and_unauthorized_detection() {
   .with_refresh_token(Some("rt-live".to_string()));
   assert_eq!(conn.refresh_token(), Some("rt-live"));
 
-  let created_ws = conn.create_workspace("新云端工作区").unwrap();
-  assert_eq!(created_ws.id, ws_id);
-  conn.update_workspace(ws_id, "改名后的工作区").unwrap();
+  block_on(async {
+    let created_ws = conn.create_workspace("新云端工作区").await.unwrap();
+    assert_eq!(created_ws.id, ws_id);
+    conn.update_workspace(ws_id, "改名后的工作区").await.unwrap();
 
-  let created_folder = conn.create_folder(ws_id, "目录 A", None).unwrap();
-  assert_eq!(created_folder.id, folder_id);
-  let created_doc = conn.create_document(ws_id, "页面 1", Some(folder_id)).unwrap();
-  assert_eq!(created_doc.object_id, doc_id);
+    let created_folder = conn.create_folder(ws_id, "目录 A", None).await.unwrap();
+    assert_eq!(created_folder.id, folder_id);
+    let created_doc = conn.create_document(ws_id, "页面 1", Some(folder_id)).await.unwrap();
+    assert_eq!(created_doc.object_id, doc_id);
 
-  let renamed = conn
-    .update_view(ws_id, page_view_id, "页面 1（改名）", Some("📄"))
-    .unwrap();
-  assert_eq!(renamed.name, "页面 1（改名）");
+    let renamed = conn
+      .update_view(ws_id, page_view_id, "页面 1（改名）", Some("📄"))
+      .await
+      .unwrap();
+    assert_eq!(renamed.name, "页面 1（改名）");
 
-  conn.reorder_views(ws_id, Some(folder_id), &[page_view_id]).unwrap();
-  conn.delete_view(ws_id, page_view_id).unwrap();
-  assert!(conn.list_trash(ws_id).unwrap().is_empty());
-  conn.restore_view(ws_id, page_view_id).unwrap();
-  conn.purge_view(ws_id, page_view_id).unwrap();
-  assert_eq!(conn.workspace_usage(ws_id).unwrap(), (2048, 1048576));
-  conn.revoke_invitation(ws_id, "inv-1").unwrap();
-  conn.update_member_role(ws_id, "usr-1", "admin").unwrap();
-  conn.remove_member(ws_id, "usr-1").unwrap();
-  conn.delete_workspace(ws_id).unwrap();
+    conn.reorder_views(ws_id, Some(folder_id), &[page_view_id]).await.unwrap();
+    conn.delete_view(ws_id, page_view_id).await.unwrap();
+    assert!(conn.list_trash(ws_id).await.unwrap().is_empty());
+    conn.restore_view(ws_id, page_view_id).await.unwrap();
+    conn.purge_view(ws_id, page_view_id).await.unwrap();
+    assert_eq!(conn.workspace_usage(ws_id).await.unwrap(), (2048, 1048576));
+    conn.revoke_invitation(ws_id, "inv-1").await.unwrap();
+    conn.update_member_role(ws_id, "usr-1", "admin").await.unwrap();
+    conn.remove_member(ws_id, "usr-1").await.unwrap();
+    conn.delete_workspace(ws_id).await.unwrap();
+  });
 
   let reqs = handle.join().unwrap();
   assert!(reqs[0].starts_with("POST /api/workspaces "));
@@ -843,11 +890,15 @@ fn usage_stats_vault_and_cloud_connector_endpoints() {
     access_token: Some("tok-stats".to_string()),
     email: Some("stats@mica.test".to_string()),
   });
-  let remote_ov = conn.get_usage_overview().unwrap();
+  let (remote_ov, remote_act) = block_on(async {
+    let ov = conn.get_usage_overview().await.unwrap();
+    let act = conn
+      .get_usage_activity("7d", 480, Some(&ws_id.to_string()), false)
+      .await
+      .unwrap();
+    (ov, act)
+  });
   assert_eq!(remote_ov.summary.total_words, 6);
-  let remote_act = conn
-    .get_usage_activity("7d", 480, Some(&ws_id.to_string()), false)
-    .unwrap();
   assert_eq!(remote_act.totals.pages_created, 1);
   let reqs = handle.join().unwrap();
   assert!(reqs[0].starts_with("GET /api/stats/overview "));

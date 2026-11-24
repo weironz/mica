@@ -11,6 +11,13 @@ use nsh_platform_windows as platform;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn main() -> impl std::process::Termination {
+  // #179: Enforce single instance per profile directory (matching legacy Flutter's
+  // named mutex so old Flutter and new pure-Rust clients never concurrently open
+  // the same `store.db`). Surfaces the existing Mica window and exits 0.
+  let Some(_single_instance_guard) = mica_rust::single_instance::acquire() else {
+    std::process::exit(0);
+  };
+
   platform::run_app(
     platform::AppSource::Rust(platform::Root::of::<mica_rust::MicaApp>()),
     platform::AppOptions {

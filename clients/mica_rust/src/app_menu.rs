@@ -478,18 +478,37 @@ fn menu_check_row(
     )
 }
 
+/// Props for the centered "关于 Mica" modal dialog (`about_dialog.dart` parity).
+#[derive(Clone)]
+pub struct AboutModalProps {
+  pub open: Signal<bool>,
+  pub dark_mode: Signal<bool>,
+  pub app_version: &'static str,
+  pub update_status: Signal<String>,
+  pub available_update: Signal<Option<crate::updater::UpdateInfo>>,
+  pub update_busy: Signal<bool>,
+  pub on_check_update: Rc<dyn Fn()>,
+  pub on_install_update: Rc<dyn Fn()>,
+}
+
 /// Centered "关于 Mica" modal dialog matching `about_dialog.dart`.
-pub fn about_modal_view(
-  open: Signal<bool>,
-  dark_mode: Signal<bool>,
-  app_version: &'static str,
-  update_status: Signal<String>,
-  on_check_update: Rc<dyn Fn()>,
-) -> impl IntoElement {
+pub fn about_modal_view(props: AboutModalProps) -> impl IntoElement {
+  let AboutModalProps {
+    open,
+    dark_mode,
+    app_version,
+    update_status,
+    available_update,
+    update_busy,
+    on_check_update,
+    on_install_update,
+  } = props;
   when(move || open.get(), {
     let on_check_update = on_check_update.clone();
+    let on_install_update = on_install_update.clone();
     move || {
       let check_cb = on_check_update.clone();
+      let install_cb = on_install_update.clone();
 
       view()
         .test_id("about-modal-backdrop")
@@ -604,22 +623,63 @@ pub fn about_modal_view(
                     ),
                 )
                 .child(
-                  button()
-                    .test_id("about-check-update-btn")
-                    .accessibility_label("检查更新")
-                    .h(px(30.0))
-                    .px(px(12.0))
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(move || palette(dark_mode.get()).border_normal)
-                    .bg(move || palette(dark_mode.get()).surface_overlay)
-                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || check_cb())
+                  view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(when(
+                      move || available_update.get().is_some() && crate::updater::update_supported(),
+                      {
+                        let install_cb = install_cb.clone();
+                        move || {
+                          let install_cb = install_cb.clone();
+                          button()
+                            .test_id("about-install-update-btn")
+                            .accessibility_label("下载并安装更新")
+                            .h(px(30.0))
+                            .px(px(12.0))
+                            .rounded(px(6.0))
+                            .bg(move || palette(dark_mode.get()).accent)
+                            .disabled(move || update_busy.get())
+                            .on_press(move || install_cb())
+                            .child(
+                              text(move || {
+                                if update_busy.get() {
+                                  "安装中…".to_string()
+                                } else if let Some(info) = available_update.get() {
+                                  format!("安装 v{}", info.version)
+                                } else {
+                                  "立即安装".to_string()
+                                }
+                              })
+                              .text_size(px(12.5))
+                              .font_weight(FontWeight::MEDIUM)
+                              .text_color(nsh_core::color::white()),
+                            )
+                        }
+                      },
+                    ))
                     .child(
-                      text("检查更新")
-                        .text_size(px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(move || palette(dark_mode.get()).text_primary),
+                      button()
+                        .test_id("about-check-update-btn")
+                        .accessibility_label("检查更新")
+                        .h(px(30.0))
+                        .px(px(12.0))
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(move || palette(dark_mode.get()).border_normal)
+                        .bg(move || palette(dark_mode.get()).surface_overlay)
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .disabled(move || update_busy.get())
+                        .on_press(move || check_cb())
+                        .child(
+                          text(move || {
+                            if update_busy.get() { "检查中…" } else { "检查更新" }
+                          })
+                          .text_size(px(12.5))
+                          .font_weight(FontWeight::MEDIUM)
+                          .text_color(move || palette(dark_mode.get()).text_primary),
+                        ),
                     ),
                 ),
             )

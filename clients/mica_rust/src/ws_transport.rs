@@ -559,6 +559,7 @@ mod tests {
 
     let srv = std::thread::spawn(move || {
       let (stream, _) = listener.accept().unwrap();
+      #[allow(clippy::result_large_err)]
       let mut ws = tungstenite::accept_hdr(stream, |req: &Request, resp: Response| {
         if let Some(h) = req.headers().get("authorization").and_then(|v| v.to_str().ok()) {
           *seen_auth_srv.lock().unwrap() = h.to_string();

@@ -36,6 +36,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[InstallDelete]
+; Clean up legacy Flutter runtime files left behind when upgrading in-place from
+; <= 0.14.x Flutter installs (same AppId and {app} directory). Pure-Rust Mica
+; ships a single standalone mica-rust.exe with zero DLLs or data\ directory.
+Type: files; Name: "{app}\mica_flutter.exe"
+Type: files; Name: "{app}\*.dll"
+Type: filesandordirs; Name: "{app}\data"
+
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 
