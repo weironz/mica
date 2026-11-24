@@ -761,6 +761,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let doc_sync_phase = signal(mica_sync::SyncPhase::Offline);
   let doc_presence_users: Signal<Vec<mica_sync::PresenceUser>> = signal(Vec::new());
   let doc_sync_badge = signal(String::new());
+  let doc_loading = signal(false);
   let doc_sync = doc_sync_session::DocSyncController::new(
     vault.clone(),
     bridge.clone(),
@@ -770,6 +771,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     doc_sync_phase,
     doc_presence_users,
     doc_sync_badge,
+    doc_loading,
   );
   let views_watcher = doc_sync_session::ViewsWsWatcher::new(cloud_connector.clone());
 
@@ -1046,13 +1048,19 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       br.flush_pending_persist();
       let orig = active_origin.get_untracked();
       let ws_id = active_workspace_id.get_untracked();
-      let md = docs
+      let cached_md = docs
         .borrow()
         .get(&doc_id)
         .cloned()
-        .or_else(|| v.load_markdown(&orig, doc_id))
-        .unwrap_or_default();
-      docs.borrow_mut().insert(doc_id, md.clone());
+        .or_else(|| v.load_markdown(&orig, doc_id));
+      let is_cloud_signed =
+        cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !ws_id.is_nil();
+      let needs_remote_load = is_cloud_signed && cached_md.is_none();
+      let md = cached_md.unwrap_or_default();
+      if !needs_remote_load {
+        docs.borrow_mut().insert(doc_id, md.clone());
+      }
+      doc_loading.set(needs_remote_load);
       br.load_markdown(&md);
       active_doc.set(Some(doc_id));
       active_doc_id_str.set(doc_id.to_string());
@@ -1122,6 +1130,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           {
             return;
           }
+          doc_loading.set(false);
           if let Ok((conn, remote_md, rot)) = res {
             if rot.is_some() {
               *cc_a.borrow_mut() = conn;
@@ -1132,7 +1141,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             docs_a.borrow_mut().insert(doc_id, remote_md.clone());
             if !ds_a.is_ready_for(&orig, ws_id, doc_id)
               && doc_dirty_gen.get_untracked() == dirty_snap
-              && remote_md != md
+              && (needs_remote_load || remote_md != md)
             {
               br_a.load_markdown(&remote_md);
             }
@@ -1145,6 +1154,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           }
         });
       } else {
+        doc_loading.set(false);
         ds.close();
       }
     })
@@ -1257,6 +1267,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     cloud_load_gen,
     doc_fetch_gen,
     doc_save_gen,
+    doc_loading,
     doc_sync: doc_sync.clone(),
     views_watcher: views_watcher.clone(),
     refresh_snapshots: refresh_snapshots.clone(),
@@ -3966,6 +3977,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .child(
           view()
             .flex_1()
+            .relative()
             .min_w(px(0.0))
             .min_h(px(0.0))
             .h_full()
@@ -3975,6 +3987,68 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               let br = bridge.clone();
               let hdr = editor_header.clone();
               move || editor_view::editor_view(br.clone(), hdr.clone(), dark_mode)
+            }))
+            .child(when(move || active_mode.get() == MODE_DOC && doc_loading.get(), move || {
+              view()
+                .test_id("doc-loading-skeleton")
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .bg(move || palette(dark_mode.get()).surface_base)
+                .items_center()
+                .pt(px(72.0))
+                .px(px(32.0))
+                .child(
+                  view()
+                    .flex_col()
+                    .w_full()
+                    .max_w(px(640.0))
+                    .gap(px(14.0))
+                    .child(
+                      text(move || {
+                        let t = active_title.get();
+                        if t.trim().is_empty() {
+                          "正在加载页面内容…".to_string()
+                        } else {
+                          format!("正在加载「{t}」…")
+                        }
+                      })
+                      .text_size(px(13.0))
+                      .text_color(move || palette(dark_mode.get()).text_muted),
+                    )
+                    .child(
+                      view()
+                        .w(px(260.0))
+                        .h(px(22.0))
+                        .rounded(px(6.0))
+                        .bg(move || palette(dark_mode.get()).surface_sunken),
+                    )
+                    .child(
+                      view()
+                        .w_full()
+                        .h(px(14.0))
+                        .rounded(px(4.0))
+                        .bg(move || palette(dark_mode.get()).surface_sunken),
+                    )
+                    .child(
+                      view()
+                        .w_full()
+                        .max_w(px(480.0))
+                        .h(px(14.0))
+                        .rounded(px(4.0))
+                        .bg(move || palette(dark_mode.get()).surface_sunken),
+                    )
+                    .child(
+                      view()
+                        .w_full()
+                        .max_w(px(380.0))
+                        .h(px(14.0))
+                        .rounded(px(4.0))
+                        .bg(move || palette(dark_mode.get()).surface_sunken),
+                    ),
+                )
             }))
             .child(when(move || active_mode.get() == MODE_BOARD, {
               let bs = board_session.clone();

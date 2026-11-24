@@ -16,7 +16,7 @@
 | **P0-1** | 恢复 `#111` 账号隔离云端缓存键 | **已完成并验真** | `0804738f` | `crates/mica-client/src/cache_origin.rs` 规范化 `normalize_server_url` + `cloud_cache_origin(server_url, account_id)`；登录强制拉取 `/api/auth/me` 绑定 `account_id`；Playwright E2E `[2/6]` 在真实 Chromium IndexedDB `mica_sync_v1` 验证缓存键含账号隔离前缀 |
 | **P0-2** | 删除 Web 同步 XHR + 接通 IndexedDB 离线持久化 | **已完成并验真** | `03981b66` | `crates/mica-client/src/net.rs` 全面改为异步 `fetch` + `AbortController` 超时 + `RequestCredentials::SameOrigin`；`crates/mica-client/src/web_idb.rs` 落地 `mica_sync_v1/docs` + Web Locks 串行写入；Playwright E2E `[1/6]` 验证 **0 XHR**，`[5/6]` 验证断网编辑 → IDB `outbox` → 刷新恢复 |
 | **P0-3 (W1–W5)** | Web 首包压进 ≤ 4.0 MiB（Brotli-11）+ 启动体验与硬门禁 | **已完成并验真** | `8c100db7` | **W4**：Web `mica-md` 仅启用 `render-board`，公式/Mermaid 拆为按需懒加载 `mica_preview/{math,mermaid}.{js,wasm}`（经根 `Owner` + `nsh_core::prelude::spawn` 驱动）；**W2**：`wasm-opt -Oz`（`16.06 MB -> 13.93 MB`）；**W5**：`scripts/build-web-rust.sh` 硬门禁 ≤ `4,194,304 B`，CI 实测 **`3,926,345 B`（3.74 MiB）**（`math` gzip-9 `1,003,574 B`、`mermaid` gzip-9 `2,010,015 B`）；**W1**：内联 SVG 启动画面 + `modulepreload` / `preload as="fetch" crossorigin` |
-| **P0-4** | Windows 自动更新 + 单实例互斥（`#179`）+ Inno `[InstallDelete]` | **已完成（代码+打包全绿；待物理机覆盖升级/回滚演练）** | `86fa49fc` | `clients/mica_rust/src/single_instance.rs`（与旧 Flutter 同公式的 FNV-1a UTF-16 命名互斥锁）；`clients/mica_rust/src/updater.rs`（GitHub Releases 拉取、强制大小与 SHA-256 校验、RAII 临时清理、退出前 flush、`/VERYSILENT ... /MICAWAITPID=<pid>`）；`clients/mica_rust/installer/mica.iss` 添加 `[InstallDelete]` 清理旧 Flutter 残留 DLL；已在 [Release dry-run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409) 由真实 `ISCC.exe` 编译出 `Mica-Setup-0.14.11.exe` 并通过 `test-installer-wait.ps1` |
+| **P0-4** | Windows 自动更新 + 单实例互斥（`#179`）+ Inno `[InstallDelete]` | **已完成并物理机全链路演练通过** | `86fa49fc`、本次提交 | `clients/mica_rust/src/single_instance.rs`（`#179` 互斥锁，实测二次启动 113 ms 退出）；`clients/mica_rust/src/updater.rs`（GitHub Releases + SHA-256 校验 + `/MICAWAITPID`）；`clients/mica_rust/installer/mica.iss`（`[InstallDelete]` 含补清 `native_assets.json`）；已在真实 Windows 物理机完成 `v0.14.11` 覆盖升级 → 单实例 → 卸载 → 回滚 `v0.14.11` → `store.db` `PRAGMA quick_check = ok` 全链路演练 |
 | **P1-1** | 明确并文档化平台交付范围 | **已完成** | `eb605e76` | 更新 `docs/architecture/fullstack-rust-architecture.md`（红线 3）、`README.md`、`README.zh-CN.md`、`docs/ops/release.md`：正式交付 Windows 桌面、Web、可选 Linux `.deb` 与跨平台 CLI；不交付 Android 与 macOS 桌面包，并在切换版发布说明标注 Android 止步 `0.14.x` |
 | **P1-2** | 桌面中文输入法与多浏览器兼容性实测 | **自动化全绿；用户本机桌面+Web 真人实测确认通过** | `f497d4d9` | 已归档 [`fullstack-rust-ime-browser-verification-2026-11-24.md`](fullstack-rust-ime-browser-verification-2026-11-24.md)；2026-11-24 用户于物理 Windows 机器实测桌面端与 Web 端确认通过；未覆盖端（如 macOS Safari）与 `W-8` 安装包演练按实标注 |
 | **P1-3** | 重建高价值编辑器回归与新 Web 端 E2E + 拉高 CI 回执下限 | **已完成并验真** | `3bdb9a9a`、`6daa44f7`、`23bfecfa` | **重质量不凑水测试**：`crates/mica-editor` 新增 46 条高价值行为回归 + `proptest`（26 → **72 条**），并顺带捕获修复 3 个真实编辑器 bug（空文档撤销掉 0 块、嵌套列表序号重置、空嵌套列表回车未退缩进）；`e2e/web_e2e.mjs` 6 大核心场景在 CI 真实容器栈全过；CI `cargo_receipt` 下限上调为 `--workspace ≥ 550`（实测 **1,581**）、`mica-editor ≥ 70`（实测 **72**）、`mica-client ≥ 30`（实测 **32**）、`clients/mica_rust ≥ 110`（实测 **129**） |
@@ -54,8 +54,11 @@
 
 ---
 
-## 3. 合并 `main` 前的最后核对项
+## 3. 演练额外收口与合并前状态
 
-所有代码实现、自动化测试、安全审计、容器栈 Playwright E2E、多平台发布彩排及用户本机 Windows 桌面/Web 真人实测均已通过；合并 `main` / 正式发版前仅剩一项物理机演练供决定是否执行：
+所有 P0–P2 项、完整 CI（7/7）、Release dry-run（9/9）、用户本机桌面/Web 实测以及 **P0-4 真实覆盖安装与回滚演练**均已全部闭环通过；且演练期间额外发现并修复了 2 个真实生产体验问题：
 
-1. **P0-4 真实覆盖安装与回滚演练**：在已安装 `v0.14.11`（Flutter）的 Windows 机器上用彩排产出的 `Mica-Setup-0.14.11.exe` 执行覆盖升级 → 验证旧 DLL 清理、`store.db` 接管与单实例互斥 → 验证卸载回滚 `v0.14.11`。
+1. **Inno Setup `[InstallDelete]` 遗漏 `native_assets.json`**：已在 `clients/mica_rust/installer/mica.iss` 补齐。
+2. **桌面端未缓存云端页首次打开 1~2 秒白屏**：通过全局复用 `ureq::Agent` 连接池（Keep-Alive + TLS 复用）与 WS 共享 `rustls::ClientConfig`、移除大工作区切页全量同步扫库，并在未命中本地缓存时显示骨架屏加载态彻底消除，配 2 条单测回归锁定。
+
+分支 `feat/fullstack-rust-architecture` 已具备合并 `main` 条件（等待用户明确指示是否合并及发版）。

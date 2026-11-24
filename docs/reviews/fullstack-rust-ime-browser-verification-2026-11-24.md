@@ -42,7 +42,7 @@
 | W-5 | 行首/列表/引用/表格单元格内中文输入 | [ ] | [ ] | 不触发意外块拆分或光标跳出单元格 |
 | W-6 | 中英混排 + Emoji（如 `测试🚀完成`）光标左右移动与选中 | [ ] | [ ] | 无 UTF-16 截断崩溃，左右键与鼠标点击命中准确 |
 | W-7 | 跨块自由拖选 + `Ctrl+C` / `Ctrl+V` / `Ctrl+Z` | [ ] | [ ] | 格式（加粗/链接/列表/表格）与撤销/重做无丢失 |
-| W-8 | Windows 覆盖安装与回滚演练（P0-4） | [ ] | — | 从已安装的 `v0.14.11`（Flutter）覆盖安装新版 `Mica-Setup-*.exe`，确认 `[InstallDelete]` 清理旧 `flutter_windows.dll`、`store.db` 本地数据自动接管、单实例互斥生效；随后卸载并重装 `v0.14.11` 验证回滚路径 |
+| W-8 | Windows 覆盖安装与回滚演练（P0-4） | [x] | — | **2026-11-24 物理机全链路通过**：从 `v0.14.11`（Flutter）静默覆盖安装纯 Rust `Mica-Setup-0.14.11.exe`（退出码 `0`），`[InstallDelete]` 清理全部旧 DLL/`data/`/`mica_flutter.exe`（并补清遗漏的 `native_assets.json`），单实例互斥 `#179` 113 ms 退出，`store.db`（124 MB）完整接管；随后静默卸载并重装官方 Flutter `v0.14.11`，`mica_flutter.exe` 启动正常，`PRAGMA quick_check = ok`（2,153 条快照零损坏） |
 
 ### 2.2 Web 端多浏览器（`https://` 或同源 `http://127.0.0.1`）
 
@@ -65,7 +65,10 @@
 
 ## 3. 签收结论
 
-- **2026-11-24 用户真人实测反馈**：用户已在当前 Windows 物理机上实测 `f497d4d9` 编译的桌面端（`mica-rust.exe`）与 Web 端（`http://127.0.0.1:8090`），反馈中文输入与编辑体验**确认通过（“没问题”）**。
-- **仍保留的可选/发版前核对项**：
-  - `W-8`（P0-4）：从旧版 Flutter `v0.14.11` 覆盖安装 `Mica-Setup-*.exe` 并验证卸载回滚（可在决定发版前用 [Release dry-run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409) 的 `Mica-Setup-0.14.11.exe` 演练）。
-  - macOS Safari / 额外输入法（如本机未覆盖，可在发版说明标注实测范围）。
+- **2026-11-24 用户真人实测与 P0-4 演练结果**：
+  - 用户在 Windows 物理机实测桌面端（`mica-rust.exe`）与 Web 端（`http://127.0.0.1:8090`），中文输入与基础编辑确认通过。
+  - **演练发现并立即修复的 2 项真实问题**：
+    1. `clients/mica_rust/installer/mica.iss` 补清旧版 Flutter 遗留的 `native_assets.json`；
+    2. 桌面端首次打开未缓存云端页面 1~2 秒白屏：定位为 `net.rs` 每次请求新建 `ureq::Agent` 丢失 Keep-Alive/TLS 复用（实测冷握手 `1,931.7 ms` vs Keep-Alive `507.6 ms`）+ `cloud_sync.rs` 切工作区同步全量查 SQLite + 未缓存时直接渲染空文档；已修复为全局连接池 + WS 共享 `rustls` 配置 + 按需惰性读取 + 骨架屏加载态。
+  - `W-8`（P0-4 覆盖安装 → 单实例 → 卸载 → 回滚官方 `v0.14.11` → `store.db` 完整性校验）已在真实 Windows 物理机全链路通过。
+- **可选留档项**：macOS Safari / 额外第三方输入法如未覆盖，在正式发版说明中按实标注实测范围即可。

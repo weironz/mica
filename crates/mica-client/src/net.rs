@@ -1488,11 +1488,17 @@ impl CloudConnector {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn http_agent(timeout_secs: u64) -> ureq::Agent {
-  ureq::Agent::config_builder()
-    .timeout_global(Some(Duration::from_secs(timeout_secs)))
-    .build()
-    .into()
+static SHARED_HTTP_AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn shared_http_agent() -> &'static ureq::Agent {
+  SHARED_HTTP_AGENT.get_or_init(|| {
+    ureq::Agent::config_builder()
+      .max_idle_connections(16)
+      .max_idle_connections_per_host(8)
+      .build()
+      .into()
+  })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1527,28 +1533,29 @@ fn send_http_blocking(
   json_body: Option<&Value>,
   timeout_secs: u64,
 ) -> Result<String, String> {
-  let agent = http_agent(timeout_secs);
+  let agent = shared_http_agent();
+  let timeout = Some(Duration::from_secs(timeout_secs));
   let auth_header = bearer_token
     .map(str::trim)
     .filter(|t| !t.is_empty())
     .map(|t| format!("Bearer {t}"));
   let mut resp = match method {
     "GET" => {
-      let mut req = agent.get(url);
+      let mut req = agent.get(url).config().timeout_global(timeout).build();
       if let Some(ref h) = auth_header {
         req = req.header("Authorization", h);
       }
       req.call().map_err(|e| e.to_string())?
     }
     "DELETE" => {
-      let mut req = agent.delete(url);
+      let mut req = agent.delete(url).config().timeout_global(timeout).build();
       if let Some(ref h) = auth_header {
         req = req.header("Authorization", h);
       }
       req.call().map_err(|e| e.to_string())?
     }
     "POST" => {
-      let mut req = agent.post(url);
+      let mut req = agent.post(url).config().timeout_global(timeout).build();
       if let Some(ref h) = auth_header {
         req = req.header("Authorization", h);
       }
@@ -1558,7 +1565,7 @@ fn send_http_blocking(
       }
     }
     "PATCH" => {
-      let mut req = agent.patch(url);
+      let mut req = agent.patch(url).config().timeout_global(timeout).build();
       if let Some(ref h) = auth_header {
         req = req.header("Authorization", h);
       }
@@ -2460,6 +2467,61 @@ mod tests {
     assert_ne!(
       worker_id, caller,
       "HTTP work must execute off the UI thread"
+    );
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn shared_http_agent_reuses_keep_alive_tcp_connection() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind keep-alive test listener");
+    let addr = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let accepts_srv = Arc::clone(&accepts);
+
+    let srv = thread::spawn(move || {
+      let (stream, _) = listener.accept().expect("accept first connection");
+      accepts_srv.fetch_add(1, Ordering::SeqCst);
+      stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("set read timeout");
+      let mut writer = stream.try_clone().expect("clone stream");
+      let mut reader = BufReader::new(stream);
+      for seq in 1..=2 {
+        let mut line = String::new();
+        loop {
+          line.clear();
+          let n = reader.read_line(&mut line).expect("read request line");
+          if n == 0 || line == "\r\n" {
+            break;
+          }
+        }
+        let body = format!("{{\"seq\":{seq}}}");
+        let resp = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: keep-alive\r\nContent-Length: {}\r\n\r\n{}",
+          body.len(),
+          body
+        );
+        writer.write_all(resp.as_bytes()).expect("write response");
+        writer.flush().expect("flush response");
+      }
+    });
+
+    let url = format!("http://{addr}/api/health");
+    let r1 = send_http_blocking("GET", &url, None, None, 5).expect("first GET");
+    let r2 = send_http_blocking("GET", &url, None, None, 5).expect("second GET");
+    srv.join().expect("server thread finished");
+
+    assert_eq!(r1, "{\"seq\":1}");
+    assert_eq!(r2, "{\"seq\":2}");
+    assert_eq!(
+      accepts.load(Ordering::SeqCst),
+      1,
+      "sequential requests to the same host must reuse the pooled Keep-Alive connection"
     );
   }
 }

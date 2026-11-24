@@ -2258,6 +2258,7 @@ dependencies = [
  "mica-editor",
  "mica-md",
  "mica-sync",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2267,6 +2268,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]

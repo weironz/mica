@@ -42,6 +42,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; ships a single standalone mica-rust.exe with zero DLLs or data\ directory.
 Type: files; Name: "{app}\mica_flutter.exe"
 Type: files; Name: "{app}\*.dll"
+Type: files; Name: "{app}\native_assets.json"
 Type: filesandordirs; Name: "{app}\data"
 
 [Files]

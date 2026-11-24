@@ -323,6 +323,7 @@ pub(crate) struct CloudSessionHandles {
   pub cloud_load_gen: Signal<u64>,
   pub doc_fetch_gen: Signal<u64>,
   pub doc_save_gen: Signal<u64>,
+  pub doc_loading: Signal<bool>,
   pub doc_sync: DocSyncController,
   pub views_watcher: ViewsWsWatcher,
   pub refresh_snapshots: Rc<dyn Fn(Uuid)>,
@@ -389,20 +390,6 @@ impl CloudSessionHandles {
       }
     }
 
-    let mut next_docs = HashMap::new();
-    for row in &views {
-      if is_page_view(row) {
-        let md = self
-          .vault
-          .load_markdown(&origin, row.object_id)
-          .unwrap_or_default();
-        next_docs.insert(row.object_id, md);
-      }
-    }
-    if let Some((did, md)) = initial_doc.clone() {
-      next_docs.insert(did, md);
-    }
-
     let first_folder = views.iter().find(|r| r.object_type == "folder" && !r.is_deleted);
     let fid = first_folder.map(|r| r.id).unwrap_or(Uuid::nil());
     let fname = first_folder
@@ -417,6 +404,33 @@ impl CloudSessionHandles {
           .find(|r| is_page_view(r) && !r.is_deleted && r.object_id == *did)
       })
       .or_else(|| views.iter().find(|r| is_page_view(r) && !r.is_deleted));
+
+    // Avoid synchronously reading thousands of SQLite snapshots on the UI thread
+    // when switching large cloud workspaces (e.g. 3,000+ pages). Cloud pages are
+    // loaded lazily on open, and uncached pages are deliberately omitted from
+    // `next_docs` so `open_doc_internal` can distinguish "not yet fetched" from
+    // "genuinely empty" and show a loading skeleton instead of a blank page.
+    let mut next_docs = HashMap::new();
+    if is_cloud {
+      if let Some((did, md)) = initial_doc.clone() {
+        next_docs.insert(did, md);
+      } else if let Some(page) = opening_page
+        && let Some(md) = self.vault.load_markdown(&origin, page.object_id)
+      {
+        next_docs.insert(page.object_id, md);
+      }
+    } else {
+      for row in &views {
+        if is_page_view(row)
+          && let Some(md) = self.vault.load_markdown(&origin, row.object_id)
+        {
+          next_docs.insert(row.object_id, md);
+        }
+      }
+      if let Some((did, md)) = initial_doc.clone() {
+        next_docs.insert(did, md);
+      }
+    }
 
     let mut next_tree = PageTreeModel::new(views.clone());
     for folder in views
@@ -441,7 +455,9 @@ impl CloudSessionHandles {
     if let Some(page) = opening_page {
       let doc_id = page.object_id;
       let title = page.name.clone();
-      let active_md = next_docs.get(&doc_id).cloned().unwrap_or_default();
+      let cached_md = next_docs.get(&doc_id).cloned();
+      let is_cloud_signed = is_cloud && self.is_cloud_signed_in.get_untracked() && !ws_id.is_nil();
+      let active_md = cached_md.clone().unwrap_or_default();
       self.active_doc.set(Some(doc_id));
       self.active_doc_id_str.set(doc_id.to_string());
       self.active_title.set(title.clone());
@@ -449,10 +465,11 @@ impl CloudSessionHandles {
         .active_is_favorite
         .set(self.favorites.borrow().contains(&doc_id));
       (self.refresh_snapshots)(doc_id);
+      self.doc_loading.set(is_cloud_signed && cached_md.is_none());
       self.bridge.load_markdown(&active_md);
       self.open_tabs.set(vec![OpenTab::single(doc_id, title)]);
       self.active_tab_idx.set(0);
-      if is_cloud && self.is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
+      if is_cloud_signed {
         let srv_url = self.server_url.get_untracked();
         self.doc_sync.open_cloud_doc(
           srv_url,
@@ -466,6 +483,7 @@ impl CloudSessionHandles {
       }
     } else {
       self.doc_sync.close();
+      self.doc_loading.set(false);
       self.active_doc.set(None);
       self.active_doc_id_str.set(String::new());
       self.active_title.set("暂无页面".to_string());

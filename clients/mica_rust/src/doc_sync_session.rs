@@ -95,6 +95,7 @@ pub(crate) struct DocSyncController {
   sync_phase: Signal<SyncPhase>,
   presence_users: Signal<Vec<PresenceUser>>,
   sync_badge: Signal<String>,
+  doc_loading: Signal<bool>,
 }
 
 impl DocSyncController {
@@ -108,6 +109,7 @@ impl DocSyncController {
     sync_phase: Signal<SyncPhase>,
     presence_users: Signal<Vec<PresenceUser>>,
     sync_badge: Signal<String>,
+    doc_loading: Signal<bool>,
   ) -> Self {
     Self {
       owner: Owner::current(),
@@ -120,6 +122,7 @@ impl DocSyncController {
       sync_phase,
       presence_users,
       sync_badge,
+      doc_loading,
     }
   }
 
@@ -511,6 +514,7 @@ impl DocSyncController {
             && self.bridge.load_crdt_doc(&state, cid).is_ok()
             && let Some(did) = doc_id
           {
+            self.doc_loading.set(false);
             self.docs_store.borrow_mut().insert(did, self.bridge.export_markdown());
             self.update_badge(
               self.sync_phase.get_untracked(),

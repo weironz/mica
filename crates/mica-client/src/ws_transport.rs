@@ -66,16 +66,30 @@ mod imp {
   use std::io::ErrorKind;
   use std::net::TcpStream;
   use std::pin::Pin;
-  use std::sync::{Arc, Mutex, mpsc};
+  use std::sync::{Arc, Mutex, OnceLock, mpsc};
   use std::task::{Context, Poll, Waker};
   use std::time::Duration;
 
   use tungstenite::client::IntoClientRequest;
   use tungstenite::http::HeaderValue;
   use tungstenite::stream::MaybeTlsStream;
-  use tungstenite::{Error as WsErr, Message, WebSocket};
+  use tungstenite::{Connector, Error as WsErr, Message, WebSocket};
 
   use super::WsEvent;
+
+  static SHARED_WS_TLS: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+
+  pub(super) fn shared_ws_tls_config() -> Arc<rustls::ClientConfig> {
+    Arc::clone(SHARED_WS_TLS.get_or_init(|| {
+      let mut roots = rustls::RootCertStore::empty();
+      roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+      Arc::new(
+        rustls::ClientConfig::builder()
+          .with_root_certificates(roots)
+          .with_no_client_auth(),
+      )
+    }))
+  }
 
   enum OutboundCmd {
     Text(String),
@@ -194,7 +208,38 @@ mod imp {
           req.headers_mut().insert("Authorization", val);
         }
 
-        let mut socket = match tungstenite::connect(req) {
+        let host = match req.uri().host() {
+          Some(h) => h.to_string(),
+          None => {
+            let mut q = q_worker.lock().unwrap_or_else(|e| e.into_inner());
+            q.push(WsEvent::Error("ws url missing host".to_string()));
+            q.mark_closed();
+            return;
+          }
+        };
+        let is_tls = matches!(req.uri().scheme_str(), Some("wss" | "https"));
+        let port = req
+          .uri()
+          .port_u16()
+          .unwrap_or(if is_tls { 443 } else { 80 });
+        let tcp = match TcpStream::connect((host.as_str(), port)) {
+          Ok(stream) => {
+            let _ = stream.set_nodelay(true);
+            stream
+          }
+          Err(err) => {
+            let mut q = q_worker.lock().unwrap_or_else(|e| e.into_inner());
+            q.push(WsEvent::Error(err.to_string()));
+            q.mark_closed();
+            return;
+          }
+        };
+        let connector = if is_tls {
+          Some(Connector::Rustls(shared_ws_tls_config()))
+        } else {
+          Some(Connector::Plain)
+        };
+        let mut socket = match tungstenite::client_tls_with_config(req, tcp, None, connector) {
           Ok((sock, _resp)) => sock,
           Err(err) => {
             let mut q = q_worker.lock().unwrap_or_else(|e| e.into_inner());
@@ -595,5 +640,16 @@ mod tests {
     handle.close();
     srv.join().unwrap();
     assert_eq!(seen_auth.lock().unwrap().as_str(), "Bearer secret-jwt");
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn shared_ws_tls_config_is_singleton() {
+    let a = imp::shared_ws_tls_config();
+    let b = imp::shared_ws_tls_config();
+    assert!(
+      std::sync::Arc::ptr_eq(&a, &b),
+      "WebSocket connects must reuse a single shared rustls ClientConfig for TLS session resumption"
+    );
   }
 }
