@@ -156,6 +156,8 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [fullstack-rust-p0-p2-verification-2026-11-24.md](reviews/fullstack-rust-p0-p2-verification-2026-11-24.md) | **全栈 Rust 架构评审（P0–P2）落地与验证总台账**（含全部 commit 映射、完整 CI 与 Release dry-run 实测回执及合并前真人签收项） |
+| [fullstack-rust-ime-browser-verification-2026-11-24.md](reviews/fullstack-rust-ime-browser-verification-2026-11-24.md) | 全栈 Rust 分支输入法与多浏览器验证记录与真人签收矩阵（P1-2） |
 | [fullstack-rust-p0-spike-2026-11-22.md](reviews/fullstack-rust-p0-spike-2026-11-22.md) | 全栈 Rust Phase 0 全景实证与 L2 代码边界摸底（NSH 纯 Rust 瘦身 Web 1.39 MiB Brotli、路线二-B 2,000 块/500 节点基准、Board/Sync/Editor 抽离蓝图） |
 | [wasm-size-budget-2026-11-17.md](reviews/wasm-size-budget-2026-11-17.md) | Markdown 引擎 wasm 体积预算：为什么设、业界做法、高亮器入引擎（gh#178）后的实测与调到 288 KiB 的决定、以后怎么调 |
 | [redundancy-and-home-review-2026-11-10.md](reviews/redundancy-and-home-review-2026-11-10.md) | 双实现盘点、首页与三轮实施评估;前三项(Mermaid、公式、兼容层)已实施并审核;第二轮评估与用户决定;交给他人实施的待办清单 |
