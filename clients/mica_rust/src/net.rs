@@ -6,7 +6,7 @@
 //!
 //! Transport is unified through [`send_http`]: desktop uses `ureq` on a
 //! dedicated worker thread ([`run_blocking`]), and Web (`wasm32`) uses
-//! `XMLHttpRequest` via [`crate::web_runtime::xhr_request`].
+//! async `window.fetch` with `AbortController` timeouts via [`crate::web_runtime::fetch_request`].
 
 use mica_api_types::{View, Workspace};
 use mica_client::protocol::{decode_auth, decode_views, decode_workspaces};
@@ -273,17 +273,17 @@ impl CloudConnector {
   }
 
   /// Probe `GET /api/health` on the configured server.
-  pub fn check_health(&self) -> Result<String, String> {
+  pub async fn check_health(&self) -> Result<String, String> {
     self.require_server()?;
     let url = self.endpoints.health();
-    let body = send_http("GET", &url, None, None, HEALTH_TIMEOUT_SECS)
+    let body = send_http("GET", &url, None, None, HEALTH_TIMEOUT_SECS).await
       .map_err(|e| format!("health check failed for {url}: {e}"))?;
     Ok(format_health_summary(&body))
   }
 
   /// Probe `origin` via `GET /api/ready` (falling back to `GET /api/health`) to
   /// discover reachability, server version, and open-registration status.
-  pub fn probe_server_meta(&self, origin: &str) -> Result<ServerProbeMeta, String> {
+  pub async fn probe_server_meta(&self, origin: &str) -> Result<ServerProbeMeta, String> {
     let target = {
       let t = origin.trim().trim_end_matches('/');
       if t.is_empty() { self.endpoints.base_url().to_string() } else { t.to_string() }
@@ -293,7 +293,7 @@ impl CloudConnector {
     }
 
     for path in ["/api/ready", "/api/health"] {
-      if let Ok(body) = send_http("GET", &format!("{target}{path}"), None, None, HEALTH_TIMEOUT_SECS) {
+      if let Ok(body) = send_http("GET", &format!("{target}{path}"), None, None, HEALTH_TIMEOUT_SECS).await {
         return Ok(parse_probe_meta(&body));
       }
     }
@@ -302,7 +302,7 @@ impl CloudConnector {
 
   /// Authenticate via `POST /api/auth/login`, persist token & email in memory,
   /// and advance [`ClaimTracker`] to the cloud origin.
-  pub fn login(&mut self, email: &str, password: &str) -> Result<String, String> {
+  pub async fn login(&mut self, email: &str, password: &str) -> Result<String, String> {
     self.require_server()?;
     let email_trimmed = email.trim();
     if email_trimmed.is_empty() || password.is_empty() {
@@ -311,7 +311,7 @@ impl CloudConnector {
 
     let claim = self.claims.capture();
     let payload = json!({ "email": email_trimmed, "password": password });
-    let body = send_http("POST", &self.endpoints.login(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
+    let body = send_http("POST", &self.endpoints.login(), None, Some(&payload), LOGIN_TIMEOUT_SECS).await
       .map_err(|e| format!("login request failed: {e}"))?;
     let auth = decode_auth(&body).map_err(|e| format!("invalid login response: {e}"))?;
 
@@ -331,8 +331,8 @@ impl CloudConnector {
 
   /// Fetch the authenticated user's identity (`GET /api/auth/me`) to resolve
   /// `user_id` when restoring legacy credentials saved without `account_id`.
-  pub fn fetch_me(&self) -> Result<CloudUser, String> {
-    let body = self.authed_get("/api/auth/me", LOGIN_TIMEOUT_SECS)?;
+  pub async fn fetch_me(&self) -> Result<CloudUser, String> {
+    let body = self.authed_get("/api/auth/me", LOGIN_TIMEOUT_SECS).await?;
     let val: Value =
       serde_json::from_str(&body).map_err(|e| format!("invalid /api/auth/me response: {e}"))?;
     let user_obj = val.get("user").unwrap_or(&val);
@@ -362,7 +362,7 @@ impl CloudConnector {
   }
 
   /// Rotate an expired JWT access token via `POST /api/auth/refresh`.
-  pub fn refresh_session(&mut self) -> Result<(), String> {
+  pub async fn refresh_session(&mut self) -> Result<(), String> {
     self.require_server()?;
     let payload = match self.refresh_token() {
       Some(refresh_tok) => json!({ "refresh_token": refresh_tok }),
@@ -370,7 +370,7 @@ impl CloudConnector {
       None => return Err("refresh token is unavailable".to_string()),
     };
 
-    let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
+    let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS).await
       .map_err(|e| format!("token refresh failed: {e}"))?;
     let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
     self.config.access_token = Some(auth.access_token);
@@ -388,10 +388,10 @@ impl CloudConnector {
   /// Restore or rotate a browser cloud session using the server's `HttpOnly`
   /// `mica_refresh` cookie (`POST /api/auth/refresh` with `{}` body), returning
   /// the authenticated user's email without touching `localStorage`.
-  pub fn refresh_session_cookie(&mut self) -> Result<String, String> {
+  pub async fn refresh_session_cookie(&mut self) -> Result<String, String> {
     self.require_server()?;
     let payload = json!({});
-    let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
+    let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS).await
       .map_err(|e| format!("cookie session refresh failed: {e}"))?;
     let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
     let email = auth.user.email.clone();
@@ -407,14 +407,14 @@ impl CloudConnector {
 
   /// End the current cloud session server-side (`POST /api/auth/logout`),
   /// revoking the refresh token family and clearing `HttpOnly` auth cookies.
-  pub fn logout_server(&self) -> Result<(), String> {
+  pub async fn logout_server(&self) -> Result<(), String> {
     self.require_server()?;
     let url = format!("{}/api/auth/logout", self.endpoints.base_url());
     let payload = match self.refresh_token() {
       Some(rt) => json!({ "refresh_token": rt }),
       None => json!({}),
     };
-    let _ = send_http("POST", &url, None, Some(&payload), LOGIN_TIMEOUT_SECS)
+    let _ = send_http("POST", &url, None, Some(&payload), LOGIN_TIMEOUT_SECS).await
       .map_err(|e| format!("logout failed: {e}"))?;
     Ok(())
   }
@@ -422,18 +422,18 @@ impl CloudConnector {
   // ── Cloud Workspaces, Views & Documents ─────────────────────────────────
 
   /// Fetch all cloud workspaces the signed-in account belongs to (`GET /api/workspaces`).
-  pub fn list_workspaces(&self) -> Result<Vec<Workspace>, String> {
-    let body = self.authed_get("/api/workspaces", API_TIMEOUT_SECS)?;
+  pub async fn list_workspaces(&self) -> Result<Vec<Workspace>, String> {
+    let body = self.authed_get("/api/workspaces", API_TIMEOUT_SECS).await?;
     decode_workspaces(&body).map_err(|e| format!("invalid workspaces response: {e}"))
   }
 
   /// Create a new cloud workspace (`POST /api/workspaces`).
-  pub fn create_workspace(&self, name: &str) -> Result<Workspace, String> {
+  pub async fn create_workspace(&self, name: &str) -> Result<Workspace, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
       return Err("workspace name must not be empty".to_string());
     }
-    let body = self.authed_post_json("/api/workspaces", &json!({ "name": trimmed }), API_TIMEOUT_SECS)?;
+    let body = self.authed_post_json("/api/workspaces", &json!({ "name": trimmed }), API_TIMEOUT_SECS).await?;
     let val: Value = serde_json::from_str(body.trim())
       .map_err(|e| format!("invalid create workspace response: {e}"))?;
     let ws_val = val.get("workspace").cloned().unwrap_or(val);
@@ -441,7 +441,7 @@ impl CloudConnector {
   }
 
   /// Rename a cloud workspace (`PATCH /api/workspaces/{ws}`).
-  pub fn update_workspace(&self, workspace_id: Uuid, name: &str) -> Result<(), String> {
+  pub async fn update_workspace(&self, workspace_id: Uuid, name: &str) -> Result<(), String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
       return Err("workspace name must not be empty".to_string());
@@ -450,38 +450,38 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}"),
       &json!({ "name": trimmed }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Delete a cloud workspace (`DELETE /api/workspaces/{ws}`).
-  pub fn delete_workspace(&self, workspace_id: Uuid) -> Result<(), String> {
-    self.authed_delete(&format!("/api/workspaces/{workspace_id}"), API_TIMEOUT_SECS)?;
+  pub async fn delete_workspace(&self, workspace_id: Uuid) -> Result<(), String> {
+    self.authed_delete(&format!("/api/workspaces/{workspace_id}"), API_TIMEOUT_SECS).await?;
     Ok(())
   }
 
   /// Fetch all live views in a cloud workspace (`GET /api/workspaces/{ws}/views`).
-  pub fn list_views(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
-    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/views"), API_TIMEOUT_SECS)?;
+  pub async fn list_views(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
+    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/views"), API_TIMEOUT_SECS).await?;
     decode_views(&body).map_err(|e| format!("invalid views response: {e}"))
   }
 
   /// Fetch trashed views in a cloud workspace (`GET /api/workspaces/{ws}/trash`).
-  pub fn list_trash(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
-    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/trash"), API_TIMEOUT_SECS)?;
+  pub async fn list_trash(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
+    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/trash"), API_TIMEOUT_SECS).await?;
     decode_views(&body).map_err(|e| format!("invalid trash views response: {e}"))
   }
 
   /// Read a cloud document's Markdown (`GET /api/workspaces/{ws}/documents/{doc}/markdown`,
   /// falling back to `/export/markdown` for older servers).
-  pub fn fetch_document_markdown(&self, workspace_id: Uuid, document_id: Uuid) -> Result<String, String> {
+  pub async fn fetch_document_markdown(&self, workspace_id: Uuid, document_id: Uuid) -> Result<String, String> {
     let primary = format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown");
-    let body = match self.authed_get(&primary, API_TIMEOUT_SECS) {
+    let body = match self.authed_get(&primary, API_TIMEOUT_SECS).await {
       Ok(b) => b,
       Err(err) if err.contains("404") => self.authed_get(
         &format!("/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"),
         API_TIMEOUT_SECS,
-      )?,
+      ).await?,
       Err(err) => return Err(err),
     };
     let val: Value = serde_json::from_str(body.trim())
@@ -491,7 +491,7 @@ impl CloudConnector {
 
   /// Persist a cloud document's Markdown via `PATCH /api/workspaces/{ws}/documents/{doc}/markdown`
   /// (`mode: "replace_all"`).
-  pub fn save_document_markdown(
+  pub async fn save_document_markdown(
     &self,
     workspace_id: Uuid,
     document_id: Uuid,
@@ -501,12 +501,12 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
       &json!({ "mode": "replace_all", "markdown": markdown }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Create a new page in a cloud workspace (`POST /api/workspaces/{ws}/documents`).
-  pub fn create_document(
+  pub async fn create_document(
     &self,
     workspace_id: Uuid,
     name: &str,
@@ -520,7 +520,7 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/documents"),
       &payload,
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     let val: Value = serde_json::from_str(body.trim())
       .map_err(|e| format!("invalid create document response: {e}"))?;
     let view_val = val.get("view").cloned().unwrap_or(val);
@@ -528,7 +528,7 @@ impl CloudConnector {
   }
 
   /// Create a new folder in a cloud workspace (`POST /api/workspaces/{ws}/folders`).
-  pub fn create_folder(
+  pub async fn create_folder(
     &self,
     workspace_id: Uuid,
     name: &str,
@@ -542,7 +542,7 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/folders"),
       &payload,
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     let val: Value = serde_json::from_str(body.trim())
       .map_err(|e| format!("invalid create folder response: {e}"))?;
     let view_val = val.get("view").cloned().unwrap_or(val);
@@ -550,7 +550,7 @@ impl CloudConnector {
   }
 
   /// Rename or update the icon of a cloud view (`PATCH /api/workspaces/{ws}/views/{view}`).
-  pub fn update_view(
+  pub async fn update_view(
     &self,
     workspace_id: Uuid,
     view_id: Uuid,
@@ -565,7 +565,7 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
       &payload,
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     let val: Value = serde_json::from_str(body.trim())
       .map_err(|e| format!("invalid update view response: {e}"))?;
     let view_val = val.get("view").cloned().unwrap_or(val);
@@ -573,35 +573,35 @@ impl CloudConnector {
   }
 
   /// Move a cloud view (and its subtree) into the recycle bin (`DELETE /api/workspaces/{ws}/views/{view}`).
-  pub fn delete_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
+  pub async fn delete_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
     self.authed_delete(
       &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Restore a trashed cloud view (`POST /api/workspaces/{ws}/views/{view}/restore`).
-  pub fn restore_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
+  pub async fn restore_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
     self.authed_post_json(
       &format!("/api/workspaces/{workspace_id}/views/{view_id}/restore"),
       &json!({}),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Permanently purge a trashed cloud view (`DELETE /api/workspaces/{ws}/trash/{view}`).
-  pub fn purge_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
+  pub async fn purge_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
     self.authed_delete(
       &format!("/api/workspaces/{workspace_id}/trash/{view_id}"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
-  pub fn reorder_views(
+  pub async fn reorder_views(
     &self,
     workspace_id: Uuid,
     parent_view_id: Option<Uuid>,
@@ -614,12 +614,12 @@ impl CloudConnector {
         "ordered_view_ids": ordered_view_ids,
       }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Register a new account via `POST /api/auth/register`.
-  pub fn register(&self, email: &str, display_name: &str, password: &str) -> Result<CloudUser, String> {
+  pub async fn register(&self, email: &str, display_name: &str, password: &str) -> Result<CloudUser, String> {
     let base = self.require_server()?;
     let (email_t, display_t) = (email.trim(), display_name.trim());
     if email_t.is_empty() || password.is_empty() {
@@ -637,14 +637,14 @@ impl CloudConnector {
       None,
       Some(&payload),
       LOGIN_TIMEOUT_SECS,
-    )
+    ).await
     .map_err(|e| format!("registration failed: {e}"))?;
     Ok(parse_register_user(&body, email_t, display_t))
   }
 
   /// Request a password-reset email (`POST /api/auth/password/forgot`, falling
   /// back to `POST /api/auth/forgot-password` on 404).
-  pub fn forgot_password(&self, email: &str) -> Result<(), String> {
+  pub async fn forgot_password(&self, email: &str) -> Result<(), String> {
     let base = self.require_server()?;
     let email_t = email.trim();
     if email_t.is_empty() {
@@ -658,7 +658,7 @@ impl CloudConnector {
       None,
       Some(&payload),
       LOGIN_TIMEOUT_SECS,
-    ) {
+    ).await {
       Ok(_) => Ok(()),
       Err(err) if err.contains("404") => {
         send_http(
@@ -667,7 +667,7 @@ impl CloudConnector {
           None,
           Some(&payload),
           LOGIN_TIMEOUT_SECS,
-        )
+        ).await
         .map_err(|e| format!("forgot password request failed: {e}"))?;
         Ok(())
       }
@@ -678,30 +678,30 @@ impl CloudConnector {
   // ── Document Sharing ────────────────────────────────────────────────────
 
   /// Query current public share state for a cloud document.
-  pub fn get_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
+  pub async fn get_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
     let body = self.authed_get(
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     parse_share_state(&body, self.endpoints.base_url())
   }
 
   /// Create or retrieve the active public share link for a cloud document.
-  pub fn create_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
+  pub async fn create_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
     let body = self.authed_post_json(
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
       &json!({}),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     parse_share_state(&body, self.endpoints.base_url())
   }
 
   /// Revoke the active public share link for a cloud document.
-  pub fn delete_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
+  pub async fn delete_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
     let body = self.authed_delete(
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     if body.trim().is_empty() {
       return Ok(ShareState::default());
     }
@@ -711,17 +711,17 @@ impl CloudConnector {
   // ── Document Comments ───────────────────────────────────────────────────
 
   /// List comment threads for a cloud document.
-  pub fn list_comments(&self, workspace_id: Uuid, document_id: Uuid) -> Result<Vec<CommentThread>, String> {
+  pub async fn list_comments(&self, workspace_id: Uuid, document_id: Uuid) -> Result<Vec<CommentThread>, String> {
     let body = self.authed_get(
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     parse_comment_threads(&body)
   }
 
   /// Create a new anchored comment thread on a cloud document.
   #[allow(clippy::too_many_arguments)]
-  pub fn create_comment(
+  pub async fn create_comment(
     &self,
     workspace_id: Uuid,
     document_id: Uuid,
@@ -745,13 +745,13 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
       &payload,
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid create comment response: {e}"))?;
     parse_comment_thread(val.get("thread").unwrap_or(&val))
   }
 
   /// Reply to an existing comment thread.
-  pub fn reply_comment(
+  pub async fn reply_comment(
     &self,
     workspace_id: Uuid,
     document_id: Uuid,
@@ -766,13 +766,13 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/reply"),
       &json!({ "body": trimmed }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid comment reply response: {e}"))?;
     Ok(parse_comment_item(val.get("comment").unwrap_or(&val)))
   }
 
   /// Mark a comment thread resolved or reopened.
-  pub fn resolve_comment(
+  pub async fn resolve_comment(
     &self,
     workspace_id: Uuid,
     document_id: Uuid,
@@ -783,28 +783,28 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/resolve"),
       &json!({ "resolved": resolved }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Delete a comment thread.
-  pub fn delete_comment(&self, workspace_id: Uuid, document_id: Uuid, thread_id: Uuid) -> Result<(), String> {
+  pub async fn delete_comment(&self, workspace_id: Uuid, document_id: Uuid, thread_id: Uuid) -> Result<(), String> {
     self.authed_delete(
       &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   // ── Personal Access Tokens ──────────────────────────────────────────────
 
   /// List Personal Access Tokens for the signed-in user.
-  pub fn list_tokens(&self) -> Result<Vec<ApiTokenInfo>, String> {
-    parse_token_list(&self.authed_get("/api/auth/tokens", API_TIMEOUT_SECS)?)
+  pub async fn list_tokens(&self) -> Result<Vec<ApiTokenInfo>, String> {
+    parse_token_list(&self.authed_get("/api/auth/tokens", API_TIMEOUT_SECS).await?)
   }
 
   /// Mint a new Personal Access Token (`POST /api/auth/tokens`).
-  pub fn create_token(
+  pub async fn create_token(
     &self,
     name: &str,
     can_write: bool,
@@ -819,28 +819,28 @@ impl CloudConnector {
     if let Some(days) = expires_in_days {
       payload["expires_in_days"] = json!(days);
     }
-    parse_created_token(&self.authed_post_json("/api/auth/tokens", &payload, API_TIMEOUT_SECS)?)
+    parse_created_token(&self.authed_post_json("/api/auth/tokens", &payload, API_TIMEOUT_SECS).await?)
   }
 
   /// Revoke an existing Personal Access Token (`DELETE /api/auth/tokens/{id}`).
-  pub fn revoke_token(&self, token_id: &str) -> Result<(), String> {
+  pub async fn revoke_token(&self, token_id: &str) -> Result<(), String> {
     let trimmed = token_id.trim();
     if trimmed.is_empty() {
       return Err("token id cannot be empty".to_string());
     }
-    self.authed_delete(&format!("/api/auth/tokens/{trimmed}"), API_TIMEOUT_SECS)?;
+    self.authed_delete(&format!("/api/auth/tokens/{trimmed}"), API_TIMEOUT_SECS).await?;
     Ok(())
   }
 
   // ── AI Settings & Completion ────────────────────────────────────────────
 
   /// List configured AI providers from `GET /api/ai/settings`.
-  pub fn list_ai_providers(&self) -> Result<Vec<AiProviderConfig>, String> {
-    parse_ai_providers(&self.authed_get("/api/ai/settings", API_TIMEOUT_SECS)?)
+  pub async fn list_ai_providers(&self) -> Result<Vec<AiProviderConfig>, String> {
+    parse_ai_providers(&self.authed_get("/api/ai/settings", API_TIMEOUT_SECS).await?)
   }
 
   /// Save or activate an AI provider via `PATCH /api/ai/settings`.
-  pub fn save_ai_provider(
+  pub async fn save_ai_provider(
     &self,
     config: &AiProviderConfig,
     api_key: Option<&str>,
@@ -854,20 +854,20 @@ impl CloudConnector {
     if let Some(key) = api_key {
       payload["api_key"] = json!(key);
     }
-    parse_ai_providers(&self.authed_patch_json("/api/ai/settings", &payload, API_TIMEOUT_SECS)?)
+    parse_ai_providers(&self.authed_patch_json("/api/ai/settings", &payload, API_TIMEOUT_SECS).await?)
   }
 
   /// Delete a configured AI provider via `DELETE /api/ai/providers/{id}`.
-  pub fn delete_ai_provider(&self, provider_id: &str) -> Result<Vec<AiProviderConfig>, String> {
+  pub async fn delete_ai_provider(&self, provider_id: &str) -> Result<Vec<AiProviderConfig>, String> {
     let trimmed = provider_id.trim();
     if trimmed.is_empty() {
       return Err("provider_id cannot be empty".to_string());
     }
-    parse_ai_providers(&self.authed_delete(&format!("/api/ai/providers/{trimmed}"), API_TIMEOUT_SECS)?)
+    parse_ai_providers(&self.authed_delete(&format!("/api/ai/providers/{trimmed}"), API_TIMEOUT_SECS).await?)
   }
 
   /// Fetch live available models from an AI provider via `POST /api/ai/models`.
-  pub fn fetch_ai_models(
+  pub async fn fetch_ai_models(
     &self,
     provider_id: Option<&str>,
     base_url: &str,
@@ -881,7 +881,7 @@ impl CloudConnector {
     if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
       payload["api_key"] = json!(key);
     }
-    let body = self.authed_post_json("/api/ai/models", &payload, API_TIMEOUT_SECS)?;
+    let body = self.authed_post_json("/api/ai/models", &payload, API_TIMEOUT_SECS).await?;
     let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI models response: {e}"))?;
     Ok(
       val
@@ -894,7 +894,7 @@ impl CloudConnector {
 
   /// Execute an AI writing prompt against the cloud server (`POST /api/ai/complete`),
   /// cleanly returning an error when offline, unauthenticated, or unconfigured.
-  pub fn stream_ai_prompt(&self, system: &str, prompt: &str) -> Result<String, String> {
+  pub async fn stream_ai_prompt(&self, system: &str, prompt: &str) -> Result<String, String> {
     let prompt_t = prompt.trim();
     if prompt_t.is_empty() {
       return Err("prompt cannot be empty".to_string());
@@ -908,6 +908,7 @@ impl CloudConnector {
     }
     let body = self
       .authed_post_json("/api/ai/complete", &payload, AI_TIMEOUT_SECS)
+      .await
       .map_err(|e| format!("AI request unavailable: {e}"))?;
     let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI completion response: {e}"))?;
     let text = val
@@ -923,14 +924,14 @@ impl CloudConnector {
   // ── Usage Statistics ─────────────────────────────────────────────────────
 
   /// Fetch global & per-workspace usage statistics (`GET /api/stats/overview`).
-  pub fn get_usage_overview(&self) -> Result<mica_core::UsageStatsOverview, String> {
-    let body = self.authed_get("/api/stats/overview", API_TIMEOUT_SECS)?;
+  pub async fn get_usage_overview(&self) -> Result<mica_core::UsageStatsOverview, String> {
+    let body = self.authed_get("/api/stats/overview", API_TIMEOUT_SECS).await?;
     serde_json::from_str(&body)
       .map_err(|e| format!("invalid usage stats overview response: {e}"))
   }
 
   /// Fetch writing activity trend & 180-day heatmap (`GET /api/stats/activity`).
-  pub fn get_usage_activity(
+  pub async fn get_usage_activity(
     &self,
     range: &str,
     tz_offset_minutes: i32,
@@ -944,7 +945,7 @@ impl CloudConnector {
       path.push_str("&workspace_id=");
       path.push_str(ws_id.trim());
     }
-    let body = self.authed_get(&path, API_TIMEOUT_SECS)?;
+    let body = self.authed_get(&path, API_TIMEOUT_SECS).await?;
     serde_json::from_str(&body)
       .map_err(|e| format!("invalid usage stats activity response: {e}"))
   }
@@ -952,12 +953,12 @@ impl CloudConnector {
   // ── Workspace Members & Invitations ─────────────────────────────────────
 
   /// List members of `workspace_id` (`GET /api/workspaces/{ws}/members`).
-  pub fn list_members(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceMemberInfo>, String> {
-    parse_member_list(&self.authed_get(&format!("/api/workspaces/{workspace_id}/members"), API_TIMEOUT_SECS)?)
+  pub async fn list_members(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceMemberInfo>, String> {
+    parse_member_list(&self.authed_get(&format!("/api/workspaces/{workspace_id}/members"), API_TIMEOUT_SECS).await?)
   }
 
   /// Invite a user by email into `workspace_id` (`POST /api/workspaces/{ws}/members`).
-  pub fn invite_member(&self, workspace_id: Uuid, email: &str, role: &str) -> Result<WorkspaceInvitationInfo, String> {
+  pub async fn invite_member(&self, workspace_id: Uuid, email: &str, role: &str) -> Result<WorkspaceInvitationInfo, String> {
     let email_t = email.trim();
     if email_t.is_empty() {
       return Err("email is required".to_string());
@@ -967,21 +968,21 @@ impl CloudConnector {
       &format!("/api/workspaces/{workspace_id}/members"),
       &json!({ "email": email_t, "role": role_t }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid invite response: {e}"))?;
     Ok(parse_invitation(val.get("invitation").unwrap_or(&val)))
   }
 
   /// List pending invitations sent for `workspace_id` (`GET /api/workspaces/{ws}/invitations`).
-  pub fn list_invitations(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceInvitationInfo>, String> {
+  pub async fn list_invitations(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceInvitationInfo>, String> {
     parse_invitation_list(
-      &self.authed_get(&format!("/api/workspaces/{workspace_id}/invitations"), API_TIMEOUT_SECS)?,
+      &self.authed_get(&format!("/api/workspaces/{workspace_id}/invitations"), API_TIMEOUT_SECS).await?,
     )
   }
 
   /// Fetch workspace storage usage `(bytes_used, quota_bytes)` (`GET /api/workspaces/{ws}/usage`).
-  pub fn workspace_usage(&self, workspace_id: Uuid) -> Result<(u64, u64), String> {
-    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/usage"), API_TIMEOUT_SECS)?;
+  pub async fn workspace_usage(&self, workspace_id: Uuid) -> Result<(u64, u64), String> {
+    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/usage"), API_TIMEOUT_SECS).await?;
     let val: Value = serde_json::from_str(body.trim())
       .map_err(|e| format!("invalid usage response: {e}"))?;
     let used = val.get("bytes_used").and_then(Value::as_u64).unwrap_or(0);
@@ -990,43 +991,43 @@ impl CloudConnector {
   }
 
   /// Revoke a pending workspace invitation (`DELETE /api/workspaces/{ws}/invitations/{id}`).
-  pub fn revoke_invitation(&self, workspace_id: Uuid, invitation_id: &str) -> Result<(), String> {
+  pub async fn revoke_invitation(&self, workspace_id: Uuid, invitation_id: &str) -> Result<(), String> {
     self.authed_delete(
       &format!("/api/workspaces/{workspace_id}/invitations/{invitation_id}"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Change a workspace member's role (`PATCH /api/workspaces/{ws}/members/{user_id}`).
-  pub fn update_member_role(&self, workspace_id: Uuid, user_id: &str, role: &str) -> Result<(), String> {
+  pub async fn update_member_role(&self, workspace_id: Uuid, user_id: &str, role: &str) -> Result<(), String> {
     self.authed_patch_json(
       &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
       &json!({ "role": role }),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// Remove a member from a workspace (`DELETE /api/workspaces/{ws}/members/{user_id}`).
-  pub fn remove_member(&self, workspace_id: Uuid, user_id: &str) -> Result<(), String> {
+  pub async fn remove_member(&self, workspace_id: Uuid, user_id: &str) -> Result<(), String> {
     self.authed_delete(
       &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
       API_TIMEOUT_SECS,
-    )?;
+    ).await?;
     Ok(())
   }
 
   /// List pending invitations addressed to the signed-in user (`GET /api/invitations`).
-  pub fn list_received_invitations(&self) -> Result<Vec<WorkspaceInvitationInfo>, String> {
-    parse_invitation_list(&self.authed_get("/api/invitations", API_TIMEOUT_SECS)?)
+  pub async fn list_received_invitations(&self) -> Result<Vec<WorkspaceInvitationInfo>, String> {
+    parse_invitation_list(&self.authed_get("/api/invitations", API_TIMEOUT_SECS).await?)
   }
 
   // ── Knowledge Graph ─────────────────────────────────────────────────────
 
   /// Fetch the page-link graph for `workspace_id` (`GET /api/workspaces/{ws}/graph`).
-  pub fn fetch_graph(&self, workspace_id: Uuid) -> Result<CloudGraphPayload, String> {
-    parse_graph_payload(&self.authed_get(&format!("/api/workspaces/{workspace_id}/graph"), API_TIMEOUT_SECS)?)
+  pub async fn fetch_graph(&self, workspace_id: Uuid) -> Result<CloudGraphPayload, String> {
+    parse_graph_payload(&self.authed_get(&format!("/api/workspaces/{workspace_id}/graph"), API_TIMEOUT_SECS).await?)
   }
 
   // ── Session & SyncEngine Lifecycle ──────────────────────────────────────
@@ -1177,27 +1178,31 @@ impl CloudConnector {
     Ok((base, token))
   }
 
-  fn authed_get(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
+  async fn authed_get(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
     send_http("GET", &format!("{base}{path}"), Some(token), None, timeout_secs)
+      .await
       .map_err(|e| format!("GET {path} failed: {e}"))
   }
 
-  fn authed_post_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
+  async fn authed_post_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
     send_http("POST", &format!("{base}{path}"), Some(token), Some(payload), timeout_secs)
+      .await
       .map_err(|e| format!("POST {path} failed: {e}"))
   }
 
-  fn authed_patch_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
+  async fn authed_patch_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
     send_http("PATCH", &format!("{base}{path}"), Some(token), Some(payload), timeout_secs)
+      .await
       .map_err(|e| format!("PATCH {path} failed: {e}"))
   }
 
-  fn authed_delete(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
+  async fn authed_delete(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
     send_http("DELETE", &format!("{base}{path}"), Some(token), None, timeout_secs)
+      .await
       .map_err(|e| format!("DELETE {path} failed: {e}"))
   }
 }
@@ -1211,7 +1216,31 @@ fn http_agent(timeout_secs: u64) -> ureq::Agent {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn send_http(
+async fn send_http(
+  method: &str,
+  url: &str,
+  bearer_token: Option<&str>,
+  json_body: Option<&Value>,
+  timeout_secs: u64,
+) -> Result<String, String> {
+  let method_owned = method.to_string();
+  let url_owned = url.to_string();
+  let token_owned = bearer_token.map(str::to_string);
+  let body_owned = json_body.cloned();
+  run_blocking(move || {
+    send_http_blocking(
+      &method_owned,
+      &url_owned,
+      token_owned.as_deref(),
+      body_owned.as_ref(),
+      timeout_secs,
+    )
+  })
+  .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn send_http_blocking(
   method: &str,
   url: &str,
   bearer_token: Option<&str>,
@@ -1264,12 +1293,12 @@ fn send_http(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn send_http(
+async fn send_http(
   method: &str,
   url: &str,
   bearer_token: Option<&str>,
   json_body: Option<&Value>,
-  _timeout_secs: u64,
+  timeout_secs: u64,
 ) -> Result<String, String> {
   let serialized = match json_body {
     Some(payload) => Some(
@@ -1277,7 +1306,14 @@ fn send_http(
     ),
     None => None,
   };
-  crate::web_runtime::xhr_request(method, url, bearer_token, serialized.as_deref())
+  crate::web_runtime::fetch_request(
+    method,
+    url,
+    bearer_token,
+    serialized.as_deref(),
+    timeout_secs,
+  )
+  .await
 }
 
 fn j_str(v: &Value, key: &str) -> String {
@@ -1724,8 +1760,41 @@ mod tests {
   }
 
   #[cfg(not(target_arch = "wasm32"))]
+  fn block_on_test<F: std::future::Future>(fut: F) -> F::Output {
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::task::{Context, Poll, Wake, Waker};
+    struct CondWaker {
+      ready: Mutex<bool>,
+      cv: Condvar,
+    }
+    impl Wake for CondWaker {
+      fn wake(self: Arc<Self>) {
+        *self.ready.lock().unwrap() = true;
+        self.cv.notify_all();
+      }
+    }
+    let mut fut = Box::pin(fut);
+    let wake = Arc::new(CondWaker { ready: Mutex::new(false), cv: Condvar::new() });
+    let waker = Waker::from(Arc::clone(&wake));
+    let mut cx = Context::from_waker(&waker);
+    loop {
+      match fut.as_mut().poll(&mut cx) {
+        Poll::Ready(out) => return out,
+        Poll::Pending => {
+          let mut g = wake.ready.lock().unwrap();
+          while !*g {
+            g = wake.cv.wait(g).unwrap();
+          }
+          *g = false;
+        }
+      }
+    }
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
   #[test]
   fn probe_register_forgot_share_comments_tokens_ai_members_graph_and_ai_prompt() {
+    block_on_test(async {
     let (ws, doc, tid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
 
     // 1. probe_server_meta, register, forgot_password
@@ -1734,27 +1803,27 @@ mod tests {
       r#"{"status":"ready","version":"0.14.11","registration_open":true}"#,
       false,
     );
-    let meta = CloudConnector::new(CloudConfig::default()).probe_server_meta(&probe_url).unwrap();
+    let meta = CloudConnector::new(CloudConfig::default()).probe_server_meta(&probe_url).await.unwrap();
     assert!(meta.reachable && meta.version.as_deref() == Some("0.14.11") && meta.registration_open == Some(true));
     assert!(probe_h.join().unwrap().starts_with("GET /api/ready "));
 
     let (reg_c, _, reg_h) = mock_conn("200 OK", r#"{"verified":true}"#, false);
-    let u = reg_c.register("new@mica.dev", "New User", "secret123").unwrap();
+    let u = reg_c.register("new@mica.dev", "New User", "secret123").await.unwrap();
     assert!(u.verified && u.email == "new@mica.dev" && reg_h.join().unwrap().starts_with("POST /api/auth/register "));
 
     let (fp_c, _, fp_h) = mock_conn("204 No Content", "", false);
-    fp_c.forgot_password("new@mica.dev").unwrap();
+    fp_c.forgot_password("new@mica.dev").await.unwrap();
     assert!(fp_h.join().unwrap().starts_with("POST /api/auth/password/forgot "));
 
     // 2. share create / get / delete
     let (sc, surl, sh) = mock_conn("200 OK", r#"{"shared":true,"token":"abc123"}"#, true);
-    let share = sc.create_share(ws, doc).unwrap();
+    let share = sc.create_share(ws, doc).await.unwrap();
     assert!(share.shared && share.url.as_deref() == Some(format!("{surl}/s/abc123").as_str()));
     assert!(sh.join().unwrap().to_ascii_lowercase().contains("authorization: bearer jwt"));
     let (gsc, _, _) = mock_conn("200 OK", r#"{"shared":true,"token":"abc123"}"#, true);
-    assert!(gsc.get_share(ws, doc).unwrap().shared);
+    assert!(gsc.get_share(ws, doc).await.unwrap().shared);
     let (dsc, _, _) = mock_conn("200 OK", r#"{"shared":false}"#, true);
-    assert!(!dsc.delete_share(ws, doc).unwrap().shared);
+    assert!(!dsc.delete_share(ws, doc).await.unwrap().shared);
 
     // 3. comments list / create / reply / resolve / delete
     let (lc, _, _) = mock_conn(
@@ -1762,49 +1831,49 @@ mod tests {
       r#"{"threads":[{"id":"t1","status":"open","quote":"hi","created_by":"u1","created_at":"2026-01-01T00:00:00Z","anchor":{"start_block":"b1","start_offset":0,"end_block":"b1","end_offset":2},"comments":[{"id":"c1","author_id":"u1","body":"Nice!","created_at":"2026-01-01T00:00:00Z"}]}]}"#,
       true,
     );
-    let threads = lc.list_comments(ws, doc).unwrap();
+    let threads = lc.list_comments(ws, doc).await.unwrap();
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].start_block.as_deref(), Some("b1"));
     assert_eq!(threads[0].comments[0].body, "Nice!");
     let (cc, _, _) = mock_conn("200 OK", r#"{"id":"t2","status":"open","comments":[]}"#, true);
-    assert_eq!(cc.create_comment(ws, doc, "b1", 0, "b1", 5, "w", "Hello").unwrap().id, "t2");
+    assert_eq!(cc.create_comment(ws, doc, "b1", 0, "b1", 5, "w", "Hello").await.unwrap().id, "t2");
     let (rc, _, _) = mock_conn("200 OK", r#"{"id":"c3","author_id":"u2","body":"Reply!"}"#, true);
-    assert_eq!(rc.reply_comment(ws, doc, tid, "Reply!").unwrap().body, "Reply!");
-    mock_conn("200 OK", r#"{"resolved":true}"#, true).0.resolve_comment(ws, doc, tid, true).unwrap();
-    mock_conn("200 OK", r#"{"deleted":true}"#, true).0.delete_comment(ws, doc, tid).unwrap();
+    assert_eq!(rc.reply_comment(ws, doc, tid, "Reply!").await.unwrap().body, "Reply!");
+    mock_conn("200 OK", r#"{"resolved":true}"#, true).0.resolve_comment(ws, doc, tid, true).await.unwrap();
+    mock_conn("200 OK", r#"{"deleted":true}"#, true).0.delete_comment(ws, doc, tid).await.unwrap();
 
     // 4. tokens list / create / revoke
     let (tc, _, _) = mock_conn("200 OK", r#"{"tokens":[{"id":"tk1","name":"CLI","scopes":["read","write"],"created_at":"2026-01-01T00:00:00Z"}]}"#, true);
-    assert!(tc.list_tokens().unwrap()[0].can_write);
+    assert!(tc.list_tokens().await.unwrap()[0].can_write);
     let (ctc, _, _) = mock_conn("200 OK", r#"{"id":"tk2","name":"CI","scopes":["read"],"token":"mica_pat_secret","created_at":"2026-01-01T00:00:00Z"}"#, true);
-    assert_eq!(ctc.create_token("CI", false, Some(30)).unwrap().token, "mica_pat_secret");
-    mock_conn("204 No Content", "", true).0.revoke_token("tk2").unwrap();
+    assert_eq!(ctc.create_token("CI", false, Some(30)).await.unwrap().token, "mica_pat_secret");
+    mock_conn("204 No Content", "", true).0.revoke_token("tk2").await.unwrap();
 
     // 5. AI providers list / save / delete / models / prompt
     let ai_body = r#"{"configured":true,"provider_id":"deepseek","key_hint":"9f2a","configured_providers":[{"provider_id":"deepseek","has_key":true,"model":"deepseek-chat","base_url":"https://api.deepseek.com","protocol":"openai","active":true}]}"#;
-    let providers = mock_conn("200 OK", ai_body, true).0.list_ai_providers().unwrap();
+    let providers = mock_conn("200 OK", ai_body, true).0.list_ai_providers().await.unwrap();
     assert_eq!((providers[0].id.as_str(), providers[0].key_tail.as_str()), ("deepseek", "9f2a"));
-    assert_eq!(mock_conn("200 OK", ai_body, true).0.save_ai_provider(&providers[0], Some("sk-9f2a")).unwrap().len(), 1);
-    assert!(mock_conn("200 OK", r#"{"configured":false,"configured_providers":[]}"#, true).0.delete_ai_provider("deepseek").unwrap().is_empty());
+    assert_eq!(mock_conn("200 OK", ai_body, true).0.save_ai_provider(&providers[0], Some("sk-9f2a")).await.unwrap().len(), 1);
+    assert!(mock_conn("200 OK", r#"{"configured":false,"configured_providers":[]}"#, true).0.delete_ai_provider("deepseek").await.unwrap().is_empty());
     assert_eq!(
       mock_conn("200 OK", r#"{"models":["deepseek-chat"],"endpoint":"https://api.deepseek.com/v1/models"}"#, true)
         .0
-        .fetch_ai_models(Some("deepseek"), "https://api.deepseek.com", "openai", None)
+        .fetch_ai_models(Some("deepseek"), "https://api.deepseek.com", "openai", None).await
         .unwrap(),
       vec!["deepseek-chat"]
     );
-    assert!(CloudConnector::new(CloudConfig::default()).stream_ai_prompt("", "Summarize").is_err());
-    assert_eq!(mock_conn("200 OK", r#"{"text":"Summary"}"#, true).0.stream_ai_prompt("Brief", "Sum").unwrap(), "Summary");
+    assert!(CloudConnector::new(CloudConfig::default()).stream_ai_prompt("", "Summarize").await.is_err());
+    assert_eq!(mock_conn("200 OK", r#"{"text":"Summary"}"#, true).0.stream_ai_prompt("Brief", "Sum").await.unwrap(), "Summary");
 
     // 6. workspace members, invitations & graph
-    let members = mock_conn("200 OK", r#"{"members":[{"user_id":"u1","email":"a@mica.dev","display_name":"Alice","role":"owner","joined_at":"2026-01-01T00:00:00Z"}]}"#, true).0.list_members(ws).unwrap();
+    let members = mock_conn("200 OK", r#"{"members":[{"user_id":"u1","email":"a@mica.dev","display_name":"Alice","role":"owner","joined_at":"2026-01-01T00:00:00Z"}]}"#, true).0.list_members(ws).await.unwrap();
     assert_eq!(members[0].role, "owner");
-    let inv = mock_conn("200 OK", r#"{"invitation":{"id":"inv1","workspace_id":"ws1","email":"b@mica.dev","role":"editor","created_at":"2026-01-01T00:00:00Z"}}"#, true).0.invite_member(ws, "b@mica.dev", "editor").unwrap();
+    let inv = mock_conn("200 OK", r#"{"invitation":{"id":"inv1","workspace_id":"ws1","email":"b@mica.dev","role":"editor","created_at":"2026-01-01T00:00:00Z"}}"#, true).0.invite_member(ws, "b@mica.dev", "editor").await.unwrap();
     assert_eq!(inv.id, "inv1");
-    assert_eq!(mock_conn("200 OK", r#"{"invitations":[{"id":"inv1","workspace_id":"ws1","role":"editor"}]}"#, true).0.list_invitations(ws).unwrap().len(), 1);
-    assert_eq!(mock_conn("200 OK", r#"{"invitations":[{"id":"inv2","workspace_id":"ws2","workspace_name":"Team","role":"viewer"}]}"#, true).0.list_received_invitations().unwrap()[0].workspace_name.as_deref(), Some("Team"));
+    assert_eq!(mock_conn("200 OK", r#"{"invitations":[{"id":"inv1","workspace_id":"ws1","role":"editor"}]}"#, true).0.list_invitations(ws).await.unwrap().len(), 1);
+    assert_eq!(mock_conn("200 OK", r#"{"invitations":[{"id":"inv2","workspace_id":"ws2","workspace_name":"Team","role":"viewer"}]}"#, true).0.list_received_invitations().await.unwrap()[0].workspace_name.as_deref(), Some("Team"));
 
-    let graph = mock_conn("200 OK", r#"{"nodes":[{"view_id":"v1","name":"Home","degree":2}],"edges":[{"source":"v1","target":"v2"}],"unlinked":3}"#, true).0.fetch_graph(ws).unwrap();
+    let graph = mock_conn("200 OK", r#"{"nodes":[{"view_id":"v1","name":"Home","degree":2}],"edges":[{"source":"v1","target":"v2"}],"unlinked":3}"#, true).0.fetch_graph(ws).await.unwrap();
     assert_eq!((graph.nodes.len(), graph.edges.len(), graph.unlinked), (1, 1, 3));
 
     // 7. Cookie-based refresh (`POST /api/auth/refresh` with `{}`) & server logout (`POST /api/auth/logout`)
@@ -1813,7 +1882,7 @@ mod tests {
       r#"{"access_token":"jwt-rotated","token_type":"Bearer","expires_at":"2026-12-31T00:00:00Z","refresh_token":"rt-rotated","user":{"id":"00000000-0000-0000-0000-000000000001","email":"cookie@mica.dev","display_name":"Cookie","created_at":"2026-01-01T00:00:00Z"}}"#,
       false,
     );
-    let refreshed_email = rc.refresh_session_cookie().unwrap();
+    let refreshed_email = rc.refresh_session_cookie().await.unwrap();
     assert_eq!(refreshed_email, "cookie@mica.dev");
     assert_eq!(rc.access_token(), Some("jwt-rotated"));
     assert!(rc.refresh_token().is_none(), "cookie mode must not retain refresh token in client state");
@@ -1822,8 +1891,9 @@ mod tests {
     assert!(raw_req.ends_with("{}"));
 
     let (lc_out, _, lh_out) = mock_conn("204 No Content", "", false);
-    lc_out.logout_server().unwrap();
+    lc_out.logout_server().await.unwrap();
     assert!(lh_out.join().unwrap().starts_with("POST /api/auth/logout "));
+    });
   }
 
   #[cfg(not(target_arch = "wasm32"))]

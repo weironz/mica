@@ -3,7 +3,8 @@
 //! Isolates `web_sys` calls behind `#[cfg(target_arch = "wasm32")]` so the rest
 //! of `mica_rust` compiles cleanly on native desktop targets with zero browser
 //! dependencies while Web runs as a cloud-only, same-origin client backed by
-//! `window.localStorage` and `XMLHttpRequest`.
+//! async `fetch` (with `AbortController` timeouts), `HttpOnly` cookies,
+//! `window.localStorage` (non-secret UI prefs only), and IndexedDB.
 
 /// Returns `true` when compiled for WebAssembly (`wasm32`), where Mica runs as
 /// a pure cloud client with no on-device local workspace.
@@ -62,37 +63,108 @@ pub fn local_storage_set(key: &str, value: &str) -> Result<(), String> {
   }
 }
 
-/// Execute a same-origin / CORS HTTP request via `XMLHttpRequest` on `wasm32`.
-///
-/// Uses synchronous XHR (`async = false`) so the existing synchronous
-/// `CloudConnector` API works identically across Desktop (`ureq`) and Web
-/// without duplicating endpoint codecs. Deliberately avoids setting `timeout`
-/// or `responseType` on synchronous XHR per the browser XHR specification.
+/// Execute an asynchronous same-origin HTTP request via the browser Fetch API
+/// (`window.fetch`) with an `AbortController` timeout and `credentials: "same-origin"`
+/// so `HttpOnly` session cookies are sent and updated without ever blocking the
+/// UI thread.
 #[cfg(target_arch = "wasm32")]
-pub fn xhr_request(
+pub async fn fetch_request(
   method: &str,
   url: &str,
   bearer_token: Option<&str>,
   json_body: Option<&str>,
+  timeout_secs: u64,
 ) -> Result<String, String> {
-  let xhr = web_sys::XmlHttpRequest::new()
-    .map_err(|e| format!("failed to construct XMLHttpRequest: {e:?}"))?;
-  xhr
-    .open_with_async(method, url, false)
-    .map_err(|e| format!("{method} {url} open failed: {e:?}"))?;
-  let _ = xhr.set_request_header("Accept", "application/json");
+  use wasm_bindgen::{JsCast, JsValue};
+  use wasm_bindgen::closure::Closure;
+  use wasm_bindgen_futures::JsFuture;
+  use web_sys::{AbortController, Headers, Request, RequestCredentials, RequestInit, Response};
+
+  struct TimeoutGuard {
+    window: web_sys::Window,
+    timer_id: i32,
+    _cb: Closure<dyn FnMut()>,
+  }
+
+  impl Drop for TimeoutGuard {
+    fn drop(&mut self) {
+      self.window.clear_timeout_with_handle(self.timer_id);
+    }
+  }
+
+  let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
+  let controller = AbortController::new()
+    .map_err(|e| format!("failed to construct AbortController: {e:?}"))?;
+  let ctrl_abort = controller.clone();
+  let timed_out = std::rc::Rc::new(std::cell::Cell::new(false));
+  let timed_out_cb = std::rc::Rc::clone(&timed_out);
+  let abort_cb = Closure::<dyn FnMut()>::new(move || {
+    timed_out_cb.set(true);
+    ctrl_abort.abort();
+  });
+  let timeout_ms = timeout_secs.clamp(1, 600).saturating_mul(1000) as i32;
+  let timer_id = window
+    .set_timeout_with_callback_and_timeout_and_arguments_0(
+      abort_cb.as_ref().unchecked_ref(),
+      timeout_ms,
+    )
+    .map_err(|e| format!("failed to schedule fetch timeout: {e:?}"))?;
+  let _guard = TimeoutGuard {
+    window: window.clone(),
+    timer_id,
+    _cb: abort_cb,
+  };
+
+  let headers = Headers::new().map_err(|e| format!("failed to construct Headers: {e:?}"))?;
+  let _ = headers.set("Accept", "application/json");
   if let Some(tok) = bearer_token.map(str::trim).filter(|t| !t.is_empty()) {
-    let _ = xhr.set_request_header("Authorization", &format!("Bearer {tok}"));
+    let _ = headers.set("Authorization", &format!("Bearer {tok}"));
   }
   if json_body.is_some() {
-    let _ = xhr.set_request_header("Content-Type", "application/json");
+    let _ = headers.set("Content-Type", "application/json");
   }
-  xhr
-    .send_with_opt_str(json_body)
-    .map_err(|e| format!("{method} {url} network error: {e:?}"))?;
 
-  let status = xhr.status().unwrap_or(0);
-  let text = xhr.response_text().ok().flatten().unwrap_or_default();
+  let init = RequestInit::new();
+  init.set_method(method);
+  init.set_headers(&headers);
+  init.set_credentials(RequestCredentials::SameOrigin);
+  init.set_signal(Some(&controller.signal()));
+  if let Some(body) = json_body {
+    init.set_body(&JsValue::from_str(body));
+  }
+
+  let request = Request::new_with_str_and_init(url, &init)
+    .map_err(|e| format!("{method} {url} request init failed: {e:?}"))?;
+
+  let resp_val = JsFuture::from(window.fetch_with_request(&request))
+    .await
+    .map_err(|e| {
+      if timed_out.get() {
+        format!("{method} {url} timed out after {timeout_secs}s")
+      } else {
+        format!("{method} {url} network error: {e:?}")
+      }
+    })?;
+  let resp: Response = resp_val
+    .dyn_into()
+    .map_err(|_| format!("{method} {url} returned non-Response object"))?;
+
+  let status = resp.status();
+  let text_promise = resp
+    .text()
+    .map_err(|e| format!("{method} {url} response.text() failed: {e:?}"))?;
+  let text = JsFuture::from(text_promise)
+    .await
+    .map_err(|e| {
+      if timed_out.get() {
+        format!("{method} {url} body timed out after {timeout_secs}s")
+      } else {
+        format!("{method} {url} body read failed: {e:?}")
+      }
+    })?
+    .as_string()
+    .unwrap_or_default();
+
   if (200..300).contains(&status) {
     return Ok(text);
   }

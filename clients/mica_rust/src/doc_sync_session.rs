@@ -16,9 +16,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
+#[cfg(target_arch = "wasm32")]
+use mica_sync::{IdbMirrorOp, MemoryMirrorStorage};
 use mica_sync::{
   PresenceUser, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase, TimerKind,
   is_empty_yrs_update, merge_yrs_updates, reconnect_backoff_ms,
@@ -72,6 +76,10 @@ struct DocSyncInner {
   ready: bool,
   pending_diffs: Vec<Vec<u8>>,
   coalesce_gen: u64,
+  #[cfg(target_arch = "wasm32")]
+  idb_pending: VecDeque<IdbMirrorOp>,
+  #[cfg(target_arch = "wasm32")]
+  idb_flushing: bool,
 }
 
 /// Manages the active cloud document's real-time `/ws/` CRDT [`SyncEngine`].
@@ -150,7 +158,72 @@ impl DocSyncController {
     self.close();
 
     let client_id = (!web_runtime::is_web()).then_some(self.vault.client_id());
-    let storage = self.vault.create_sync_storage(&cache_origin, &doc_id.to_string());
+    let sgen = {
+      let mut inner = self.inner.borrow_mut();
+      inner.session_gen = inner.session_gen.wrapping_add(1);
+      inner.target = Some(ActiveTarget {
+        server_url,
+        cache_origin: cache_origin.clone(),
+        workspace_id: ws_id,
+        document_id: doc_id,
+      });
+      inner.client_id = client_id;
+      inner.engine = None;
+      inner.ws_handle = None;
+      inner.ws_epoch = 0;
+      inner.timer_gens.clear();
+      inner.ready = false;
+      inner.pending_diffs.clear();
+      inner.coalesce_gen = inner.coalesce_gen.wrapping_add(1);
+      #[cfg(target_arch = "wasm32")]
+      {
+        inner.idb_pending.clear();
+        inner.idb_flushing = false;
+      }
+      inner.session_gen
+    };
+
+    self.sync_phase.set(SyncPhase::Offline);
+    self.presence_users.set(Vec::new());
+    self.update_badge(SyncPhase::Offline, 0);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let storage = self.vault.create_sync_storage(&cache_origin, &doc_id.to_string());
+      self.start_engine_with_storage(sgen, client_id, doc_id, self_name, storage);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+      let ctrl = self.clone();
+      let doc_key = doc_id.to_string();
+      self.owner.run(move || {
+        spawn(async move {
+          let hydrated = crate::web_idb::load_doc_snapshot(&cache_origin, &doc_key)
+            .await
+            .ok()
+            .flatten();
+          if ctrl.inner.borrow().session_gen != sgen {
+            return;
+          }
+          let storage: Box<dyn mica_sync::SyncStorage> = match hydrated {
+            Some(snap) => Box::new(MemoryMirrorStorage::hydrate(snap)),
+            None => Box::new(MemoryMirrorStorage::new()),
+          };
+          ctrl.start_engine_with_storage(sgen, client_id, doc_id, self_name, storage);
+        });
+      });
+    }
+  }
+
+  fn start_engine_with_storage(
+    &self,
+    sgen: u64,
+    client_id: Option<u64>,
+    doc_id: Uuid,
+    self_name: String,
+    storage: Box<dyn mica_sync::SyncStorage>,
+  ) {
     let mut engine = SyncEngine::new(
       SyncConfig {
         client_id,
@@ -161,30 +234,13 @@ impl DocSyncController {
       Some(storage),
     );
     let effects = engine.handle_event(SyncEvent::Connect);
-
-    let sgen = {
+    {
       let mut inner = self.inner.borrow_mut();
-      inner.session_gen = inner.session_gen.wrapping_add(1);
-      inner.target = Some(ActiveTarget {
-        server_url,
-        cache_origin,
-        workspace_id: ws_id,
-        document_id: doc_id,
-      });
-      inner.client_id = client_id;
+      if inner.session_gen != sgen {
+        return;
+      }
       inner.engine = Some(engine);
-      inner.ws_handle = None;
-      inner.ws_epoch = 0;
-      inner.timer_gens.clear();
-      inner.ready = false;
-      inner.pending_diffs.clear();
-      inner.coalesce_gen = inner.coalesce_gen.wrapping_add(1);
-      inner.session_gen
-    };
-
-    self.sync_phase.set(SyncPhase::Offline);
-    self.presence_users.set(Vec::new());
-    self.update_badge(SyncPhase::Offline, 0);
+    }
     self.apply_effects(sgen, effects);
   }
 
@@ -254,11 +310,32 @@ impl DocSyncController {
     let current_gen = self.inner.borrow().session_gen;
     self.flush_coalesced_diffs(current_gen);
 
+    #[cfg(target_arch = "wasm32")]
+    let mut final_idb: Option<(String, String, Vec<IdbMirrorOp>)> = None;
+
     let old_ws = {
       let mut inner = self.inner.borrow_mut();
+      #[cfg(target_arch = "wasm32")]
+      let mut exit_ops: Vec<IdbMirrorOp> = inner.idb_pending.drain(..).collect();
       if let Some(mut engine) = inner.engine.take() {
-        let _ = engine.handle_event(SyncEvent::FlushForExit);
-        let _ = engine.compact_now();
+        let flush_effects = engine.handle_event(SyncEvent::FlushForExit);
+        let compact_effects = engine.compact_now();
+        #[cfg(target_arch = "wasm32")]
+        for ef in flush_effects.into_iter().chain(compact_effects) {
+          if let SyncEffect::MirrorIdb(ops) = ef {
+            exit_ops.extend(ops);
+          }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+          let _ = (flush_effects, compact_effects);
+        }
+      }
+      #[cfg(target_arch = "wasm32")]
+      if !exit_ops.is_empty()
+        && let Some(ref t) = inner.target
+      {
+        final_idb = Some((t.cache_origin.clone(), t.document_id.to_string(), exit_ops));
       }
       inner.session_gen = inner.session_gen.wrapping_add(1);
       inner.coalesce_gen = inner.coalesce_gen.wrapping_add(1);
@@ -268,8 +345,21 @@ impl DocSyncController {
       inner.pending_diffs.clear();
       inner.timer_gens.clear();
       inner.ws_epoch = 0;
+      #[cfg(target_arch = "wasm32")]
+      {
+        inner.idb_flushing = false;
+      }
       inner.ws_handle.take()
     };
+
+    #[cfg(target_arch = "wasm32")]
+    if let Some((cache_origin, doc_key, ops)) = final_idb {
+      self.owner.run(move || {
+        spawn(async move {
+          let _ = crate::web_idb::commit_mirror_ops(&cache_origin, &doc_key, ops).await;
+        });
+      });
+    }
 
     if let Some(ws) = old_ws {
       ws.close();
@@ -466,9 +556,76 @@ impl DocSyncController {
             .cloud_status
             .set(format!("实时同步告警（{reason} #{count}），正在自动恢复…"));
         }
-        SyncEffect::ServerConnected | SyncEffect::AcceptedSeq(_) | SyncEffect::MirrorIdb(_) => {}
+        SyncEffect::MirrorIdb(ops) => {
+          #[cfg(target_arch = "wasm32")]
+          self.enqueue_idb_mirror_ops(sgen, ops);
+          #[cfg(not(target_arch = "wasm32"))]
+          {
+            let _ = ops;
+          }
+        }
+        SyncEffect::ServerConnected | SyncEffect::AcceptedSeq(_) => {}
       }
     }
+  }
+
+  #[cfg(target_arch = "wasm32")]
+  fn enqueue_idb_mirror_ops(&self, sgen: u64, ops: Vec<IdbMirrorOp>) {
+    if ops.is_empty() {
+      return;
+    }
+    let should_start = {
+      let mut inner = self.inner.borrow_mut();
+      if inner.session_gen != sgen {
+        return;
+      }
+      inner.idb_pending.extend(ops);
+      if inner.idb_flushing {
+        false
+      } else {
+        inner.idb_flushing = true;
+        true
+      }
+    };
+    if !should_start {
+      return;
+    }
+
+    let ctrl = self.clone();
+    self.owner.run(move || {
+      spawn(async move {
+        loop {
+          let next_batch = {
+            let mut inner = ctrl.inner.borrow_mut();
+            if inner.session_gen != sgen {
+              inner.idb_flushing = false;
+              return;
+            }
+            if inner.idb_pending.is_empty() {
+              inner.idb_flushing = false;
+              return;
+            }
+            let Some(target) = inner.target.as_ref() else {
+              inner.idb_pending.clear();
+              inner.idb_flushing = false;
+              return;
+            };
+            let cache_origin = target.cache_origin.clone();
+            let doc_key = target.document_id.to_string();
+            let batch: Vec<IdbMirrorOp> = inner.idb_pending.drain(..).collect();
+            (cache_origin, doc_key, batch)
+          };
+
+          let (cache_origin, doc_key, batch) = next_batch;
+          if crate::web_idb::commit_mirror_ops(&cache_origin, &doc_key, batch)
+            .await
+            .is_err()
+          {
+            ctrl.dispatch_engine_event(sgen, SyncEvent::MirrorWriteFailed);
+          }
+        }
+      });
+    });
   }
 
   fn open_socket(&self, sgen: u64, epoch: u64) {

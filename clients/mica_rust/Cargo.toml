@@ -49,27 +49,44 @@ js-sys = "0.3"
 nsh-platform-web = { version = "0.6.1", default-features = false }
 uuid = { version = "1.11", features = ["serde", "v4", "js"] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
+  "AbortController",
+  "AbortSignal",
   "Blob",
   "BlobPropertyBag",
   "CloseEvent",
   "Document",
+  "DomException",
+  "DomStringList",
   "Element",
   "ErrorEvent",
   "Event",
   "File",
   "FileList",
   "FileReader",
+  "Headers",
   "HtmlAnchorElement",
   "HtmlElement",
   "HtmlInputElement",
+  "IdbDatabase",
+  "IdbFactory",
+  "IdbObjectStore",
+  "IdbOpenDbRequest",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbTransactionMode",
+  "IdbVersionChangeEvent",
   "Location",
   "MessageEvent",
+  "Request",
+  "RequestCredentials",
+  "RequestInit",
+  "Response",
   "Storage",
   "Url",
   "WebSocket",
   "Window",
-  "XmlHttpRequest",
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

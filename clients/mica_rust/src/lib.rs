@@ -54,6 +54,7 @@ pub mod transfer_dialog;
 pub mod tree_dnd;
 pub mod usage_stats_view;
 pub mod version_history;
+pub mod web_idb;
 pub mod web_runtime;
 pub mod workspace_views;
 pub mod world_switcher;
@@ -820,10 +821,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               return;
             }
             let mut conn = cc_a.borrow().clone();
-            let res = net::run_blocking(move || {
-              cloud_sync::push_cloud_document(&mut conn, ws_id, doc_id, &md).map(|r| (conn, r))
-            })
-            .await;
+            let res = cloud_sync::push_cloud_document(&mut conn, ws_id, doc_id, &md)
+              .await
+              .map(|r| (conn, r));
             if active_origin.get_untracked() != orig {
               return;
             }
@@ -1111,10 +1111,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let email_req = account_email.get_untracked();
         spawn(async move {
           let mut conn = cc_a.borrow().clone();
-          let res = net::run_blocking(move || {
-            cloud_sync::fetch_cloud_document(&mut conn, ws_id, doc_id).map(|(m, r)| (conn, m, r))
-          })
-          .await;
+          let res = cloud_sync::fetch_cloud_document(&mut conn, ws_id, doc_id)
+            .await
+            .map(|(m, r)| (conn, m, r));
           if doc_fetch_gen.get_untracked() != fetch_epoch
             || active_origin.get_untracked() != orig
             || active_workspace_id.get_untracked() != ws_id
@@ -1508,7 +1507,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       if let Some(row) = updated {
         let _ = v.save_view(&orig, &row);
         let rename_req = next_name.clone();
-        cs.spawn_cloud_op("云端重命名", move |c| c.update_view(cur_ws, vid, &rename_req, None).map(|_| ()));
+        cs.spawn_cloud_op("云端重命名", move |c| {
+          let rename_req = rename_req.clone();
+          async move { c.update_view(cur_ws, vid, &rename_req, None).await.map(|_| ()) }
+        });
         if active_doc.get_untracked() == Some(row.object_id) {
           active_title.set(next_name.clone());
         }
@@ -1534,7 +1536,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let cur_ws = active_workspace_id.get_untracked();
       let _ = v.trash_view_subtree(&orig, vid);
       reload();
-      cs.spawn_cloud_op("云端移入回收站", move |c| c.delete_view(cur_ws, vid));
+      cs.spawn_cloud_op("云端移入回收站", move |c| async move { c.delete_view(cur_ws, vid).await });
     })
   };
 
@@ -1547,7 +1549,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let cur_ws = active_workspace_id.get_untracked();
       let _ = v.restore_view_subtree(&orig, vid);
       reload();
-      cs.spawn_cloud_op("云端恢复页面", move |c| c.restore_view(cur_ws, vid));
+      cs.spawn_cloud_op("云端恢复页面", move |c| async move { c.restore_view(cur_ws, vid).await });
     })
   };
 
@@ -1560,7 +1562,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let cur_ws = active_workspace_id.get_untracked();
       let _ = v.purge_view_subtree(&orig, vid);
       reload();
-      cs.spawn_cloud_op("云端永久删除", move |c| c.purge_view(cur_ws, vid));
+      cs.spawn_cloud_op("云端永久删除", move |c| async move { c.purge_view(cur_ws, vid).await });
     })
   };
 
@@ -1586,7 +1588,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       if v.reorder_views(&orig, parent_id, &ordered_ids).is_ok() {
         reload();
         cs.spawn_cloud_op("云端排序同步", move |c| {
-          c.reorder_views(cur_ws, parent_id, &ordered_ids)
+          let ordered_ids = ordered_ids.clone();
+          async move { c.reorder_views(cur_ws, parent_id, &ordered_ids).await }
         });
       }
     })
@@ -2517,7 +2520,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           share_fetch_gen.set(epoch);
           share_loading.set(true);
           spawn(async move {
-            let res = net::run_blocking(move || conn.get_share(ws_id, doc_id)).await;
+            let res = conn.get_share(ws_id, doc_id).await;
             if share_fetch_gen.get_untracked() != epoch
               || active_doc.get_untracked() != Some(doc_id)
             {
@@ -2665,15 +2668,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       cloud_status.set(format!("正在检测服务器：{url}…"));
       let url_req = url.clone();
       spawn(async move {
-        let res = net::run_blocking(move || {
-          let connector = CloudConnector::new(CloudConfig {
-            server_url: url_req,
-            access_token: None,
-            email: None,
-          });
-          connector.check_health()
-        })
-        .await;
+        let connector = CloudConnector::new(CloudConfig {
+          server_url: url_req,
+          access_token: None,
+          email: None,
+        });
+        let res = connector.check_health().await;
         if check_gen.get_untracked() != epoch {
           return;
         }
@@ -2691,7 +2691,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       Rc::new(move || {
         let orig = active_origin.get_untracked();
         if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() {
-          cs.enter_origin(orig, false);
+          let srv = server_url.get_untracked();
+          let cs_run = cs.clone();
+          app_owner.run(move || cs_run.enter_origin(srv, false));
           return;
         }
         let epoch = check_gen.get_untracked().wrapping_add(1);
@@ -2700,7 +2702,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let phase = conn.sync_phase_label();
         cloud_status.set("正在检查同步连接…".to_string());
         spawn(async move {
-          let res = net::run_blocking(move || conn.check_health()).await;
+          let res = conn.check_health().await;
           if check_gen.get_untracked() != epoch {
             return;
           }
@@ -2795,12 +2797,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let orig_expect = orig.clone();
       app_owner.run(move || {
         spawn(async move {
-          let res = net::run_blocking(move || {
-            let ov = conn.get_usage_overview()?;
-            let act = conn.get_usage_activity(&range, tz_offset, ws_filter.as_deref(), inc_imp)?;
-            Ok::<_, String>((ov, act))
-          })
-          .await;
+          let res = match conn.get_usage_overview().await {
+            Ok(ov) => conn
+              .get_usage_activity(&range, tz_offset, ws_filter.as_deref(), inc_imp)
+              .await
+              .map(|act| (ov, act)),
+            Err(e) => Err(e),
+          };
           if stats_fetch_gen.get_untracked() != epoch
             || active_origin.get_untracked() != orig_expect
           {
@@ -2942,15 +2945,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     world_health_status.set("checking".to_string());
     let origin_req = origin.clone();
     spawn(async move {
-      let ok = net::run_blocking(move || {
-        let conn = CloudConnector::new(CloudConfig {
-          server_url: origin_req,
-          access_token: None,
-          email: None,
-        });
-        conn.check_health().is_ok()
-      })
-      .await;
+      let conn = CloudConnector::new(CloudConfig {
+        server_url: origin_req,
+        access_token: None,
+        email: None,
+      });
+      let ok = conn.check_health().await.is_ok();
       if probe_gen.get_untracked() != epoch {
         return;
       }
@@ -3013,13 +3013,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     },
     on_enter_signed_in: {
       let cs = cloud_session.clone();
-      Rc::new(move |origin: String| cs.enter_origin(origin, true))
+      Rc::new(move |origin: String| {
+        let cs_run = cs.clone();
+        app_owner.run(move || cs_run.enter_origin(origin, true));
+      })
     },
     on_login: do_cloud_login,
     on_register: {
       let cs = cloud_session.clone();
       Rc::new(move |url: String, email: String, display_name: String, password: String| {
-        cs.register(url, email, display_name, password);
+        let cs_run = cs.clone();
+        app_owner.run(move || cs_run.register(url, email, display_name, password));
       })
     },
     on_forgot_password: Rc::new(move |url: String, email: String| {
@@ -3028,24 +3032,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       world_busy.set(true);
       world_error.set(String::new());
       world_info.set(String::new());
-      spawn(async move {
-        let outcome = net::run_blocking(move || {
+      app_owner.run(move || {
+        spawn(async move {
           let conn = CloudConnector::new(CloudConfig {
             server_url: url,
             access_token: None,
             email: None,
           });
-          conn.forgot_password(&email)
-        })
-        .await;
-        if auth_gen.get_untracked() != epoch {
-          return;
-        }
-        match outcome {
-          Ok(()) => world_info.set("重置密码邮件已发送，请检查收件箱。".to_string()),
-          Err(e) => world_error.set(e),
-        }
-        world_busy.set(false);
+          let outcome = conn.forgot_password(&email).await;
+          if auth_gen.get_untracked() != epoch {
+            return;
+          }
+          match outcome {
+            Ok(()) => world_info.set("重置密码邮件已发送，请检查收件箱。".to_string()),
+            Err(e) => world_error.set(e),
+          }
+          world_busy.set(false);
+        });
       });
     }),
   };
@@ -3101,18 +3104,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         share_busy.set(true);
         let conn = cc.borrow().clone();
         spawn(async move {
-          let res = net::run_blocking(move || {
-            if enable {
-              conn.create_share(ws, doc_id)
-            } else {
-              conn.delete_share(ws, doc_id).map(|_| net::ShareState {
-                shared: false,
-                token: None,
-                url: None,
-              })
-            }
-          })
-          .await;
+          let res = if enable {
+            conn.create_share(ws, doc_id).await
+          } else {
+            conn.delete_share(ws, doc_id).await.map(|_| net::ShareState {
+              shared: false,
+              token: None,
+              url: None,
+            })
+          };
           if toggle_gen.get_untracked() != epoch || active_doc.get_untracked() != Some(doc_id) {
             return;
           }
@@ -3155,10 +3155,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         global_ai_error.set(None);
         let conn = cc.borrow().clone();
         spawn(async move {
-          let res = net::run_blocking(move || {
-            conn.stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt)
-          })
-          .await;
+          let res = conn
+            .stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt)
+            .await;
           if ai_gen.get_untracked() != epoch {
             return;
           }
@@ -3209,10 +3208,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let full = if ctx.is_empty() { prompt } else { format!("{prompt}\n\n原文：\n{ctx}") };
         let conn = cc.borrow().clone();
         spawn(async move {
-          let res = net::run_blocking(move || {
-            conn.stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full)
-          })
-          .await;
+          let res = conn.stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full).await;
           if ai_gen.get_untracked() != epoch {
             return;
           }
@@ -3287,7 +3283,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let orig = active_origin.get_untracked();
         let _ = v.save_workspace_name(&orig, cur_ws, &next_name);
         let name_req = next_name.clone();
-        cs.spawn_cloud_op("云端重命名工作区", move |c| c.update_workspace(cur_ws, &name_req));
+        cs.spawn_cloud_op("云端重命名工作区", move |c| {
+          let name_req = name_req.clone();
+          async move { c.update_workspace(cur_ws, &name_req).await }
+        });
         workspace_name.set(next_name.clone());
         let mut all = workspaces.get_untracked();
         for w in &mut all {
@@ -3309,8 +3308,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let mut conn = cs.cloud_connector.borrow().clone();
         let cs_done = cs.clone();
         spawn(async move {
-          let res = net::run_blocking(move || {
-            cloud_sync::with_auto_refresh(&mut conn, |c| c.invite_member(cur_ws, &email, &role))
+          let res = cloud_sync::with_auto_refresh(&mut conn, move |c| {
+            let (email, role) = (email.clone(), role.clone());
+            async move { c.invite_member(cur_ws, &email, &role).await }
           })
           .await;
           if active_origin.get_untracked() != orig || active_workspace_id.get_untracked() != cur_ws {
@@ -3336,7 +3336,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       Rc::new(move |inv_id: String| {
         let cur_ws = active_workspace_id.get_untracked();
         let inv_req = inv_id.clone();
-        cs.spawn_cloud_op("撤回邀请", move |c| c.revoke_invitation(cur_ws, &inv_req));
+        cs.spawn_cloud_op("撤回邀请", move |c| {
+          let inv_req = inv_req.clone();
+          async move { c.revoke_invitation(cur_ws, &inv_req).await }
+        });
         ws_pending_invitations.update(|list| list.retain(|i| i.id != inv_id));
       })
     },
@@ -3345,7 +3348,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       Rc::new(move |uid: String, role: String| {
         let cur_ws = active_workspace_id.get_untracked();
         let (uid_req, role_req) = (uid.clone(), role.clone());
-        cs.spawn_cloud_op("修改成员角色", move |c| c.update_member_role(cur_ws, &uid_req, &role_req));
+        cs.spawn_cloud_op("修改成员角色", move |c| {
+          let (uid_req, role_req) = (uid_req.clone(), role_req.clone());
+          async move { c.update_member_role(cur_ws, &uid_req, &role_req).await }
+        });
         ws_members.update(|list| {
           for m in list.iter_mut() {
             if m.user_id == uid {
@@ -3360,7 +3366,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       Rc::new(move |uid: String| {
         let cur_ws = active_workspace_id.get_untracked();
         let uid_req = uid.clone();
-        cs.spawn_cloud_op("移除成员", move |c| c.remove_member(cur_ws, &uid_req));
+        cs.spawn_cloud_op("移除成员", move |c| {
+          let uid_req = uid_req.clone();
+          async move { c.remove_member(cur_ws, &uid_req).await }
+        });
         ws_members.update(|list| list.retain(|m| m.user_id != uid));
       })
     },
@@ -3376,7 +3385,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         }
         let orig = active_origin.get_untracked();
         let _ = v.delete_workspace(&orig, cur);
-        cs.spawn_cloud_op("云端删除工作区", move |c| c.delete_workspace(cur));
+        cs.spawn_cloud_op("云端删除工作区", move |c| async move { c.delete_workspace(cur).await });
         all.retain(|w| w.id != cur);
         let next = all[0].clone();
         workspaces.set(all);
@@ -3452,7 +3461,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         }
         workspaces.set(all);
         let name_req = next_name.clone();
-        cs.spawn_cloud_op("云端重命名工作区", move |c| c.update_workspace(id, &name_req));
+        cs.spawn_cloud_op("云端重命名工作区", move |c| {
+          let name_req = name_req.clone();
+          async move { c.update_workspace(id, &name_req).await }
+        });
         if active_workspace_id.get_untracked() == id {
           workspace_name.set(next_name);
         }
@@ -3486,7 +3498,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         if let Some(target) = all.iter().find(|w| w.id == id) {
           let _ = v.delete_workspace(&target.origin, id);
         }
-        cs.spawn_cloud_op("云端删除工作区", move |c| c.delete_workspace(id));
+        cs.spawn_cloud_op("云端删除工作区", move |c| async move { c.delete_workspace(id).await });
         all.retain(|w| w.id != id);
         let next = all[0].clone();
         workspaces.set(all);

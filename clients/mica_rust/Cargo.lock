@@ -3375,6 +3375,7 @@ dependencies = [
  "ureq",
  "uuid",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

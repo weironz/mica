@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::doc_sync_session::{DocSyncController, ViewsWsWatcher};
 use crate::editor_bridge::MicaDocumentBridge;
-use crate::net::{self, CloudConfig, CloudConnector};
+use crate::net::{CloudConfig, CloudConnector};
 use crate::storage::{DEFAULT_ORIGIN, VaultStore};
 use crate::workspace_views::{
   PendingInvitationEntry, WorkspaceMemberEntry, WorkspaceStorageUsage,
@@ -84,24 +84,28 @@ pub struct CloudWorkspaceSnapshot {
   pub refreshed_tokens: Option<(String, String)>,
 }
 
-/// Execute `op` against `conn`; if the server responds with HTTP 401 and a
-/// refresh token is available, rotate the session once and retry.
-pub fn with_auto_refresh<T>(
+/// Execute async `op` against `conn`; if the server responds with HTTP 401 and
+/// a refresh token (or Web `HttpOnly` cookie) is available, rotate once and retry.
+pub async fn with_auto_refresh<T, F, Fut>(
   conn: &mut CloudConnector,
-  op: impl Fn(&CloudConnector) -> Result<T, String>,
-) -> Result<(T, Option<(String, String)>), String> {
-  match op(conn) {
+  op: F,
+) -> Result<(T, Option<(String, String)>), String>
+where
+  F: Fn(CloudConnector) -> Fut,
+  Fut: std::future::Future<Output = Result<T, String>>,
+{
+  match op(conn.clone()).await {
     Ok(val) => Ok((val, None)),
     Err(err)
       if CloudConnector::is_unauthorized_error(&err)
         && (conn.refresh_token().is_some() || cfg!(target_arch = "wasm32")) =>
     {
-      conn.refresh_session()?;
+      conn.refresh_session().await?;
       let rotated = (
         conn.access_token().unwrap_or_default().to_string(),
         conn.refresh_token().unwrap_or_default().to_string(),
       );
-      let val = op(conn)?;
+      let val = op(conn.clone()).await?;
       Ok((val, Some(rotated)))
     }
     Err(err) => Err(err),
@@ -130,13 +134,13 @@ fn merge_live_and_trash(mut live: Vec<View>, trash: Vec<View>, ws_id: Uuid) -> V
 
 type ViewsAndOpeningDoc = (Vec<View>, Option<(Uuid, String)>);
 
-fn fetch_views_and_first_doc(
+async fn fetch_views_and_first_doc(
   conn: &CloudConnector,
   ws_id: Uuid,
   preferred_doc: Option<Uuid>,
 ) -> Result<ViewsAndOpeningDoc, String> {
-  let live = conn.list_views(ws_id)?;
-  let trash = conn.list_trash(ws_id).unwrap_or_default();
+  let live = conn.list_views(ws_id).await?;
+  let trash = conn.list_trash(ws_id).await.unwrap_or_default();
   let merged = merge_live_and_trash(live, trash, ws_id);
 
   let target_doc_id = preferred_doc
@@ -149,7 +153,7 @@ fn fetch_views_and_first_doc(
     });
 
   let initial_doc = if let Some(doc_id) = target_doc_id {
-    let md = conn.fetch_document_markdown(ws_id, doc_id).unwrap_or_default();
+    let md = conn.fetch_document_markdown(ws_id, doc_id).await.unwrap_or_default();
     Some((doc_id, md))
   } else {
     None
@@ -159,8 +163,8 @@ fn fetch_views_and_first_doc(
 }
 
 /// Fetch all cloud workspaces, the selected workspace's view tree, and its
-/// opening page's Markdown in a single blocking worker invocation.
-pub fn fetch_cloud_bootstrap(
+/// opening page's Markdown asynchronously (non-blocking on both Desktop & Web).
+pub async fn fetch_cloud_bootstrap(
   conn: &mut CloudConnector,
   preferred_ws: Option<Uuid>,
 ) -> Result<CloudBootstrapPayload, String> {
@@ -168,7 +172,7 @@ pub fn fetch_cloud_bootstrap(
   let account_id = if let Some(uid) = conn.user_id() {
     uid.to_string()
   } else {
-    let (me, rot) = with_auto_refresh(conn, |c| c.fetch_me())?;
+    let (me, rot) = with_auto_refresh(conn, |c| async move { c.fetch_me().await }).await?;
     if rot.is_some() {
       refreshed_tokens = rot;
     }
@@ -180,7 +184,8 @@ pub fn fetch_cloud_bootstrap(
     uid
   };
 
-  let (workspaces, rot_ws) = with_auto_refresh(conn, |c| c.list_workspaces())?;
+  let (workspaces, rot_ws) =
+    with_auto_refresh(conn, |c| async move { c.list_workspaces().await }).await?;
   if rot_ws.is_some() {
     refreshed_tokens = rot_ws;
   }
@@ -189,7 +194,8 @@ pub fn fetch_cloud_bootstrap(
     .or_else(|| workspaces.first().map(|w| w.id));
 
   let (views, initial_doc) = if let Some(ws_id) = target_ws_id {
-    let ((v, d), rotated) = with_auto_refresh(conn, |c| fetch_views_and_first_doc(c, ws_id, None))?;
+    let ((v, d), rotated) =
+      with_auto_refresh(conn, move |c| async move { fetch_views_and_first_doc(&c, ws_id, None).await }).await?;
     if rotated.is_some() {
       refreshed_tokens = rotated;
     }
@@ -209,13 +215,15 @@ pub fn fetch_cloud_bootstrap(
 }
 
 /// Refresh a single cloud workspace's view tree and active/opening page Markdown.
-pub fn fetch_cloud_workspace_snapshot(
+pub async fn fetch_cloud_workspace_snapshot(
   conn: &mut CloudConnector,
   ws_id: Uuid,
   preferred_doc: Option<Uuid>,
 ) -> Result<CloudWorkspaceSnapshot, String> {
-  let ((views, initial_doc), refreshed_tokens) =
-    with_auto_refresh(conn, |c| fetch_views_and_first_doc(c, ws_id, preferred_doc))?;
+  let ((views, initial_doc), refreshed_tokens) = with_auto_refresh(conn, move |c| async move {
+    fetch_views_and_first_doc(&c, ws_id, preferred_doc).await
+  })
+  .await?;
   Ok(CloudWorkspaceSnapshot {
     workspace_id: ws_id,
     views,
@@ -225,19 +233,22 @@ pub fn fetch_cloud_workspace_snapshot(
 }
 
 /// Fetch the latest cloud Markdown for a single document (with transparent 401 refresh).
-pub fn fetch_cloud_document(
+pub async fn fetch_cloud_document(
   conn: &mut CloudConnector,
   ws_id: Uuid,
   doc_id: Uuid,
 ) -> Result<(String, Option<(String, String)>), String> {
-  with_auto_refresh(conn, |c| c.fetch_document_markdown(ws_id, doc_id))
+  with_auto_refresh(conn, move |c| async move {
+    c.fetch_document_markdown(ws_id, doc_id).await
+  })
+  .await
 }
 
 /// Push edited Markdown back to the cloud server (`PATCH .../markdown`, `replace_all`).
 ///
 /// The Mica API server rejects empty `replace_all` payloads to guard against
 /// accidental document wipes, so empty buffers are skipped cleanly.
-pub fn push_cloud_document(
+pub async fn push_cloud_document(
   conn: &mut CloudConnector,
   ws_id: Uuid,
   doc_id: Uuid,
@@ -246,7 +257,12 @@ pub fn push_cloud_document(
   if markdown.trim().is_empty() {
     return Ok(None);
   }
-  let ((), rotated) = with_auto_refresh(conn, |c| c.save_document_markdown(ws_id, doc_id, markdown))?;
+  let md_owned = markdown.to_string();
+  let ((), rotated) = with_auto_refresh(conn, move |c| {
+    let md = md_owned.clone();
+    async move { c.save_document_markdown(ws_id, doc_id, &md).await }
+  })
+  .await?;
   Ok(rotated)
 }
 
@@ -318,9 +334,10 @@ pub(crate) struct CloudSessionHandles {
 impl CloudSessionHandles {
   /// Fire a background cloud mutation with transparent 401 token refresh and
   /// ownership verification before reporting status or persisting rotated tokens.
-  pub(crate) fn spawn_cloud_op<F>(&self, label: &'static str, op: F)
+  pub(crate) fn spawn_cloud_op<F, Fut>(&self, label: &'static str, op: F)
   where
-    F: Fn(&CloudConnector) -> Result<(), String> + Send + 'static,
+    F: Fn(CloudConnector) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + 'static,
   {
     let orig = self.active_origin.get_untracked();
     if !is_cloud_origin(&orig) || !self.is_cloud_signed_in.get_untracked() {
@@ -331,8 +348,7 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || with_auto_refresh(&mut conn, op).map(|(_, r)| (conn, r)))
-        .await;
+      let res = with_auto_refresh(&mut conn, op).await.map(|(_, r)| (conn, r));
       if h.active_origin.get_untracked() != orig {
         return;
       }
@@ -482,14 +498,15 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
-        let ((live, trash), rot) = with_auto_refresh(&mut conn, |c| {
-          let live = c.list_views(ws_id)?;
-          let trash = c.list_trash(ws_id).unwrap_or_default();
+      let res = async {
+        let ((live, trash), rot) = with_auto_refresh(&mut conn, move |c| async move {
+          let live = c.list_views(ws_id).await?;
+          let trash = c.list_trash(ws_id).await.unwrap_or_default();
           Ok((live, trash))
-        })?;
+        })
+        .await?;
         Ok::<_, String>((conn, merge_live_and_trash(live, trash, ws_id), rot))
-      })
+      }
       .await;
       if h.active_origin.get_untracked() != cache_origin
         || h.active_workspace_id.get_untracked() != ws_id
@@ -559,10 +576,9 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
-        fetch_cloud_workspace_snapshot(&mut conn, ws_id, preferred_doc).map(|s| (conn, s))
-      })
-      .await;
+      let res = fetch_cloud_workspace_snapshot(&mut conn, ws_id, preferred_doc)
+        .await
+        .map(|s| (conn, s));
       if h.cloud_load_gen.get_untracked() != epoch
         || h.active_origin.get_untracked() != origin
         || h.active_workspace_id.get_untracked() != ws_id
@@ -725,16 +741,16 @@ impl CloudSessionHandles {
     let url_req = url.clone();
     let email_req = email.clone();
     spawn(async move {
-      let outcome = net::run_blocking(move || {
+      let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: url_req,
           access_token: None,
           email: Some(email_req.clone()),
         });
-        let logged_email = conn.login(&email_req, &password)?;
-        let boot = fetch_cloud_bootstrap(&mut conn, None)?;
+        let logged_email = conn.login(&email_req, &password).await?;
+        let boot = fetch_cloud_bootstrap(&mut conn, None).await?;
         Ok::<_, String>((conn, logged_email, boot))
-      })
+      }
       .await;
       if h.auth_gen.get_untracked() != auth_epoch {
         return;
@@ -847,7 +863,7 @@ impl CloudSessionHandles {
     let email_req = email.clone();
     let uid_req = (!saved_account_id.trim().is_empty()).then_some(saved_account_id);
     spawn(async move {
-      let outcome = net::run_blocking(move || {
+      let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: origin_req,
           access_token: (!token.trim().is_empty()).then_some(token),
@@ -856,11 +872,11 @@ impl CloudSessionHandles {
         .with_user_id(uid_req)
         .with_refresh_token((!refresh.trim().is_empty()).then_some(refresh));
         if conn.access_token().is_none() {
-          conn.refresh_session()?;
+          conn.refresh_session().await?;
         }
-        let boot = fetch_cloud_bootstrap(&mut conn, preferred_ws)?;
+        let boot = fetch_cloud_bootstrap(&mut conn, preferred_ws).await?;
         Ok::<_, String>((conn, boot))
-      })
+      }
       .await;
       if h.auth_gen.get_untracked() != auth_epoch {
         return;
@@ -919,21 +935,21 @@ impl CloudSessionHandles {
     let email_req = email.clone();
     let pass_req = password.clone();
     spawn(async move {
-      let outcome = net::run_blocking(move || {
+      let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: url_req,
           access_token: None,
           email: Some(email_req.clone()),
         });
-        let user = conn.register(&email_req, &display_name, &pass_req)?;
+        let user = conn.register(&email_req, &display_name, &pass_req).await?;
         if user.verified {
-          let logged_email = conn.login(&email_req, &pass_req)?;
-          let boot = fetch_cloud_bootstrap(&mut conn, None)?;
+          let logged_email = conn.login(&email_req, &pass_req).await?;
+          let boot = fetch_cloud_bootstrap(&mut conn, None).await?;
           Ok::<_, String>(Some((conn, logged_email, boot)))
         } else {
           Ok(None)
         }
-      })
+      }
       .await;
       if h.auth_gen.get_untracked() != auth_epoch {
         return;
@@ -970,50 +986,50 @@ impl CloudSessionHandles {
 
     if !self.allow_local {
       let logout_conn = self.cloud_connector.borrow().clone();
-      #[cfg(target_arch = "wasm32")]
-      {
-        // Execute synchronous same-origin `POST /api/auth/logout` directly so
-        // the server revokes the refresh family and clears HttpOnly cookies
-        // before returning — immune to popover Owner disposal or immediate F5.
-        let _ = logout_conn.logout_server();
-      }
-      #[cfg(not(target_arch = "wasm32"))]
-      {
-        spawn(async move {
-          let _ = net::run_blocking(move || logout_conn.logout_server()).await;
+      let auth_epoch = self.auth_gen.get_untracked();
+      let h = self.clone();
+      self.world_busy.set(true);
+      spawn(async move {
+        // Await non-blocking `POST /api/auth/logout` so the server revokes the
+        // refresh family and clears HttpOnly cookies BEFORE the sign-in gate
+        // becomes interactive (immune to immediate reload).
+        let _ = logout_conn.logout_server().await;
+        if h.auth_gen.get_untracked() != auth_epoch {
+          return;
+        }
+        let web_origin = {
+          let cur = h.selected_cloud_origin.get_untracked();
+          if cur.is_empty() { h.server_url.get_untracked() } else { cur }
+        };
+        let prev_server = h.server_url.get_untracked();
+        if is_cloud_origin(&prev_server) {
+          let _ = h.vault.clear_server_credential(&prev_server);
+        }
+        if is_cloud_origin(&web_origin) {
+          let _ = h.vault.clear_server_credential(&web_origin);
+        }
+        let mut creds = h.signed_in_origins_sig.get_untracked();
+        creds.retain(|(o, _)| o != &prev_server && o != &web_origin);
+        h.signed_in_origins_sig.set(creds);
+        *h.cloud_connector.borrow_mut() = CloudConnector::new(CloudConfig {
+          server_url: web_origin.clone(),
+          access_token: None,
+          email: None,
         });
-      }
-      let web_origin = {
-        let cur = self.selected_cloud_origin.get_untracked();
-        if cur.is_empty() { self.server_url.get_untracked() } else { cur }
-      };
-      let prev_server = self.server_url.get_untracked();
-      if is_cloud_origin(&prev_server) {
-        let _ = self.vault.clear_server_credential(&prev_server);
-      }
-      if is_cloud_origin(&web_origin) {
-        let _ = self.vault.clear_server_credential(&web_origin);
-      }
-      let mut creds = self.signed_in_origins_sig.get_untracked();
-      creds.retain(|(o, _)| o != &prev_server && o != &web_origin);
-      self.signed_in_origins_sig.set(creds);
-      *self.cloud_connector.borrow_mut() = CloudConnector::new(CloudConfig {
-        server_url: web_origin.clone(),
-        access_token: None,
-        email: None,
+        h.is_cloud_signed_in.set(false);
+        h.world_active_origin.set(web_origin.clone());
+        h.account_id.set(String::new());
+        h.account_email.set(String::new());
+        h.account_name.set("未登录".to_string());
+        h.cloud_status.set("请登录云端账户".to_string());
+        h.world_error.set(String::new());
+        h.world_info.set(String::new());
+        h.workspaces.set(Vec::new());
+        h.apply_workspace_views(web_origin, Uuid::nil(), String::new(), Vec::new(), None, false);
+        h.world_busy.set(false);
+        h.world_can_close.set(false);
+        h.world_switcher_open.set(true);
       });
-      self.is_cloud_signed_in.set(false);
-      self.world_active_origin.set(web_origin.clone());
-      self.account_id.set(String::new());
-      self.account_email.set(String::new());
-      self.account_name.set("未登录".to_string());
-      self.cloud_status.set("请登录云端账户".to_string());
-      self.world_error.set(String::new());
-      self.world_info.set(String::new());
-      self.workspaces.set(Vec::new());
-      self.apply_workspace_views(web_origin, Uuid::nil(), String::new(), Vec::new(), None, false);
-      self.world_can_close.set(false);
-      self.world_switcher_open.set(true);
       return;
     }
 
@@ -1080,21 +1096,30 @@ impl CloudSessionHandles {
     let name_req = name.clone();
     let md_req = markdown.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
-        let (mut view, mut rot) =
-          with_auto_refresh(&mut conn, |c| c.create_document(ws_id, &name_req, parent))?;
+      let res = async {
+        let name_c = name_req.clone();
+        let (mut view, mut rot) = with_auto_refresh(&mut conn, move |c| {
+          let n = name_c.clone();
+          async move { c.create_document(ws_id, &n, parent).await }
+        })
+        .await?;
         if view.workspace_id.is_nil() {
           view.workspace_id = ws_id;
         }
         if !md_req.trim().is_empty() {
-          let (_, rot2) =
-            with_auto_refresh(&mut conn, |c| c.save_document_markdown(ws_id, view.object_id, &md_req))?;
+          let obj_id = view.object_id;
+          let md_c = md_req.clone();
+          let (_, rot2) = with_auto_refresh(&mut conn, move |c| {
+            let m = md_c.clone();
+            async move { c.save_document_markdown(ws_id, obj_id, &m).await }
+          })
+          .await?;
           if rot2.is_some() {
             rot = rot2;
           }
         }
         Ok::<_, String>((conn, view, rot))
-      })
+      }
       .await;
       if h.active_origin.get_untracked() != origin
         || h.active_workspace_id.get_untracked() != ws_id
@@ -1139,14 +1164,18 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
-        let (mut view, rot) =
-          with_auto_refresh(&mut conn, |c| c.create_folder(ws_id, &name, parent))?;
+      let res = async {
+        let name_c = name.clone();
+        let (mut view, rot) = with_auto_refresh(&mut conn, move |c| {
+          let n = name_c.clone();
+          async move { c.create_folder(ws_id, &n, parent).await }
+        })
+        .await?;
         if view.workspace_id.is_nil() {
           view.workspace_id = ws_id;
         }
         Ok::<_, String>((conn, view, rot))
-      })
+      }
       .await;
       if h.active_origin.get_untracked() != origin
         || h.active_workspace_id.get_untracked() != ws_id
@@ -1183,10 +1212,12 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
-        with_auto_refresh(&mut conn, |c| c.create_workspace(&name)).map(|(w, r)| (conn, w, r))
+      let res = with_auto_refresh(&mut conn, move |c| {
+        let n = name.clone();
+        async move { c.create_workspace(&n).await }
       })
-      .await;
+      .await
+      .map(|(w, r)| (conn, w, r));
       if h.active_origin.get_untracked() != origin {
         return;
       }
@@ -1233,7 +1264,7 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
+      let res = async {
         let mut folder_cache: HashMap<(Option<Uuid>, String), Uuid> = HashMap::new();
         let mut created_views: Vec<View> = Vec::new();
         let mut created_docs: Vec<(Uuid, String, String)> = Vec::new();
@@ -1250,8 +1281,12 @@ impl CloudSessionHandles {
             let fid = if let Some(&existing) = folder_cache.get(&key) {
               existing
             } else {
-              let (mut fview, r) =
-                with_auto_refresh(&mut conn, |c| c.create_folder(ws_id, &seg_trim, parent))?;
+              let seg_c = seg_trim.clone();
+              let (mut fview, r) = with_auto_refresh(&mut conn, move |c| {
+                let s = seg_c.clone();
+                async move { c.create_folder(ws_id, &s, parent).await }
+              })
+              .await?;
               if r.is_some() {
                 rot = r;
               }
@@ -1266,8 +1301,12 @@ impl CloudSessionHandles {
             parent = Some(fid);
           }
 
-          let (mut pview, r1) =
-            with_auto_refresh(&mut conn, |c| c.create_document(ws_id, &spec.title, parent))?;
+          let title_c = spec.title.clone();
+          let (mut pview, r1) = with_auto_refresh(&mut conn, move |c| {
+            let t = title_c.clone();
+            async move { c.create_document(ws_id, &t, parent).await }
+          })
+          .await?;
           if r1.is_some() {
             rot = r1;
           }
@@ -1275,9 +1314,13 @@ impl CloudSessionHandles {
             pview.workspace_id = ws_id;
           }
           if !spec.markdown.trim().is_empty() {
-            let (_, r2) = with_auto_refresh(&mut conn, |c| {
-              c.save_document_markdown(ws_id, pview.object_id, &spec.markdown)
-            })?;
+            let obj_id = pview.object_id;
+            let md_c = spec.markdown.clone();
+            let (_, r2) = with_auto_refresh(&mut conn, move |c| {
+              let m = md_c.clone();
+              async move { c.save_document_markdown(ws_id, obj_id, &m).await }
+            })
+            .await?;
             if r2.is_some() {
               rot = r2;
             }
@@ -1286,7 +1329,7 @@ impl CloudSessionHandles {
           created_views.push(pview);
         }
         Ok::<_, String>((conn, created_views, created_docs, rot))
-      })
+      }
       .await;
       if h.active_origin.get_untracked() != origin
         || h.active_workspace_id.get_untracked() != ws_id
@@ -1359,16 +1402,16 @@ impl CloudSessionHandles {
     let h = self.clone();
     let origin_req = origin.clone();
     spawn(async move {
-      let outcome = net::run_blocking(move || {
+      let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: origin_req,
           access_token: None,
           email: None,
         });
-        let email = conn.refresh_session_cookie()?;
-        let boot = fetch_cloud_bootstrap(&mut conn, None)?;
+        let email = conn.refresh_session_cookie().await?;
+        let boot = fetch_cloud_bootstrap(&mut conn, None).await?;
         Ok::<_, String>((conn, email, boot))
-      })
+      }
       .await;
       if h.auth_gen.get_untracked() != auth_epoch {
         return;
@@ -1431,21 +1474,31 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     spawn(async move {
-      let res = net::run_blocking(move || {
-        let (usage, mut rot) = match with_auto_refresh(&mut conn, |c| c.workspace_usage(ws_id)) {
-          Ok((u, r)) => (Some(u), r),
-          Err(_) => (None, None),
-        };
-        let members = match with_auto_refresh(&mut conn, |c| c.list_members(ws_id)) {
-          Ok((m, r)) => {
-            if r.is_some() {
-              rot = r;
+      let res = async {
+        let (usage, mut rot) =
+          match with_auto_refresh(&mut conn, move |c| async move { c.workspace_usage(ws_id).await })
+            .await
+          {
+            Ok((u, r)) => (Some(u), r),
+            Err(_) => (None, None),
+          };
+        let members =
+          match with_auto_refresh(&mut conn, move |c| async move { c.list_members(ws_id).await })
+            .await
+          {
+            Ok((m, r)) => {
+              if r.is_some() {
+                rot = r;
+              }
+              m
             }
-            m
-          }
-          Err(_) => Vec::new(),
-        };
-        let invs = match with_auto_refresh(&mut conn, |c| c.list_invitations(ws_id)) {
+            Err(_) => Vec::new(),
+          };
+        let invs = match with_auto_refresh(&mut conn, move |c| async move {
+          c.list_invitations(ws_id).await
+        })
+        .await
+        {
           Ok((i, r)) => {
             if r.is_some() {
               rot = r;
@@ -1455,7 +1508,7 @@ impl CloudSessionHandles {
           Err(_) => Vec::new(),
         };
         (conn, usage, members, invs, rot)
-      })
+      }
       .await;
       if gen_sig.get_untracked() != epoch
         || h.active_origin.get_untracked() != orig
