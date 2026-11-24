@@ -586,7 +586,10 @@ impl BoardCtx {
     let svg_theme: BoardSvgTheme = board_svg_theme(self.dark_mode.get_untracked());
     let (markup, title) = {
       let s = self.session.borrow();
-      (s.render_svg(Some(&svg_theme)), s.snapshot().title.clone())
+      (
+        mica_board::render_board_svg_with_source(s.snapshot(), Some(&svg_theme)),
+        s.snapshot().title.clone(),
+      )
     };
     self.last_svg_bytes.set(markup.len());
     self.save_text_with_fallback(
@@ -631,6 +634,8 @@ impl BoardCtx {
         let imported = if is_json {
           String::from_utf8(bytes).ok().and_then(|s| BoardSnapshot::parse_json(&s).ok())
             .ok_or_else(|| "JSON 格式无法识别为 Mica 画板".to_string())
+        } else if let Some(snap) = mica_board::extract_board_snapshot_from_svg(&bytes) {
+          Ok(snap)
         } else {
           mica_board::import_drawio_bytes(&bytes).map_err(|e| format!("导入 draw.io 失败：{e}"))
         };

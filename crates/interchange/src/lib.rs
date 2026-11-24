@@ -3,12 +3,18 @@
 //! plans and archive entries out; the api-server executes the side effects
 //! (database writes, object storage). See docs/features/export-import.md.
 
+pub mod board_svg;
 pub mod export_tree;
 pub mod import;
 pub mod normalize;
 pub mod notion;
 pub mod order;
 pub mod zip;
+
+pub use board_svg::{
+  materialize_portable_boards, restore_embedded_boards_from_archive,
+  restore_embedded_boards_in_markdown,
+};
 
 pub use export_tree::{
   ImageAsset, MANIFEST_VERSION, TreeExport, TreeNode, build_incremental_markdown_tree_zip,

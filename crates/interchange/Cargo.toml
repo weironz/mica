@@ -15,6 +15,7 @@ serde_json.workspace = true
 # no cycle. Default features (no render) keep it lean.
 mica-md = { path = "../md-core" }
 mica-markdown = { path = "../markdown" }
+mica-board = { path = "../mica-board" }
 
 [dev-dependencies]
 # Property fuzz: the ZIP import pipeline must never panic on malformed bytes

@@ -5,16 +5,19 @@
 //! with fallback to `<Downloads | Desktop | temp>/mica-exports/`) and
 //! WebAssembly (`#[cfg(target_arch = "wasm32")]`, returning structured summaries).
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use mica_api_types::View;
 #[cfg(not(target_arch = "wasm32"))]
-use mica_interchange::ZipFileEntry;
+use mica_interchange::{ZipFileEntry, percent_decode, restore_embedded_boards_in_markdown};
 use mica_interchange::{
   ImportMode, ImportPlan, TreeNode, build_markdown_only_tree_zip,
-  build_markdown_tree_zip, build_zip, normalize_archive, plan_import, plan_vault_import, read_zip,
+  build_markdown_tree_zip, build_zip, normalize_archive, plan_import,
+  plan_vault_import, read_zip,
 };
 use mica_md::{DocumentSnapshotPayload, ParseOptions, parse as parse_markdown};
 use serde::{Deserialize, Serialize};
@@ -491,7 +494,10 @@ pub fn import_folder_from_disk(
 
     let mut entries: Vec<ZipFileEntry> = Vec::new();
     walk_markdown_dir(dir, dir, &mut entries)?;
-    if entries.is_empty() {
+    let has_markdown = entries
+      .iter()
+      .any(|e| e.name.to_ascii_lowercase().ends_with(".md"));
+    if !has_markdown {
       return Err(format!("文件夹中没有找到 Markdown 文件：{}", dir.display()));
     }
 
@@ -524,6 +530,9 @@ pub fn import_folder_from_disk(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+const MAX_LOCAL_BOARD_SVG_BYTES: u64 = 10 * 1024 * 1024;
+
+#[cfg(not(target_arch = "wasm32"))]
 fn walk_markdown_dir(
   root: &Path,
   current: &Path,
@@ -549,11 +558,17 @@ fn walk_markdown_dir(
     if path.is_dir() {
       walk_markdown_dir(root, &path, out)?;
     } else if path.is_file() {
-      let is_md = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
-      if !is_md {
+      let ext = path.extension().and_then(|e| e.to_str());
+      let is_md = ext.is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
+      let is_svg = ext.is_some_and(|e| e.eq_ignore_ascii_case("svg"));
+      if !is_md && !is_svg {
+        continue;
+      }
+      if is_svg
+        && path
+          .metadata()
+          .is_ok_and(|m| m.len() > MAX_LOCAL_BOARD_SVG_BYTES)
+      {
         continue;
       }
       let rel = path
@@ -564,7 +579,7 @@ fn walk_markdown_dir(
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join("/");
-      if archive_name.to_ascii_lowercase().ends_with(".markdown") {
+      if is_md && archive_name.to_ascii_lowercase().ends_with(".markdown") {
         let trim_len = archive_name.len() - ".markdown".len();
         archive_name.truncate(trim_len);
         archive_name.push_str(".md");
@@ -578,6 +593,47 @@ fn walk_markdown_dir(
     }
   }
   Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_relative_board_svg_from_disk(base_dir: &Path, raw_dest: &str) -> Option<Cow<'static, [u8]>> {
+  let trimmed = raw_dest.trim();
+  if trimmed.is_empty()
+    || trimmed.contains('\0')
+    || trimmed.starts_with("http://")
+    || trimmed.starts_with("https://")
+    || trimmed.starts_with("data:")
+    || trimmed.starts_with("mica://")
+    || trimmed.starts_with('/')
+    || trimmed.starts_with('\\')
+  {
+    return None;
+  }
+  let stripped = trimmed
+    .split(['?', '#'])
+    .next()
+    .unwrap_or(trimmed);
+  let decoded = percent_decode(stripped);
+  if !decoded.to_ascii_lowercase().ends_with(".svg") {
+    return None;
+  }
+  let mut candidate = base_dir.to_path_buf();
+  for seg in decoded.replace('\\', "/").split('/') {
+    match seg {
+      "" | "." => {}
+      ".." => {
+        candidate.pop();
+      }
+      s if s.contains(':') => return None,
+      s => candidate.push(s),
+    }
+  }
+  let meta = std::fs::metadata(&candidate).ok()?;
+  if !meta.is_file() || meta.len() > MAX_LOCAL_BOARD_SVG_BYTES {
+    return None;
+  }
+  let bytes = std::fs::read(&candidate).ok()?;
+  Some(Cow::Owned(bytes))
 }
 
 // ── Native OS File Dialog Wrappers (nsh-core 0.6.1) ─────────────────────────
@@ -823,7 +879,13 @@ pub fn import_markdown_from_path(path: &str) -> Result<(String, String), String>
       .map_err(|e| format!("读取文件失败 {}：{e}", file_path.display()))?;
     let raw = String::from_utf8(bytes)
       .map_err(|e| format!("文件不是有效的 UTF-8 编码 {}：{e}", file_path.display()))?;
-    let content = raw.strip_prefix('\u{feff}').unwrap_or(&raw).to_string();
+    let stripped = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let content = match file_path.parent() {
+      Some(base_dir) => restore_embedded_boards_in_markdown(stripped, |dest| {
+        read_relative_board_svg_from_disk(base_dir, dest)
+      }),
+      None => stripped.to_string(),
+    };
     let title = file_path
       .file_stem()
       .and_then(|s| s.to_str())
@@ -1070,6 +1132,116 @@ mod tests {
       wrapped_nested.folder_path,
       vec![root_folder, "项目文档".to_string()]
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn portable_markdown_zip_unzipped_folder_and_single_md_roundtrip_embedded_boards() {
+    let ws = Uuid::new_v4();
+    let folder_id = Uuid::new_v4();
+    let doc_id = Uuid::new_v4();
+    let now = Utc::now();
+
+    let mut snap = mica_board::BoardSnapshot::template_flowchart();
+    snap.title = "部署架构图".into();
+    snap.nodes[0].text = "负载均衡 & API".into();
+    let original_md = format!("前置说明。\n\n```mica-board\n{}\n```\n", snap.to_compact_json());
+
+    let views = vec![
+      View {
+        id: folder_id,
+        workspace_id: ws,
+        object_id: folder_id,
+        name: "运维".into(),
+        object_type: "folder".into(),
+        icon: None,
+        parent_view_id: None,
+        position: "0000000010".into(),
+        is_deleted: false,
+        created_by: Uuid::nil(),
+        created_at: now,
+        updated_at: now,
+        state_bytes: None,
+      },
+      View {
+        id: Uuid::new_v4(),
+        workspace_id: ws,
+        object_id: doc_id,
+        name: "上线手册".into(),
+        object_type: "page".into(),
+        icon: None,
+        parent_view_id: Some(folder_id),
+        position: "0000000010".into(),
+        is_deleted: false,
+        created_by: Uuid::nil(),
+        created_at: now,
+        updated_at: now,
+        state_bytes: None,
+      },
+    ];
+    let mut docs = HashMap::new();
+    docs.insert(doc_id, original_md);
+
+    let extract_first_board = |md: &str| -> mica_board::BoardSnapshot {
+      let parsed = parse_markdown(md, &ParseOptions::default());
+      let block = parsed
+        .blocks
+        .iter()
+        .find(|b| {
+          matches!(b.kind.as_str(), "code_block" | "code")
+            && b
+              .data
+              .get("language")
+              .and_then(|v| v.as_str())
+              .is_some_and(|l| l.eq_ignore_ascii_case("mica-board"))
+        })
+        .expect("restored mica-board block");
+      mica_board::BoardSnapshot::parse_json(&block.text).expect("valid board json")
+    };
+
+    // 1. Export portable Markdown ZIP: emits clean SVG image in markdown + embedded-source SVG in assets/.
+    let md_zip =
+      build_workspace_zip_bytes("研发", &views, &docs, ArchiveExportFormat::MarkdownZip)
+        .expect("build portable markdown zip");
+    let raw_entries = read_zip(&md_zip).expect("read zip");
+    assert!(raw_entries.iter().any(|e| e.name == "assets/部署架构图.svg"));
+    let exported_md = String::from_utf8(
+      raw_entries
+        .iter()
+        .find(|e| e.name == "运维/上线手册.md")
+        .expect("nested md")
+        .bytes
+        .clone(),
+    )
+    .unwrap();
+    assert!(exported_md.contains("![部署架构图](../assets/部署架构图.svg)"));
+
+    // 2. Re-import ZIP directly -> lossless whiteboard restoration.
+    let via_zip = parse_zip_archive_to_pages(&md_zip, false).expect("import md zip");
+    assert_eq!(via_zip.len(), 1);
+    assert_eq!(extract_first_board(&via_zip[0].markdown), snap);
+
+    // 3. Unzip onto disk and import the whole folder -> lossless whiteboard restoration.
+    let dir = temp_test_dir("board-unzipped");
+    for entry in &raw_entries {
+      let target = dir.join(&entry.name);
+      if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).expect("mkdir");
+      }
+      std::fs::write(&target, &entry.bytes).expect("write unzipped file");
+    }
+    let via_folder = import_folder_from_disk(&dir, false).expect("import unzipped folder");
+    assert_eq!(via_folder.len(), 1);
+    assert_eq!(extract_first_board(&via_folder[0].markdown), snap);
+
+    // 4. Import ONE single `.md` file from that unzipped folder -> still resolves `../assets/部署架构图.svg`!
+    let single_md_path = dir.join("运维").join("上线手册.md");
+    let (single_title, single_body) =
+      import_markdown_from_path(&single_md_path.to_string_lossy()).expect("import single md");
+    assert_eq!(single_title, "上线手册");
+    assert_eq!(extract_first_board(&single_body), snap);
 
     let _ = std::fs::remove_dir_all(&dir);
   }

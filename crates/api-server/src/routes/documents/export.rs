@@ -92,7 +92,7 @@ pub async fn export_document_zip(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
-  let payload = store::current_payload(&state.db, document_id)
+  let mut payload = store::current_payload(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
 
@@ -110,6 +110,15 @@ pub async fn export_document_zip(
 
   let mut entries = Vec::new();
   let assets = collect_assets(&state, workspace_id, &payload.blocks, &mut entries).await?;
+  let mut used_assets: std::collections::HashSet<String> = entries
+    .iter()
+    .filter_map(|e| e.name.strip_prefix("assets/").map(str::to_string))
+    .collect();
+  entries.extend(mica_interchange::materialize_portable_boards(
+    &mut payload,
+    "",
+    &mut used_assets,
+  ));
   let body = export_markdown_with_assets(&payload, &assets)
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
   // Same rule as the tree export: the document's own title when it has one, the

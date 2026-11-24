@@ -195,6 +195,7 @@ fn plan_core(
       files.insert(e.name, e.bytes);
     }
   }
+  let file_paths: HashSet<String> = files.keys().cloned().collect();
 
   let notion = notion_hint || looks_like_notion_export(mds.keys().map(String::as_str));
   // Our OWN archives now lead each page's text with `# <title>` (2026-08-27, see
@@ -509,6 +510,11 @@ fn plan_core(
       native_sidecar(&block_jsons, path, markdown)
     } else {
       None
+    };
+    let body = if native.is_none() {
+      crate::board_svg::restore_embedded_boards_from_archive(&body, path, &files, &file_paths)
+    } else {
+      body
     };
     pages.push(PagePlan {
       archive_path: Some(path.clone()),
