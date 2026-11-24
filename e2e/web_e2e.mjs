@@ -58,6 +58,60 @@ async function ensureUserRegistered(base, email, password) {
       );
     }
   }
+
+  // Ensure the test user has at least one workspace and one page on a fresh DB
+  // so the browser client opens directly into a live `/ws/` synced page.
+  const loginResp = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!loginResp.ok) {
+    const txt = await loginResp.text().catch(() => '');
+    throw new Error(`seed login failed: HTTP ${loginResp.status} ${txt}`);
+  }
+  const loginData = await loginResp.json();
+  const token = loginData.access_token;
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+
+  const wsListResp = await fetch(`${base}/api/workspaces`, { headers: authHeaders });
+  if (!wsListResp.ok) {
+    throw new Error(`seed list workspaces failed: HTTP ${wsListResp.status}`);
+  }
+  const wsListData = await wsListResp.json();
+  const workspaces = Array.isArray(wsListData) ? wsListData : (wsListData.workspaces || []);
+  let wsId = workspaces[0]?.id;
+  if (!wsId) {
+    const createWs = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ name: 'E2E Workspace' }),
+    });
+    if (!createWs.ok) {
+      const txt = await createWs.text().catch(() => '');
+      throw new Error(`seed create workspace failed: HTTP ${createWs.status} ${txt}`);
+    }
+    const created = await createWs.json();
+    wsId = created.workspace?.id || created.id;
+  }
+
+  const viewsResp = await fetch(`${base}/api/workspaces/${wsId}/views`, { headers: authHeaders });
+  const viewsData = viewsResp.ok ? await viewsResp.json() : { views: [] };
+  const views = Array.isArray(viewsData) ? viewsData : (viewsData.views || []);
+  if (!views.some((v) => v.view_type === 'page' && !v.deleted_at)) {
+    const createDoc = await fetch(`${base}/api/workspaces/${wsId}/documents`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ name: 'E2E Welcome' }),
+    });
+    if (!createDoc.ok) {
+      const txt = await createDoc.text().catch(() => '');
+      throw new Error(`seed create document failed: HTTP ${createDoc.status} ${txt}`);
+    }
+  }
 }
 
 async function readIdbDocs(page) {
