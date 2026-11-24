@@ -10,7 +10,9 @@
 
 ### 1.1 愿景定位
 
-将 Mica 打造为开源界首个 **全栈 Rust、全平台（Windows / macOS / Linux / Web / Android / iOS）、Local-First CRDT、富文本与无限画板一体化** 的标杆知识库架构。
+将 Mica 打造为开源界首个 **全栈 Rust、跨平台（正式切换交付 Windows 桌面、Web 与可选 Linux `.deb`）、Local-First CRDT、富文本与无限画板一体化** 的标杆知识库架构。
+
+> **平台范围决定（2026-11-24）**：正式切换至全栈纯 Rust 客户端时，提供 **Windows 桌面**、**Web（WebAssembly）** 以及现有的可选 **Linux `.deb`** 构建；**不再提供 Android 与 macOS 桌面安装包**。原有 0.14.x Android 安装包仍可继续使用，但不接收新功能或更新。
 
 核心工程哲学：**「三层全栈 Rust 分层 + 路线二-B（主权在我）」**——
 
@@ -22,7 +24,7 @@
 
 1. **绝不再造第二套文档表示**（见 [开发教训 §1](../dev/lessons.md)）：客户端编辑态直接操作 `mica-core` 的 `MicaDoc`（`yrs` 扁平块模型），拒绝引入 ProseMirror 树等第二套文档表示做双向转译。
 2. **Markdown Round-Trip 与单源引擎不变量不退化**：解析、序列化、HTML、代码高亮继续严格单源归属 `crates/md-core`（[规范记分牌](commonmark-scoreboard.md)）。
-3. **中文 IME、大文档性能与无限画板体验零倒退**：五端中文输入法必须达标；2,000 块含表格/公式文档与 500 节点画板维持 60 FPS；移动端触屏编辑能力不裁撤。
+3. **中文 IME、大文档性能与无限画板体验零倒退（2026-11-24 范围修订）**：Windows 桌面（微软拼音 / 搜狗）与 Web（Chrome / Firefox / Safari）中文输入法必须达标；2,000 块含表格/公式文档与 500 节点画板维持 60 FPS；正式切换范围定为 Windows 桌面、Web 与可选 Linux `.deb`（不提供 Android 与 macOS 桌面，不再强制要求移动端触屏编辑或 Android 真机验收）。
 4. **渐进演进、拒绝大爆炸重写**：每个 Phase 均可独立测试、合入并产生复利收益，不存在“停工半年赌一个 0.x 框架”的死谷。
 
 ---

@@ -35,17 +35,9 @@ Mica 是一个 Markdown 工作区。笔记以 Markdown 存储——存在你自�
 不联网、不同步。*云端*工作区跑在 Mica 服务端上,实时同步,可以分享。两者显式切换,
 且一次只显示一个,所以一个页面存在哪里始终是明确的。
 
-**编辑器是画出来的,不是拼出来的。** 它是单个 Flutter `RenderBox`,自己绘制文字、光标、
-选区和块,底层是 marks-over-plain-text 模型——不是控件树,不是 `WebView`,
-也不是包了一层的第三方编辑器。因此光标和选区在所有平台上行为一致,中日韩 IME 组合输入
-原生可用,长文档也能保持流畅(绘制按视口裁剪)。
+**100% 全栈纯 Rust（L1 数据与引擎 + L2 无头客户端内核 + L3 原生外壳）。** 服务端、CLI、MCP 代理、Markdown / 公式 / Mermaid / 画板引擎、CRDT 同步引擎、无头块编辑器（`mica-editor`）以及跨平台桌面与 WebAssembly 客户端（`clients/mica_rust`）全部使用纯 Rust 编写，零 Dart / Flutter 与跨语言 FFI 桥接开销。
 
-**全平台同一个 CRDT 引擎。** 同步基于 `yrs`(Yjs 的 Rust 移植),而且每个平台跑的是同一份
-Rust 文档核心:服务端原生、桌面经 FFI、浏览器编译成 WebAssembly。每条编辑规则只有一份实现,
-每个平台讲的是同一份权威格式。
-
-**Rust 数据面。** 一切解析文件、遍历压缩包、做哈希、和存储打交道的活都在 Rust 里跑。
-Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏感路径。
+**全平台同一个 CRDT 引擎。** 同步基于 `yrs`（Yjs 的 Rust 移植），服务端、本地 SQLite、Windows 桌面客户端与 WebAssembly 客户端直接共享同一份 `mica-core::MicaDoc`。每条编辑规则只有一份实现，每个平台讲的是同一份权威格式。
 
 ### 编辑
 
@@ -89,13 +81,13 @@ Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏�
 
 ## 📦 安装
 
-**桌面版** —— 从 [Releases](https://github.com/weironz/mica/releases/latest)
-下载 `Mica-Setup-*.exe`。应用会从同一来源自动更新。
+**桌面版（Windows）** —— 从 [Releases](https://github.com/weironz/mica/releases/latest)
+下载 `Mica-Setup-*.exe`。应用会从同一来源自动更新；Linux `.deb` 包保留在发布工作流中按需构建。*（全栈纯 Rust 客户端不再提供 Android 与 macOS 桌面安装包；原有的 0.14.x Android 安装包仍可继续使用，但不会接收新功能更新。）*
 
 **命令行** —— 每个 release 都附带 Windows / Linux / macOS 三个平台的 `mica-cli`。
 它走同一套 API,并承载 MCP 服务(`mica-cli mcp`)。见 [docs/dev/cli.md](docs/dev/cli.md)。
 
-**Web** —— 自托管,见下。
+**Web** —— 自托管纯 Rust WebAssembly 客户端（支持 Chrome / Firefox / Safari），见下。
 
 ## 🏗 自托管
 

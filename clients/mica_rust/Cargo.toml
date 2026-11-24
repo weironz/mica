@@ -30,11 +30,12 @@ mica-interchange = { path = "../../crates/interchange" }
 mica-md = { path = "../../crates/md-core", features = ["render-board"] }
 mica-sync = { path = "../../crates/mica-sync" }
 
-# L3 Native Shell presentation primitives: enable only `editor` (pure-Rust code
-# editor via ropey for code blocks); document editing runs on Mica's own
-# `crates/mica-editor` + NSH native `virtual_list` (Route 2-B, zero `rich-editor`).
-nsh-core = "0.6.1"
-nsh-base = { version = "0.6.1", default-features = false, features = ["editor"] }
+# L3 Native Shell presentation primitives: pinned to exact `=0.6.1` (P2-2) so
+# `cargo update` never silently upgrades a 0.x UI shell. Enable only `editor`
+# (pure-Rust code editor via ropey for code blocks); document editing runs on
+# Mica's own `crates/mica-editor` + NSH native `virtual_list` (Route 2-B).
+nsh-core = "=0.6.1"
+nsh-base = { version = "=0.6.1", default-features = false, features = ["editor"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -51,7 +52,7 @@ ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
-nsh-platform-web = { version = "0.6.1", default-features = false }
+nsh-platform-web = { version = "=0.6.1", default-features = false }
 uuid = { version = "1.11", features = ["serde", "v4", "js"] }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4"
@@ -95,17 +96,17 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = "0.6.1"
+nsh-platform-windows = "=0.6.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = "0.6.1"
+nsh-platform-macos = "=0.6.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = "0.6.1"
+nsh-platform-linux = "=0.6.1"
 
 [dev-dependencies]
-nsh-engine = "0.6.1"
-nsh-testing = { version = "0.6.1", features = ["live"] }
+nsh-engine = "=0.6.1"
+nsh-testing = { version = "=0.6.1", features = ["live"] }
 
 # Standalone workspace root so the L3 UI shell stays isolated from server/CLI CI.
 [workspace]

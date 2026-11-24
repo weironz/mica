@@ -85,15 +85,18 @@ export restores what GFM dropped.
 
 ## 📦 Install
 
-**Desktop** — download `Mica-Setup-*.exe` from
+**Desktop (Windows)** — download `Mica-Setup-*.exe` from
 [Releases](https://github.com/weironz/mica/releases/latest). The app updates
-itself from the same feed.
+itself from the same feed. Optional Linux `.deb` packages are also built on
+demand via the release workflow. *(Android and macOS desktop packages are no
+longer shipped in the pure-Rust client line; existing 0.14.x Android APKs
+remain usable without further updates.)*
 
 **CLI** — `mica-cli` binaries for Windows, Linux and macOS are attached to every
 release. It drives the same API and hosts the MCP server (`mica-cli mcp`). See
 [docs/dev/cli.md](docs/dev/cli.md).
 
-**Web** — self-hosted, see below.
+**Web** — self-hosted pure-Rust WebAssembly client (Chrome, Firefox, Safari), see below.
 
 ## 🏗 Self-hosting
 

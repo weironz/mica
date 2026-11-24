@@ -38,6 +38,10 @@ gh workflow run ship.yml --repo weironz/mica --ref main -f dry_run=false
 
 两条路径遵守相同的门禁、版本一致性和"先挂齐附件再公开"的规则，**也都要求浏览器专用套件在发布提交上通过**才公开（见下表）。
 
+> **全栈纯 Rust 切换版平台范围与发布说明要求（2026-11-24，P1-1）**：
+> - 正式交付：**Windows 桌面安装包（`Mica-Setup-*.exe`）**、**Web（`mica-web` 镜像）**、**`mica-cli`（Windows / Linux / macOS）** 以及可选 **Linux `.deb`**（`release.yml` 的 `build_linux_deb`）；不再提供 Android 与 macOS 桌面安装包。
+> - 切换版本的 GitHub Release 说明必须明确写明：**Android 版不再更新，原有 0.14.x Android 安装包仍可继续使用但不会收到新功能**。
+
 ## 分步发布或恢复
 
 需要单独构建、重发未公开草稿或手动部署时，使用下面的分步入口。`X.Y.Z` 换成目标版本。
