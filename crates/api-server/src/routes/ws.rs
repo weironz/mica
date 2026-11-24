@@ -1253,6 +1253,7 @@ mod tests {
       state: doc.encode_state(),
       state_vector: doc.state_vector(),
       base_rid: 7,
+      word_count: None,
     };
     let doc_id = Uuid::from_u128(1);
 

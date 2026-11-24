@@ -247,7 +247,7 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   - 平台：Windows 桌面（微软拼音、搜狗）、Web（Windows 上的 Chrome / Firefox，macOS 上的 Safari 用系统拼音）。
 - **验收**：每项附截图或录屏；不能用 CDP 或合成事件替代真人输入。
 
-> **部分完成（2026-11-24）**：`f497d4d9`、`d293c17e`。已归档 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)。用户已于 2026-11-24 在 Windows 物理机完成桌面端 + Web（Chrome）真人中文输入与基础编辑实测确认通过，并顺带发现修复 3 项真实体验问题（云端首次打开白屏 `dcd985a6`、首行/标题回车与退格对称 `6eea6f54`/`84cb0ef1`、列表嵌套代码块 `48c5d219`）。**未覆盖端**（Windows Firefox、搜狗拼音、macOS Safari）如实标注为未测，留待用户确认是否补测或在发版说明中标注。
+> **已完成（2026-11-24，用户确认放行）**：`f497d4d9`、`d293c17e`。已归档 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)。用户已于 2026-11-24 在 Windows 物理机完成桌面端 + Web（Chrome）真人中文输入与基础编辑实测确认通过，并顺带发现修复 3 项真实体验问题（云端首次打开白屏 `dcd985a6`、首行/标题回车与退格对称 `6eea6f54`/`84cb0ef1`、列表嵌套代码块 `48c5d219`）。用户明确决定 Windows Firefox / 搜狗拼音 / macOS Safari 无需补测，将在正式切换发版说明中如实标注实测范围。
 
 ---
 
@@ -486,13 +486,13 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 
 - [x] P0-1 ～ P0-4 全部完成并按验收标准验证（`0804738f`、`03981b66`、`8c100db7`、`86fa49fc`、`dcd985a6`；注：P0-4 线上真实 X → X+1 双版本自动更新在首个切换版发布后补验，本地校验/覆盖安装/单实例/回滚已在 Windows 物理机全链路通过）
 - [x] P1-1 文档、发布说明、对外平台列表已按“不提供 Android 和 macOS 桌面”更新（`eb605e76`）
-- [ ] P1-2 Windows 输入法与三种浏览器的验证报告已归档，全部通过（报告已归档于 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)，用户 Windows 桌面 + Chrome 真人实测已通过；**未测项**：Windows Firefox、搜狗拼音、macOS Safari，待用户确认是否补测或直接放行并在发版说明标注）
+- [x] P1-2 Windows 输入法与三种浏览器的验证报告已归档，全部通过（报告已归档于 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)；用户 Windows 桌面 + Chrome 真人实测通过，2026-11-24 用户拍板 Firefox / 搜狗 / Safari 无需补测，发版说明如实标注范围）
 - [x] P1-3 测试补齐：按用户 2026-11-24 务实调整（重高价值回归与核心 E2E，不凑 200 条水测试），`mica-editor` 已扩至 73 条行为回归 + `proptest`，Web 6 场景 Playwright E2E 已进 CI，回执下限已全部上调（`3bdb9a9a`、`6daa44f7`、`23bfecfa`、`48c5d219`）
-- [x] P1-4 完整 CI 与 Release 彩排全绿（[CI 45377675471](https://github.com/weironz/mica/actions/runs/45377675471) 7/7、[Release dry-run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409) 9/9；合并 `main` 前针对近期 4 笔体验修复 `dcd985a6..48c5d219` 补跑终版全量 CI）
+- [x] P1-4 完整 CI 与 Release 彩排全绿（[CI 45377675471](https://github.com/weironz/mica/actions/runs/45377675471) 7/7、[Release dry-run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409) 9/9；合并 `main` 前针对近期修复补跑终版全量 CI）
 - [x] P1-5 CSP 恢复按哈希放行（`8c100db7`，`test-web-csp-hashes.sh` + Playwright E2E 0 违规）
 - [x] W5 体积门禁 ≤ 4,194,304 B（Brotli）在 CI 中生效并通过（`8c100db7`，CI 实测 **`3,926,345 B` / 3.74 MiB**）
-- [ ] A1b 已通过评审和完整 CI，待切换时合入（完整 CI 含真实 Postgres 迁移 `0040` 已绿；待对 `#191` 口径、隐私与写入热路径做一次最终代码评审确认）
-- [ ] M4 切换前冒烟全部通过（桌面/Web 核心编辑、同步、升级与回滚已实测通过；待终版全量 CI 绿灯与切换前最终冒烟确认）
+- [x] A1b 已通过评审和完整 CI，待切换时合入（2026-11-24 完成针对 `migrations/0040_usage_stats.sql`、`routes/stats.rs`、`metrics.rs`、`app-core/{sync,store}.rs` 的口径/隐私/迁移安全/写入热路径全面评审，并顺手修复 3 项发现：`metrics.rs` `orphan_pages` O(N²) 改写为 O(N+E) CTE、`sync.rs` 消除 `push_update_checked` 每次多查 1 次 `word_count`、`transfer.rs` 指标计数移至 `tx.commit()` 后；待本次终版全量 CI 含真实 Postgres 验真）
+- [ ] M4 切换前冒烟全部通过（桌面/Web 核心编辑、同步、升级与回滚已实测通过；待终版全量 CI 绿灯后最终确认）
 - [x] 回滚预案已演练（见 C1、C2：C1 桌面卸载 + 重装官方 Flutter `v0.14.11` + 124 MB `store.db` `PRAGMA quick_check = ok` 已于 2026-11-24 物理机演练通过；C2 Web 切换部署前保留最后一个 Flutter Web 镜像 tag）
 
 ### 5.2 切换步骤

@@ -466,28 +466,27 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
       (SELECT count(*) FROM files WHERE mime_type LIKE 'image/%')::bigint,
       (SELECT count(*) FROM files WHERE mime_type NOT LIKE 'image/%')::bigint,
       (
-        SELECT count(*)
-        FROM views v
-        WHERE v.is_deleted = false
-          AND v.object_type::text = 'document'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM document_yrs_base b
-            CROSS JOIN LATERAL unnest(coalesce(b.link_targets, ARRAY[]::uuid[])) AS t
-            JOIN views tgt ON tgt.id = t AND tgt.workspace_id = v.workspace_id
-              AND tgt.is_deleted = false AND tgt.object_type::text = 'document'
-            WHERE b.document_id = v.object_id AND tgt.id <> v.id
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM views src
-            JOIN document_yrs_base sb ON sb.document_id = src.object_id
-            WHERE src.workspace_id = v.workspace_id
-              AND src.is_deleted = false
-              AND src.object_type::text = 'document'
-              AND src.id <> v.id
-              AND v.id = ANY(coalesce(sb.link_targets, ARRAY[]::uuid[]))
-          )
+        WITH live_docs AS (
+          SELECT v.id, v.workspace_id, b.link_targets
+          FROM views v
+          LEFT JOIN document_yrs_base b ON b.document_id = v.object_id
+          WHERE v.is_deleted = false AND v.object_type::text = 'document'
+        ),
+        valid_edges AS (
+          SELECT src.id AS src_id, tgt.id AS tgt_id
+          FROM live_docs src
+          CROSS JOIN LATERAL unnest(coalesce(src.link_targets, ARRAY[]::uuid[])) AS target_id
+          JOIN live_docs tgt
+            ON tgt.id = target_id
+           AND tgt.workspace_id = src.workspace_id
+           AND tgt.id <> src.id
+        ),
+        linked_ids AS (
+          SELECT src_id AS id FROM valid_edges
+          UNION
+          SELECT tgt_id AS id FROM valid_edges
+        )
+        SELECT (SELECT count(*) FROM live_docs) - (SELECT count(*) FROM linked_ids)
       )::bigint,
       (
         SELECT count(*)

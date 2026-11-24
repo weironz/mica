@@ -1086,6 +1086,9 @@ async fn transfer_roots(
   }
 
   tx.commit().await?;
+  for _ in 0..documents {
+    crate::metrics::METRICS.record_page_created(mica_core::ActivitySource::Transfer);
+  }
 
   Ok(TransferResponse {
     new_root_view_id: new_root_view_ids.first().copied(),
@@ -1408,6 +1411,9 @@ pub async fn clone_view(
     .await?;
   }
   tx.commit().await?;
+  for _ in 0..documents {
+    crate::metrics::METRICS.record_page_created(mica_core::ActivitySource::Transfer);
+  }
 
   Ok(Json(CloneResponse {
     new_root_view_id: Some(view_map[&view_id]),
@@ -1512,7 +1518,6 @@ async fn insert_subtree_tx(
       0,
     )
     .await?;
-    crate::metrics::METRICS.record_page_created(mica_core::ActivitySource::Transfer);
     sqlx::query(
       r#"
         INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, icon, position, created_by)

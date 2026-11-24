@@ -90,6 +90,8 @@ pub struct YrsBase {
   pub state_vector: Vec<u8>,
   /// Highest stream `rid` already folded into `state`.
   pub base_rid: i64,
+  /// Stored `word_count` projection on `document_yrs_base` (`None` before backfill).
+  pub word_count: Option<i32>,
 }
 
 /// The document's own title, if it carries one — the source `views.name` is a
@@ -586,17 +588,19 @@ pub(crate) async fn ensure_base_tx(
   tx: &mut Transaction<'_, Postgres>,
   document_id: Uuid,
 ) -> ApiResult<YrsBase> {
-  if let Some((state, state_vector, base_rid)) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
-    "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
-  )
-  .bind(document_id)
-  .fetch_optional(&mut **tx)
-  .await?
+  if let Some((state, state_vector, base_rid, word_count)) =
+    sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64, Option<i32>)>(
+      "SELECT state, state_vector, base_rid, word_count FROM document_yrs_base WHERE document_id = $1",
+    )
+    .bind(document_id)
+    .fetch_optional(&mut **tx)
+    .await?
   {
     return Ok(YrsBase {
       state,
       state_vector,
       base_rid,
+      word_count,
     });
   }
 
@@ -674,22 +678,25 @@ pub async fn seed_base_tx(
     // still returns Ok — permanent, silent divergence; red line #1). Return
     // the stored winner instead. Our INSERT waited on the winner's unique-
     // index lock until it committed, so this re-read sees its row.
-    let (state, state_vector, base_rid) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
-      "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
-    )
-    .bind(document_id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let (state, state_vector, base_rid, word_count) =
+      sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64, Option<i32>)>(
+        "SELECT state, state_vector, base_rid, word_count FROM document_yrs_base WHERE document_id = $1",
+      )
+      .bind(document_id)
+      .fetch_one(&mut **tx)
+      .await?;
     return Ok(YrsBase {
       state,
       state_vector,
       base_rid,
+      word_count,
     });
   }
   Ok(YrsBase {
     state,
     state_vector,
     base_rid: 0,
+    word_count: Some(flat.word_count),
   })
 }
 
@@ -785,17 +792,11 @@ pub async fn push_update_checked(
     .ok_or(ApiError::NotFound)?;
 
   let base = ensure_base_tx(&mut tx, document_id).await?;
-  let prev_word_count: Option<i32> =
-    sqlx::query_scalar("SELECT word_count FROM document_yrs_base WHERE document_id = $1")
-      .bind(document_id)
-      .fetch_optional(&mut *tx)
-      .await?
-      .flatten();
 
   // Validate + fold: reconstruct the base, merge the update.
   let mut doc = guarded_from_update(&base.state)
     .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
-  let prev_words = match prev_word_count {
+  let prev_words = match base.word_count {
     Some(w) => w,
     None => mica_core::word_count::count_doc(&doc)
       .words
@@ -1325,6 +1326,7 @@ mod tests {
       state: server.encode_state(),
       state_vector: server.state_vector(),
       base_rid: 7,
+      word_count: None,
     };
 
     let diff = diff_from_base(&base, &client_sv).expect("valid sv → diff");
