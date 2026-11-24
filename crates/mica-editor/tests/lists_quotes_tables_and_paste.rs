@@ -585,4 +585,20 @@ fn empty_first_line_dropped_by_backspace_and_delete_preserving_next_block_kind()
   assert_eq!(s4.blocks().len(), 1);
   assert_eq!(s4.blocks()[0].kind, "image");
   assert_eq!(s4.selection(), Some(&DocSelection::block_atom(0)));
+
+  // 4. PrependEmptyParagraph (Title Enter) pushes existing first-line content
+  //    down and opens an editable blank line at index 0; on a blank page it
+  //    reuses the sole empty paragraph without duplicating it.
+  let mut s5 = EditorSession::from_markdown("**Spectrum-X** 平台");
+  s5.dispatch(EditorCommand::PrependEmptyParagraph);
+  assert_eq!(s5.blocks().len(), 2);
+  assert_eq!(s5.blocks()[0].kind, "paragraph");
+  assert_eq!(s5.blocks()[0].text, "");
+  assert_eq!(s5.blocks()[1].text, "Spectrum-X 平台");
+  assert_eq!(caret(&s5), DocPosition::new(0, 0));
+
+  let mut blank = EditorSession::from_markdown("");
+  blank.dispatch(EditorCommand::PrependEmptyParagraph);
+  assert_eq!(blank.blocks().len(), 1);
+  assert_eq!(caret(&blank), DocPosition::new(0, 0));
 }

@@ -429,6 +429,7 @@ impl MicaDocumentBridge {
         | EditorCommand::InsertImage { .. }
         | EditorCommand::ApplySlashCommand { .. }
         | EditorCommand::AppendEmptyParagraph
+        | EditorCommand::PrependEmptyParagraph
     ) {
       Some(ScrollMode::KeepVisible)
     } else {
@@ -1072,6 +1073,13 @@ impl MicaDocumentBridge {
   /// if the last block has content or is non-paragraph) and focuses it.
   pub fn append_empty_paragraph_and_focus(&self) {
     self.dispatch(EditorCommand::AppendEmptyParagraph);
+    self.request_focus();
+  }
+
+  /// Inserts an editable empty paragraph at index 0 so existing first-line
+  /// content moves down (or focuses the sole empty paragraph on a blank page).
+  pub fn prepend_empty_paragraph_and_focus(&self) {
+    self.dispatch(EditorCommand::PrependEmptyParagraph);
     self.request_focus();
   }
 

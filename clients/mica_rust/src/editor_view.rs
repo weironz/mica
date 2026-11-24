@@ -592,6 +592,7 @@ pub fn editor_view(
   // Focused editor keyboard bindings (automatically unregistered when focus moves to
   // title input, code block editor, table cell, find bar, search, or whiteboard!).
   let show_page_title_key = header.show_page_title;
+  let page_title_key = header.page_title;
   {
     let b_keys = bridge.clone();
     let l_keys = layouts.clone();
@@ -675,6 +676,7 @@ pub fn editor_view(
               &ai_cb,
               &img_cb,
               show_page_title_key,
+              page_title_key,
               title_ref,
               sink_ref,
               editor_focused,
@@ -1947,6 +1949,7 @@ pub fn editor_view(
                   if try_backspace_to_title(
                     &br_key_press,
                     show_page_title,
+                    page_title_key,
                     title_ref,
                     sink_ref,
                     editor_focused,
@@ -2077,7 +2080,7 @@ pub fn editor_view(
                       })
                       .on_change(move |v: &str| (h_chg.on_rename_title)(v.to_owned()))
                       .on_submit(move |_: &str| {
-                        b_enter.focus_block(0, 0);
+                        b_enter.prepend_empty_paragraph_and_focus();
                       })
                   }))
                   .child(when(move || show_properties.get(), {
@@ -2381,7 +2384,6 @@ fn should_backspace_to_title(
   show_page_title: bool,
   selection: Option<&DocSelection>,
   first_block: Option<&mica_editor::EditorBlock>,
-  block_count: usize,
 ) -> bool {
   if !show_page_title {
     return false;
@@ -2399,40 +2401,37 @@ fn should_backspace_to_title(
   let Some(blk) = first_block else {
     return false;
   };
-  if blk.kind != "paragraph" {
-    return false;
-  }
-  // An empty first paragraph with following blocks must be dropped first by
-  // `EditorCommand::DeleteBackward` so the body rises by one line; only once
-  // block 0 holds real text (or is the document's sole block) does Backspace
-  // step focus up into the page title.
-  if blk.text.is_empty() && block_count >= 2 {
-    return false;
-  }
-  true
+  blk.kind == "paragraph"
 }
 
 fn try_backspace_to_title(
   bridge: &MicaDocumentBridge,
   show_page_title: Signal<bool>,
+  page_title: Signal<String>,
   title_ref: ElementRef,
   sink_ref: ElementRef,
   editor_focused: Signal<bool>,
 ) -> bool {
   let sel = bridge.selection();
   let first = bridge.block_at(0);
-  if !should_backspace_to_title(
-    show_page_title.get_untracked(),
-    sel.as_ref(),
-    first.as_ref(),
-    bridge.block_count_signal().get_untracked(),
-  ) {
+  if !should_backspace_to_title(show_page_title.get_untracked(), sel.as_ref(), first.as_ref()) {
     return false;
   }
+  // Exact inverse of Title Enter (aligned with `origin/main` 2026-08-28 fix):
+  // when line 0 is an empty paragraph with following blocks, remove that empty
+  // first line so the body rises up, AND place the caret at the END of the
+  // page title.
+  if first.as_ref().is_some_and(|b| b.text.is_empty())
+    && bridge.block_count_signal().get_untracked() >= 2
+  {
+    bridge.dispatch(EditorCommand::DeleteBackward);
+  }
+  let end = page_title.get_untracked().encode_utf16().count() as u32;
   sink_ref.blur();
   editor_focused.set(false);
   bridge.clear_selection();
   title_ref.focus();
+  title_ref.set_selection(end, end);
   true
 }
 
@@ -2511,6 +2510,7 @@ fn handle_editor_key(
   on_inline_ai: &Rc<dyn Fn(String)>,
   on_insert_image: &Rc<dyn Fn()>,
   show_page_title: Signal<bool>,
+  page_title: Signal<String>,
   title_ref: ElementRef,
   sink_ref: ElementRef,
   editor_focused: Signal<bool>,
@@ -2577,7 +2577,14 @@ fn handle_editor_key(
       }
     }
     EditorKeyAction::Backspace => {
-      if try_backspace_to_title(bridge, show_page_title, title_ref, sink_ref, editor_focused) {
+      if try_backspace_to_title(
+        bridge,
+        show_page_title,
+        page_title,
+        title_ref,
+        sink_ref,
+        editor_focused,
+      ) {
         return;
       }
       bridge.dispatch(EditorCommand::DeleteBackward);
@@ -3820,23 +3827,23 @@ mod tests {
   use mica_editor::{DocSelection, EditorBlock};
 
   #[test]
-  fn backspace_to_title_yields_to_drop_empty_first_line_when_following_block_exists() {
+  fn backspace_to_title_matches_first_paragraph_at_offset_zero_and_skips_styled_blocks() {
     let sel0 = DocSelection::caret(0, 0);
+    let sel1 = DocSelection::caret(0, 1);
     let empty_para = EditorBlock::new("b0", "paragraph", "");
     let non_empty_para = EditorBlock::new("b0", "paragraph", "Spectrum-X");
     let heading = EditorBlock::new("b0", "heading", "");
 
-    // Empty first line with content below: must NOT steal Backspace to title,
-    // so `DeleteBackward` removes the leading blank line first.
-    assert!(!should_backspace_to_title(true, Some(&sel0), Some(&empty_para), 2));
+    // Plain paragraph at (0, 0) steps to title end (and `try_backspace_to_title`
+    // drops an empty line 0 first when a following block exists).
+    assert!(should_backspace_to_title(true, Some(&sel0), Some(&empty_para)));
+    assert!(should_backspace_to_title(true, Some(&sel0), Some(&non_empty_para)));
 
-    // Sole empty block in document: Backspace steps focus to title.
-    assert!(should_backspace_to_title(true, Some(&sel0), Some(&empty_para), 1));
-
-    // Non-empty first paragraph at offset 0: Backspace steps focus to title.
-    assert!(should_backspace_to_title(true, Some(&sel0), Some(&non_empty_para), 2));
+    // Caret after offset 0 or hidden page title never jumps to title.
+    assert!(!should_backspace_to_title(true, Some(&sel1), Some(&non_empty_para)));
+    assert!(!should_backspace_to_title(false, Some(&sel0), Some(&empty_para)));
 
     // Styled block (heading/list) sheds style first instead of jumping to title.
-    assert!(!should_backspace_to_title(true, Some(&sel0), Some(&heading), 1));
+    assert!(!should_backspace_to_title(true, Some(&sel0), Some(&heading)));
   }
 }

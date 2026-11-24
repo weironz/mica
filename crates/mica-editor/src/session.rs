@@ -431,6 +431,21 @@ impl EditorSession {
           ctx.typing_block = None;
         }
       }
+      EditorCommand::PrependEmptyParagraph => {
+        self.prose_input.reset();
+        let sole_empty_para = self.blocks.len() == 1
+          && self.blocks[0].kind == "paragraph"
+          && self.blocks[0].text.is_empty();
+        if sole_empty_para {
+          self.collapse_to(DocPosition::new(0, 0));
+        } else {
+          let created = EditorBlock::new(self.gen_block_id(), "paragraph", "");
+          ctx.ops.push(self.insert_op(&created, 0));
+          self.blocks.insert(0, created);
+          self.collapse_to(DocPosition::new(0, 0));
+          ctx.typing_block = None;
+        }
+      }
       EditorCommand::FlushHistoryBatch => {
         self.history.flush_typing_batch(&mut self.doc);
       }

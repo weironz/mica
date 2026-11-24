@@ -254,6 +254,10 @@ pub enum EditorCommand {
   /// if the final block is non-empty or non-paragraph, e.g. table/code/image)
   /// and collapse the caret onto it.
   AppendEmptyParagraph,
+  /// Insert an editable empty paragraph at index 0 so existing first-line
+  /// content moves down (or collapse onto the sole empty paragraph on a blank
+  /// document). Used when pressing Enter in the page title.
+  PrependEmptyParagraph,
   /// Explicitly close any open typing-coalescing history batch (e.g. on 400ms timer).
   FlushHistoryBatch,
 }
