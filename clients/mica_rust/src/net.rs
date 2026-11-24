@@ -187,6 +187,7 @@ pub struct CloudGraphPayload {
 #[derive(Debug, Clone)]
 pub struct CloudConnector {
   config: CloudConfig,
+  user_id: Option<String>,
   refresh_token: Option<String>,
   endpoints: ApiEndpoints,
   claims: ClaimTracker,
@@ -209,11 +210,30 @@ impl CloudConnector {
 
     Self {
       config,
+      user_id: None,
       refresh_token: None,
       endpoints,
       claims: ClaimTracker::new(origin),
       phase: SyncPhase::Offline,
     }
+  }
+
+  /// Attach the authenticated server user UUID (used for `#111` account-scoped
+  /// cloud cache keys).
+  pub fn with_user_id(mut self, user_id: Option<String>) -> Self {
+    self.user_id = user_id
+      .map(|u| u.trim().to_string())
+      .filter(|u| !u.is_empty());
+    self
+  }
+
+  /// Authenticated user UUID, if known from login/refresh/`GET /api/auth/me`.
+  pub fn user_id(&self) -> Option<&str> {
+    self
+      .user_id
+      .as_deref()
+      .map(str::trim)
+      .filter(|u| !u.is_empty())
   }
 
   /// Attach a persisted refresh token so expired access tokens can be rotated
@@ -300,12 +320,45 @@ impl CloudConnector {
     }
 
     self.config.access_token = Some(auth.access_token);
+    self.user_id = Some(auth.user.id.to_string());
     self.refresh_token = (!auth.refresh_token.trim().is_empty()).then_some(auth.refresh_token);
     self.config.email = Some(auth.user.email.clone());
     self.claims.switch_account(WorldOrigin::Cloud {
       server_url: self.endpoints.base_url().to_string(),
     });
     Ok(auth.user.email)
+  }
+
+  /// Fetch the authenticated user's identity (`GET /api/auth/me`) to resolve
+  /// `user_id` when restoring legacy credentials saved without `account_id`.
+  pub fn fetch_me(&self) -> Result<CloudUser, String> {
+    let body = self.authed_get("/api/auth/me", LOGIN_TIMEOUT_SECS)?;
+    let val: Value =
+      serde_json::from_str(&body).map_err(|e| format!("invalid /api/auth/me response: {e}"))?;
+    let user_obj = val.get("user").unwrap_or(&val);
+    let id = user_obj
+      .get("id")
+      .and_then(Value::as_str)
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .map(str::to_string)
+      .ok_or_else(|| "missing user id in /api/auth/me response".to_string())?;
+    let email = user_obj
+      .get("email")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .to_string();
+    let display_name = user_obj
+      .get("display_name")
+      .and_then(Value::as_str)
+      .unwrap_or(&email)
+      .to_string();
+    Ok(CloudUser {
+      id: Some(id),
+      email,
+      display_name,
+      verified: true,
+    })
   }
 
   /// Rotate an expired JWT access token via `POST /api/auth/refresh`.
@@ -321,6 +374,7 @@ impl CloudConnector {
       .map_err(|e| format!("token refresh failed: {e}"))?;
     let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
     self.config.access_token = Some(auth.access_token);
+    self.user_id = Some(auth.user.id.to_string());
     if !auth.refresh_token.trim().is_empty() {
       self.refresh_token = Some(auth.refresh_token);
     }
@@ -342,6 +396,7 @@ impl CloudConnector {
     let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
     let email = auth.user.email.clone();
     self.config.access_token = Some(auth.access_token);
+    self.user_id = Some(auth.user.id.to_string());
     self.refresh_token = None;
     self.config.email = Some(email.clone());
     self.claims.switch_account(WorldOrigin::Cloud {
@@ -979,6 +1034,7 @@ impl CloudConnector {
   /// Clear stored credentials and advance [`ClaimTracker`] back to [`WorldOrigin::Local`].
   pub fn logout(&mut self) {
     self.config.access_token = None;
+    self.user_id = None;
     self.refresh_token = None;
     self.config.email = None;
     self.phase = SyncPhase::Offline;

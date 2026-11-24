@@ -164,6 +164,8 @@ pub struct TrashEntry {
 struct StoredServerCredential {
   origin: String,
   email: String,
+  #[serde(default)]
+  account_id: String,
   token: String,
   #[serde(default)]
   refresh_token: String,
@@ -477,14 +479,24 @@ impl VaultStore {
 
   /// Look up the full saved credential `(email, access_token, refresh_token)` for `origin`.
   pub fn saved_server_credential_full(&self, origin: &str) -> Option<(String, String, String)> {
-    let norm_origin = normalize_origin(origin);
+    self
+      .saved_server_credential_record(origin)
+      .map(|(email, _account_id, token, refresh)| (email, token, refresh))
+  }
+
+  /// Look up `(email, account_id, access_token, refresh_token)` for `origin`.
+  pub fn saved_server_credential_record(
+    &self,
+    origin: &str,
+  ) -> Option<(String, String, String, String)> {
+    let norm_origin = canonical_cred_origin(origin);
     self
       .get_pref(PREF_SERVER_CREDENTIALS)
       .and_then(|raw| serde_json::from_str::<Vec<StoredServerCredential>>(&raw).ok())
       .unwrap_or_default()
       .into_iter()
-      .find(|c| c.origin == norm_origin)
-      .map(|c| (c.email, c.token, c.refresh_token))
+      .find(|c| canonical_cred_origin(&c.origin) == norm_origin)
+      .map(|c| (c.email, c.account_id, c.token, c.refresh_token))
   }
 
   /// Upsert saved credentials `(origin, email, token)` for a cloud server.
@@ -497,7 +509,8 @@ impl VaultStore {
     self.save_server_credential_with_refresh(origin, email, token, "")
   }
 
-  /// Upsert saved credentials `(origin, email, access_token, refresh_token)` for a cloud server.
+  /// Upsert saved credentials `(origin, email, access_token, refresh_token)`,
+  /// preserving any previously stored `account_id` for that server.
   pub fn save_server_credential_with_refresh(
     &self,
     origin: &str,
@@ -505,7 +518,23 @@ impl VaultStore {
     token: &str,
     refresh_token: &str,
   ) -> Result<(), String> {
-    let norm_origin = normalize_origin(origin);
+    let prev_account_id = self
+      .saved_server_credential_record(origin)
+      .map(|(_, aid, _, _)| aid)
+      .unwrap_or_default();
+    self.save_server_credential_full(origin, email, &prev_account_id, token, refresh_token)
+  }
+
+  /// Upsert full saved credentials including authoritative server `account_id`.
+  pub fn save_server_credential_full(
+    &self,
+    origin: &str,
+    email: &str,
+    account_id: &str,
+    token: &str,
+    refresh_token: &str,
+  ) -> Result<(), String> {
+    let norm_origin = canonical_cred_origin(origin);
     if norm_origin.is_empty() {
       return Err("server origin must not be empty".to_string());
     }
@@ -516,10 +545,14 @@ impl VaultStore {
     let updated = StoredServerCredential {
       origin: norm_origin.clone(),
       email: email.trim().to_string(),
+      account_id: account_id.trim().to_string(),
       token: token.to_string(),
       refresh_token: refresh_token.to_string(),
     };
-    if let Some(existing) = entries.iter_mut().find(|c| c.origin == norm_origin) {
+    if let Some(existing) = entries
+      .iter_mut()
+      .find(|c| canonical_cred_origin(&c.origin) == norm_origin)
+    {
       *existing = updated;
     } else {
       entries.push(updated);
@@ -531,12 +564,12 @@ impl VaultStore {
 
   /// Clear saved credentials for `origin`.
   pub fn clear_server_credential(&self, origin: &str) -> Result<(), String> {
-    let norm_origin = normalize_origin(origin);
+    let norm_origin = canonical_cred_origin(origin);
     let mut entries: Vec<StoredServerCredential> = self
       .get_pref(PREF_SERVER_CREDENTIALS)
       .and_then(|raw| serde_json::from_str(&raw).ok())
       .unwrap_or_default();
-    entries.retain(|c| c.origin != norm_origin);
+    entries.retain(|c| canonical_cred_origin(&c.origin) != norm_origin);
     let encoded = serde_json::to_string(&entries)
       .map_err(|e| format!("failed to encode server credentials: {e}"))?;
     self.set_pref(PREF_SERVER_CREDENTIALS, &encoded)
@@ -1892,6 +1925,10 @@ fn seed_non_secret_prefs_from_legacy(legacy_path: &Path) -> BTreeMap<String, Str
   out
 }
 
+fn canonical_cred_origin(origin: &str) -> String {
+  mica_client::normalize_server_url(origin).unwrap_or_else(|_| normalize_origin(origin))
+}
+
 fn normalize_origin(origin: &str) -> String {
   origin.trim().trim_end_matches('/').to_string()
 }
@@ -2503,5 +2540,93 @@ mod tests {
     assert_eq!(entries.get("darkMode").map(String::as_str), Some("true"));
     assert_eq!(entries.get(PREF_PAGE_WIDTH).map(String::as_str), Some("880"));
     assert!(!strip_web_secret_prefs(&mut entries));
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn cloud_cache_origin_isolates_accounts_quarantines_legacy_rows_and_replays_flutter_outbox() {
+    use mica_sync::{SyncConfig, SyncEffect, SyncEngine, SyncEvent};
+
+    let root = std::env::temp_dir().join(format!("mica_p0_1_isolation_{}", Uuid::new_v4()));
+    let db_path = root.join("local").join("store.db");
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    let db_str = db_path.to_str().unwrap().to_string();
+
+    let server_raw = "https://Mica.Example.com:443/app/";
+    let server_norm = mica_client::normalize_server_url(server_raw).unwrap();
+    let key_a = mica_client::cloud_cache_origin(server_raw, "user-a").unwrap();
+    let key_b = mica_client::cloud_cache_origin("https://mica.example.com/app", "user-b").unwrap();
+    let legacy_bare = mica_client::legacy_cloud_cache_origin(server_raw).unwrap();
+    assert_eq!(server_norm, "https://mica.example.com/app");
+    assert_eq!(key_a, r#"["https://mica.example.com/app","user-a"]"#);
+
+    let ws_a = Uuid::new_v4();
+    let ws_b = Uuid::new_v4();
+    let doc_a = Uuid::new_v4();
+    let doc_b = Uuid::new_v4();
+    let doc_legacy = Uuid::new_v4();
+
+    // Seed as Flutter 0.14.11 (`LocalStore` directly):
+    // - Account A has a page + an unpushed offline CRDT edit in `doc_update` outbox.
+    // - Account B has its own separate page.
+    // - A pre-#111 bare-URL row sits quarantined in the same DB.
+    {
+      let store = LocalStore::open(&db_str).unwrap();
+      let mut base_a = doc_from_markdown("# Account A", Some(10));
+      let sv0 = base_a.state_vector();
+      let b_id = base_a.to_blocks().into_iter().find(|b| b.kind != "page").unwrap().id;
+      base_a.text_insert(&b_id, 9, " offline edit");
+      let offline_diff = base_a.encode_diff(&sv0).unwrap();
+
+      store.save_doc(&key_a, &doc_a.to_string(), &base_a).unwrap();
+      store.append_update(&key_a, &doc_a.to_string(), &offline_diff).unwrap();
+
+      let doc_b_state = doc_from_markdown("# Account B Secret", Some(20));
+      store.save_doc(&key_b, &doc_b.to_string(), &doc_b_state).unwrap();
+
+      let legacy_doc = doc_from_markdown("# Pre-111 Quarantined", Some(30));
+      store.save_doc(&legacy_bare, &doc_legacy.to_string(), &legacy_doc).unwrap();
+    }
+
+    // Reopen through pure-Rust `VaultStore`:
+    let vault = VaultStore::open_at(&db_str).unwrap();
+    vault.save_view(&key_a, &make_view(ws_a, doc_a, "A Private", "page", None, "0000000010")).unwrap();
+    vault.save_view(&key_b, &make_view(ws_b, doc_b, "B Private", "page", None, "0000000010")).unwrap();
+    vault
+      .save_view(&legacy_bare, &make_view(ws_a, doc_legacy, "Legacy Row", "page", None, "0000000010"))
+      .unwrap();
+
+    // 1. Account A sees ONLY A's views/docs, never B's or quarantined legacy rows.
+    let views_a = vault.list_views(&key_a);
+    assert_eq!(views_a.len(), 1);
+    assert_eq!(views_a[0].name, "A Private");
+    assert!(vault.load_markdown(&key_a, doc_b).is_none());
+    assert!(vault.load_markdown(&key_a, doc_legacy).is_none());
+
+    // 2. Account B sees ONLY B's views/docs, never A's or quarantined legacy rows.
+    let views_b = vault.list_views(&key_b);
+    assert_eq!(views_b.len(), 1);
+    assert_eq!(views_b[0].name, "B Private");
+    assert!(vault.load_markdown(&key_b, doc_a).is_none());
+    assert!(vault.load_markdown(&key_b, doc_legacy).is_none());
+
+    // 3. `SyncEngine` created via `vault.create_sync_storage(&key_a, &doc_a)`
+    //    seeds Account A's Flutter doc AND finds the pending offline outbox edit!
+    let storage = vault.create_sync_storage(&key_a, &doc_a.to_string());
+    let mut engine = SyncEngine::new(
+      SyncConfig {
+        client_id: Some(vault.client_id()),
+        self_name: Some("Alice".into()),
+        document_id: Some(doc_a.to_string()),
+        restore_unacked: Vec::new(),
+      },
+      Some(storage),
+    );
+    let effects = engine.handle_event(SyncEvent::Connect);
+    assert!(effects.iter().any(|e| matches!(e, SyncEffect::Ready { .. })));
+    assert!(!engine.outbox_empty(), "Flutter 0.14.11 unpushed outbox edit must be queued for replay");
+    assert!(engine.all_blocks_json().contains("offline edit"));
+
+    let _ = std::fs::remove_dir_all(&root);
   }
 }

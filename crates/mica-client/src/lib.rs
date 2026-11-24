@@ -4,12 +4,17 @@
 //! - [`protocol`]: Single-source API endpoints & decoders over `mica-api-types`
 //! - [`search`]: Unified document + `mica-board` search & backlink graph
 
+pub mod cache_origin;
 pub mod claim;
 pub mod protocol;
 pub mod runtime;
 pub mod search;
 pub mod tree;
 
+pub use cache_origin::{
+  CacheOriginError, cloud_cache_origin, is_account_scoped_cloud_origin,
+  legacy_cloud_cache_origin, normalize_server_url, require_cloud_cache_origin,
+};
 pub use claim::{ClaimTracker, SessionClaim, WorldOrigin};
 pub use protocol::ApiEndpoints;
 pub use runtime::MicaClientRuntime;

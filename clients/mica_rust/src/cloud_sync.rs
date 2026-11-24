@@ -66,6 +66,7 @@ pub fn canonicalize_cloud_url(raw: &str) -> String {
 /// or startup session restore.
 #[derive(Debug, Clone)]
 pub struct CloudBootstrapPayload {
+  pub account_id: String,
   pub workspaces: Vec<Workspace>,
   pub active_workspace_id: Option<Uuid>,
   pub views: Vec<View>,
@@ -163,7 +164,26 @@ pub fn fetch_cloud_bootstrap(
   conn: &mut CloudConnector,
   preferred_ws: Option<Uuid>,
 ) -> Result<CloudBootstrapPayload, String> {
-  let (workspaces, mut refreshed_tokens) = with_auto_refresh(conn, |c| c.list_workspaces())?;
+  let mut refreshed_tokens: Option<(String, String)> = None;
+  let account_id = if let Some(uid) = conn.user_id() {
+    uid.to_string()
+  } else {
+    let (me, rot) = with_auto_refresh(conn, |c| c.fetch_me())?;
+    if rot.is_some() {
+      refreshed_tokens = rot;
+    }
+    let uid = me
+      .id
+      .filter(|s| !s.trim().is_empty())
+      .ok_or_else(|| "server /api/auth/me returned empty user id".to_string())?;
+    *conn = conn.clone().with_user_id(Some(uid.clone()));
+    uid
+  };
+
+  let (workspaces, rot_ws) = with_auto_refresh(conn, |c| c.list_workspaces())?;
+  if rot_ws.is_some() {
+    refreshed_tokens = rot_ws;
+  }
   let target_ws_id = preferred_ws
     .filter(|&id| workspaces.iter().any(|w| w.id == id))
     .or_else(|| workspaces.first().map(|w| w.id));
@@ -179,6 +199,7 @@ pub fn fetch_cloud_bootstrap(
   };
 
   Ok(CloudBootstrapPayload {
+    account_id,
     workspaces,
     active_workspace_id: target_ws_id,
     views,
@@ -277,6 +298,7 @@ pub(crate) struct CloudSessionHandles {
   pub world_busy: Signal<bool>,
   pub world_error: Signal<String>,
   pub world_info: Signal<String>,
+  pub account_id: Signal<String>,
   pub account_name: Signal<String>,
   pub account_email: Signal<String>,
   pub is_cloud_signed_in: Signal<bool>,
@@ -304,6 +326,7 @@ impl CloudSessionHandles {
     if !is_cloud_origin(&orig) || !self.is_cloud_signed_in.get_untracked() {
       return;
     }
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -316,7 +339,9 @@ impl CloudSessionHandles {
       match res {
         Ok((conn, rot)) if rot.is_some() => {
           *h.cloud_connector.borrow_mut() = conn;
-          persist_refreshed_tokens(&h.vault, &orig, &email, rot);
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
+          }
         }
         Ok(_) => {}
         Err(err) => h.cloud_status.set(format!("{label}失败：{err}")),
@@ -412,7 +437,9 @@ impl CloudSessionHandles {
       self.open_tabs.set(vec![OpenTab::single(doc_id, title)]);
       self.active_tab_idx.set(0);
       if is_cloud && self.is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
+        let srv_url = self.server_url.get_untracked();
         self.doc_sync.open_cloud_doc(
+          srv_url,
           origin.clone(),
           ws_id,
           doc_id,
@@ -433,7 +460,8 @@ impl CloudSessionHandles {
     }
 
     if is_cloud && self.is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
-      self.views_watcher.watch(origin, ws_id);
+      let srv_url = self.server_url.get_untracked();
+      self.views_watcher.watch(srv_url, origin, ws_id);
     } else {
       self.views_watcher.stop();
     }
@@ -446,8 +474,8 @@ impl CloudSessionHandles {
   /// Lightweight sidebar-only tree refresh triggered by `/ws/workspaces/{ws}/views`
   /// (`{"type":"views_changed"}`) — updates folders, pages, titles, and trash
   /// without disturbing the active editor CRDT document.
-  pub(crate) fn refresh_views_only(&self, origin: String, ws_id: Uuid) {
-    if !is_cloud_origin(&origin) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
+  pub(crate) fn refresh_views_only(&self, server_url: String, cache_origin: String, ws_id: Uuid) {
+    if !is_cloud_origin(&cache_origin) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
       return;
     }
     let email = self.account_email.get_untracked();
@@ -463,7 +491,7 @@ impl CloudSessionHandles {
         Ok::<_, String>((conn, merge_live_and_trash(live, trash, ws_id), rot))
       })
       .await;
-      if h.active_origin.get_untracked() != origin
+      if h.active_origin.get_untracked() != cache_origin
         || h.active_workspace_id.get_untracked() != ws_id
         || !h.is_cloud_signed_in.get_untracked()
       {
@@ -472,9 +500,11 @@ impl CloudSessionHandles {
       if let Ok((conn, merged, rot)) = res {
         if rot.is_some() {
           *h.cloud_connector.borrow_mut() = conn;
-          persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &server_url, &email, rot);
+          }
         }
-        let _ = h.vault.replace_workspace_views(&origin, ws_id, &merged);
+        let _ = h.vault.replace_workspace_views(&cache_origin, ws_id, &merged);
         let page_cnt = merged
           .iter()
           .filter(|v| is_page_view(v) && !v.is_deleted)
@@ -524,6 +554,7 @@ impl CloudSessionHandles {
     let epoch = self.cloud_load_gen.get_untracked().wrapping_add(1);
     self.cloud_load_gen.set(epoch);
     self.cloud_status.set(format!("正在同步云端工作区：{ws_name}…"));
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -541,7 +572,9 @@ impl CloudSessionHandles {
       match res {
         Ok((conn, snap)) => {
           *h.cloud_connector.borrow_mut() = conn;
-          persist_refreshed_tokens(&h.vault, &origin, &email, snap.refreshed_tokens);
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, snap.refreshed_tokens);
+          }
           let page_cnt = snap
             .views
             .iter()
@@ -568,11 +601,19 @@ impl CloudSessionHandles {
   /// opening document) after login, world switch, or startup restore.
   pub(crate) fn apply_bootstrap(
     &self,
-    origin: String,
+    raw_server_url: String,
     email: String,
     conn: CloudConnector,
     payload: CloudBootstrapPayload,
   ) {
+    let server_url = mica_client::normalize_server_url(&raw_server_url)
+      .unwrap_or_else(|_| canonicalize_cloud_url(&raw_server_url));
+    let Ok(cache_origin) = mica_client::cloud_cache_origin(&server_url, &payload.account_id) else {
+      self.cloud_status.set("云端账户标识无效，无法建立隔离缓存".to_string());
+      self.world_error.set("云端账户标识无效，请重新登录".to_string());
+      return;
+    };
+
     let access_tok = conn.access_token().unwrap_or_default().to_string();
     let refresh_tok = conn.refresh_token().unwrap_or_default().to_string();
     *self.cloud_connector.borrow_mut() = conn;
@@ -580,27 +621,32 @@ impl CloudSessionHandles {
     // Web (`!self.allow_local`) relies strictly on server `HttpOnly` cookies
     // and never stores tokens in `window.localStorage`.
     if self.allow_local {
-      let _ = self
-        .vault
-        .save_server_credential_with_refresh(&origin, &email, &access_tok, &refresh_tok);
+      let _ = self.vault.save_server_credential_full(
+        &server_url,
+        &email,
+        &payload.account_id,
+        &access_tok,
+        &refresh_tok,
+      );
     }
-    let _ = self.vault.set_active_origin(&origin);
+    let _ = self.vault.set_active_origin(&server_url);
 
     let mut servers = self.known_servers_sig.get_untracked();
-    if !servers.iter().any(|s| s == &origin) {
-      servers.push(origin.clone());
+    if !servers.iter().any(|s| s == &server_url) {
+      servers.push(server_url.clone());
       let _ = self.vault.set_known_servers(&servers);
       self.known_servers_sig.set(servers);
     }
 
     let mut creds = self.signed_in_origins_sig.get_untracked();
-    creds.retain(|(o, _)| o != &origin);
-    creds.push((origin.clone(), email.clone()));
+    creds.retain(|(o, _)| o != &server_url);
+    creds.push((server_url.clone(), email.clone()));
     self.signed_in_origins_sig.set(creds);
 
-    self.server_url.set(origin.clone());
-    self.selected_cloud_origin.set(origin.clone());
-    self.world_active_origin.set(origin.clone());
+    self.server_url.set(server_url.clone());
+    self.selected_cloud_origin.set(server_url.clone());
+    self.world_active_origin.set(server_url.clone());
+    self.account_id.set(payload.account_id);
     self.account_email.set(email.clone());
     self.account_name.set(email);
     self.is_cloud_signed_in.set(true);
@@ -612,7 +658,7 @@ impl CloudSessionHandles {
       .iter()
       .map(|w| (w.id, w.name.clone()))
       .collect();
-    let _ = self.vault.replace_origin_workspaces(&origin, &ws_pairs);
+    let _ = self.vault.replace_origin_workspaces(&cache_origin, &ws_pairs);
 
     let ws_entries: Vec<WorkspaceEntry> = payload
       .workspaces
@@ -620,7 +666,7 @@ impl CloudSessionHandles {
       .map(|w| WorkspaceEntry {
         id: w.id,
         name: w.name.clone(),
-        origin: origin.clone(),
+        origin: cache_origin.clone(),
         page_count: Some(w.page_count.max(0) as usize),
       })
       .collect();
@@ -634,7 +680,7 @@ impl CloudSessionHandles {
         .map(|w| w.name.clone())
         .unwrap_or_else(|| "云端工作区".to_string());
       self.apply_workspace_views(
-        origin.clone(),
+        cache_origin,
         ws_id,
         ws_name,
         payload.views,
@@ -643,12 +689,12 @@ impl CloudSessionHandles {
       );
       self.cloud_status.set(format!(
         "已连接云端：{}（{} 个工作区）",
-        world_switcher::server_label(&origin),
+        world_switcher::server_label(&server_url),
         ws_count
       ));
     } else {
       self.apply_workspace_views(
-        origin.clone(),
+        cache_origin,
         Uuid::nil(),
         "暂无云端工作区".to_string(),
         Vec::new(),
@@ -657,7 +703,7 @@ impl CloudSessionHandles {
       );
       self.cloud_status.set(format!(
         "已登录云端：{}（暂无工作区，可在左上角新建）",
-        world_switcher::server_label(&origin)
+        world_switcher::server_label(&server_url)
       ));
     }
   }
@@ -707,8 +753,11 @@ impl CloudSessionHandles {
   /// Enter a previously signed-in cloud origin (used by World Switcher click AND
   /// startup auto-restore). Clears stale/expired credentials cleanly on 401.
   pub(crate) fn enter_origin(&self, raw_origin: String, interactive: bool) {
-    let origin = canonicalize_cloud_url(&raw_origin);
-    let Some((email, token, refresh)) = self.vault.saved_server_credential_full(&origin) else {
+    let origin = mica_client::normalize_server_url(&raw_origin)
+      .unwrap_or_else(|_| canonicalize_cloud_url(&raw_origin));
+    let Some((email, saved_account_id, token, refresh)) =
+      self.vault.saved_server_credential_record(&origin)
+    else {
       if interactive || !self.allow_local {
         if interactive {
           self.world_error.set("未找到该服务器的登录凭证，请重新登录".to_string());
@@ -748,24 +797,42 @@ impl CloudSessionHandles {
       world_switcher::server_label(&origin)
     ));
 
-    // Show cached cloud workspaces right away while the network refresh runs.
-    let cached_ws = self.vault.list_workspaces(&origin);
+    // Only pre-hydrate cached workspaces when an authoritative `#111`
+    // account-scoped cache key (`[normalized_server_url, account_id]`) is
+    // available; pre-#111 bare-URL rows are never claimed or read.
+    let scoped_cache = (!saved_account_id.trim().is_empty())
+      .then(|| mica_client::cloud_cache_origin(&origin, &saved_account_id).ok())
+      .flatten();
+    let cached_ws = scoped_cache
+      .as_deref()
+      .map(|key| self.vault.list_workspaces(key))
+      .unwrap_or_default();
     let preferred_ws = cached_ws.first().map(|(id, _)| *id);
-    if !cached_ws.is_empty() && !interactive {
+    if let Some(ref cache_key) = scoped_cache
+      && !cached_ws.is_empty()
+      && !interactive
+    {
+      self.server_url.set(origin.clone());
+      self.selected_cloud_origin.set(origin.clone());
+      self.world_active_origin.set(origin.clone());
+      self.account_id.set(saved_account_id.clone());
+      self.account_email.set(email.clone());
+      self.account_name.set(email.clone());
+      self.is_cloud_signed_in.set(true);
       let entries: Vec<WorkspaceEntry> = cached_ws
         .iter()
         .map(|(id, name)| WorkspaceEntry {
           id: *id,
           name: name.clone(),
-          origin: origin.clone(),
+          origin: cache_key.clone(),
           page_count: None,
         })
         .collect();
       self.workspaces.set(entries);
       if let Some((first_id, first_name)) = cached_ws.first() {
-        let cached_views = self.vault.list_workspace_views(&origin, *first_id);
+        let cached_views = self.vault.list_workspace_views(cache_key, *first_id);
         self.apply_workspace_views(
-          origin.clone(),
+          cache_key.clone(),
           *first_id,
           first_name.clone(),
           cached_views,
@@ -773,17 +840,12 @@ impl CloudSessionHandles {
           false,
         );
       }
-      self.server_url.set(origin.clone());
-      self.selected_cloud_origin.set(origin.clone());
-      self.world_active_origin.set(origin.clone());
-      self.account_email.set(email.clone());
-      self.account_name.set(email.clone());
-      self.is_cloud_signed_in.set(true);
     }
 
     let h = self.clone();
     let origin_req = origin.clone();
     let email_req = email.clone();
+    let uid_req = (!saved_account_id.trim().is_empty()).then_some(saved_account_id);
     spawn(async move {
       let outcome = net::run_blocking(move || {
         let mut conn = CloudConnector::new(CloudConfig {
@@ -791,6 +853,7 @@ impl CloudSessionHandles {
           access_token: (!token.trim().is_empty()).then_some(token),
           email: Some(email_req),
         })
+        .with_user_id(uid_req)
         .with_refresh_token((!refresh.trim().is_empty()).then_some(refresh));
         if conn.access_token().is_none() {
           conn.refresh_session()?;
@@ -924,15 +987,15 @@ impl CloudSessionHandles {
         let cur = self.selected_cloud_origin.get_untracked();
         if cur.is_empty() { self.server_url.get_untracked() } else { cur }
       };
-      let prev_origin = self.active_origin.get_untracked();
-      if is_cloud_origin(&prev_origin) {
-        let _ = self.vault.clear_server_credential(&prev_origin);
+      let prev_server = self.server_url.get_untracked();
+      if is_cloud_origin(&prev_server) {
+        let _ = self.vault.clear_server_credential(&prev_server);
       }
       if is_cloud_origin(&web_origin) {
         let _ = self.vault.clear_server_credential(&web_origin);
       }
       let mut creds = self.signed_in_origins_sig.get_untracked();
-      creds.retain(|(o, _)| o != &prev_origin && o != &web_origin);
+      creds.retain(|(o, _)| o != &prev_server && o != &web_origin);
       self.signed_in_origins_sig.set(creds);
       *self.cloud_connector.borrow_mut() = CloudConnector::new(CloudConfig {
         server_url: web_origin.clone(),
@@ -941,6 +1004,7 @@ impl CloudSessionHandles {
       });
       self.is_cloud_signed_in.set(false);
       self.world_active_origin.set(web_origin.clone());
+      self.account_id.set(String::new());
       self.account_email.set(String::new());
       self.account_name.set("未登录".to_string());
       self.cloud_status.set("请登录云端账户".to_string());
@@ -962,6 +1026,7 @@ impl CloudSessionHandles {
     self.is_cloud_signed_in.set(false);
     self.world_can_close.set(true);
     self.world_active_origin.set(LOCAL_ORIGIN.to_string());
+    self.account_id.set(String::new());
     self.account_email.set("这台设备".to_string());
     self.account_name.set("本地工作区".to_string());
     self.cloud_status.set("已切换回本地离线 SQLite Vault".to_string());
@@ -1008,6 +1073,7 @@ impl CloudSessionHandles {
     markdown: String,
     in_new_tab: bool,
   ) {
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -1038,7 +1104,9 @@ impl CloudSessionHandles {
       match res {
         Ok((conn, view, rot)) => {
           *h.cloud_connector.borrow_mut() = conn;
-          persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
+          }
           let doc_id = view.object_id;
           let title = view.name.clone();
           let _ = h.vault.save_view(&origin, &view);
@@ -1066,6 +1134,7 @@ impl CloudSessionHandles {
     parent: Option<Uuid>,
     name: String,
   ) {
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -1087,7 +1156,9 @@ impl CloudSessionHandles {
       match res {
         Ok((conn, view, rot)) => {
           *h.cloud_connector.borrow_mut() = conn;
-          persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
+          }
           let _ = h.vault.save_view(&origin, &view);
           {
             let mut t = h.tree.borrow_mut();
@@ -1107,6 +1178,7 @@ impl CloudSessionHandles {
 
   /// Create a cloud workspace via `POST /api/workspaces` and switch into it.
   pub(crate) fn create_cloud_workspace(&self, origin: String, name: String) {
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -1121,7 +1193,9 @@ impl CloudSessionHandles {
       match res {
         Ok((conn, ws, rot)) => {
           *h.cloud_connector.borrow_mut() = conn;
-          persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
+          }
           let _ = h.vault.save_workspace_name(&origin, ws.id, &ws.name);
           let entry = WorkspaceEntry {
             id: ws.id,
@@ -1154,6 +1228,7 @@ impl CloudSessionHandles {
     }
     let total = specs.len();
     self.cloud_status.set(format!("正在导入 {total} 篇页面到云端…"));
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -1222,7 +1297,7 @@ impl CloudSessionHandles {
         Ok((conn, created_views, created_docs, rot)) => {
           *h.cloud_connector.borrow_mut() = conn;
           if h.allow_local {
-            persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
           }
           let count = created_docs.len();
           {
@@ -1351,6 +1426,7 @@ impl CloudSessionHandles {
     }
     let epoch = gen_sig.get_untracked().wrapping_add(1);
     gen_sig.set(epoch);
+    let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -1390,7 +1466,9 @@ impl CloudSessionHandles {
       let (conn, usage, members, invs, rot) = res;
       if rot.is_some() {
         *h.cloud_connector.borrow_mut() = conn;
-        persist_refreshed_tokens(&h.vault, &orig, &email, rot);
+        if h.allow_local {
+          persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
+        }
       }
       storage_usage.set(usage.map(|(used_bytes, quota_bytes)| WorkspaceStorageUsage {
         used_bytes,

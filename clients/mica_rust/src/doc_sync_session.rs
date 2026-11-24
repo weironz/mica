@@ -52,7 +52,10 @@ fn now_ms() -> u64 {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ActiveTarget {
-  origin: String,
+  /// Normalized HTTP(S) server base URL used to build WebSocket URLs.
+  server_url: String,
+  /// `#111` account-scoped SQLite/mirror cache origin (`["https://...","<account_id>"]`).
+  cache_origin: String,
   workspace_id: Uuid,
   document_id: Uuid,
 }
@@ -112,41 +115,42 @@ impl DocSyncController {
     }
   }
 
-  /// Return `true` when real-time `/ws/` CRDT sync owns `(origin, ws_id, doc_id)`.
+  /// Return `true` when real-time `/ws/` CRDT sync owns `(cache_origin, ws_id, doc_id)`.
   ///
   /// Used by `lib.rs` to skip HTTP `PATCH /markdown` (`replace_all`) whenever
   /// CRDT sync is active, preventing concurrent-edit overwrites.
-  pub(crate) fn is_active_for(&self, origin: &str, ws_id: Uuid, doc_id: Uuid) -> bool {
+  pub(crate) fn is_active_for(&self, cache_origin: &str, ws_id: Uuid, doc_id: Uuid) -> bool {
     self.inner.borrow().target.as_ref().is_some_and(|t| {
-      t.origin == origin && t.workspace_id == ws_id && t.document_id == doc_id
+      t.cache_origin == cache_origin && t.workspace_id == ws_id && t.document_id == doc_id
     })
   }
 
   /// Return `true` once the active document has completed initial CRDT bootstrap
   /// (`SyncEffect::Ready`).
-  pub(crate) fn is_ready_for(&self, origin: &str, ws_id: Uuid, doc_id: Uuid) -> bool {
+  pub(crate) fn is_ready_for(&self, cache_origin: &str, ws_id: Uuid, doc_id: Uuid) -> bool {
     let inner = self.inner.borrow();
     inner.ready
       && inner.target.as_ref().is_some_and(|t| {
-        t.origin == origin && t.workspace_id == ws_id && t.document_id == doc_id
+        t.cache_origin == cache_origin && t.workspace_id == ws_id && t.document_id == doc_id
       })
   }
 
-  /// Open (or re-bind) a real-time `/ws/` CRDT session for `(origin, ws_id, doc_id)`.
+  /// Open (or re-bind) a real-time `/ws/` CRDT session for `(server_url, cache_origin, ws_id, doc_id)`.
   pub(crate) fn open_cloud_doc(
     &self,
-    origin: String,
+    server_url: String,
+    cache_origin: String,
     ws_id: Uuid,
     doc_id: Uuid,
     self_name: String,
   ) {
-    if self.is_active_for(&origin, ws_id, doc_id) {
+    if self.is_active_for(&cache_origin, ws_id, doc_id) {
       return;
     }
     self.close();
 
     let client_id = (!web_runtime::is_web()).then_some(self.vault.client_id());
-    let storage = self.vault.create_sync_storage(&origin, &doc_id.to_string());
+    let storage = self.vault.create_sync_storage(&cache_origin, &doc_id.to_string());
     let mut engine = SyncEngine::new(
       SyncConfig {
         client_id,
@@ -162,7 +166,8 @@ impl DocSyncController {
       let mut inner = self.inner.borrow_mut();
       inner.session_gen = inner.session_gen.wrapping_add(1);
       inner.target = Some(ActiveTarget {
-        origin,
+        server_url,
+        cache_origin,
         workspace_id: ws_id,
         document_id: doc_id,
       });
@@ -478,7 +483,7 @@ impl DocSyncController {
       return;
     };
 
-    let url = ws_transport::document_ws_url(&target.origin, target.workspace_id, target.document_id);
+    let url = ws_transport::document_ws_url(&target.server_url, target.workspace_id, target.document_id);
     let bearer = {
       let conn = self.cloud_connector.borrow();
       conn.access_token().map(str::to_string)
@@ -572,12 +577,12 @@ impl DocSyncController {
 struct ViewsWatcherInner {
   watcher_gen: u64,
   debounce_gen: u64,
-  active: Option<(String, Uuid)>,
+  active: Option<(String, String, Uuid)>,
   ws_handle: Option<WsHandle>,
   reconnect_attempt: u32,
 }
 
-type ViewsChangedCallback = Rc<dyn Fn(String, Uuid)>;
+type ViewsChangedCallback = Rc<dyn Fn(String, String, Uuid)>;
 
 /// Watches `GET /ws/workspaces/{workspace_id}/views` for `{"type":"views_changed"}`
 /// notifications from other devices, CLI, or MCP and triggers a debounced tree refresh.
@@ -599,12 +604,12 @@ impl ViewsWsWatcher {
     }
   }
 
-  pub(crate) fn set_on_views_changed(&self, cb: Rc<dyn Fn(String, Uuid)>) {
+  pub(crate) fn set_on_views_changed(&self, cb: Rc<dyn Fn(String, String, Uuid)>) {
     *self.on_views_changed.borrow_mut() = Some(cb);
   }
 
-  /// Start watching `(origin, ws_id)`. No-op if already watching the exact same workspace.
-  pub(crate) fn watch(&self, origin: String, ws_id: Uuid) {
+  /// Start watching `(server_url, cache_origin, ws_id)`. No-op if already watching.
+  pub(crate) fn watch(&self, server_url: String, cache_origin: String, ws_id: Uuid) {
     if ws_id.is_nil() {
       self.stop();
       return;
@@ -614,7 +619,7 @@ impl ViewsWsWatcher {
       .borrow()
       .active
       .as_ref()
-      .is_some_and(|(o, id)| o == &origin && *id == ws_id)
+      .is_some_and(|(s, c, id)| s == &server_url && c == &cache_origin && *id == ws_id)
     {
       return;
     }
@@ -622,11 +627,11 @@ impl ViewsWsWatcher {
     let sgen = {
       let mut inner = self.inner.borrow_mut();
       inner.watcher_gen = inner.watcher_gen.wrapping_add(1);
-      inner.active = Some((origin.clone(), ws_id));
+      inner.active = Some((server_url.clone(), cache_origin.clone(), ws_id));
       inner.reconnect_attempt = 0;
       inner.watcher_gen
     };
-    self.connect_once(sgen, origin, ws_id);
+    self.connect_once(sgen, server_url, cache_origin, ws_id);
   }
 
   /// Stop watching and close any active views WebSocket.
@@ -644,8 +649,8 @@ impl ViewsWsWatcher {
     }
   }
 
-  fn connect_once(&self, sgen: u64, origin: String, ws_id: Uuid) {
-    let url = ws_transport::views_ws_url(&origin, ws_id);
+  fn connect_once(&self, sgen: u64, server_url: String, cache_origin: String, ws_id: Uuid) {
+    let url = ws_transport::views_ws_url(&server_url, ws_id);
     let bearer = {
       let conn = self.cloud_connector.borrow();
       conn.access_token().map(str::to_string)
@@ -677,7 +682,7 @@ impl ViewsWsWatcher {
             }
             WsEvent::Text(raw) => {
               if is_views_changed_frame(&raw) {
-                watcher.schedule_refresh(sgen, origin.clone(), ws_id);
+                watcher.schedule_refresh(sgen, server_url.clone(), cache_origin.clone(), ws_id);
               }
             }
             WsEvent::Closed(_, _) | WsEvent::Error(_) => break,
@@ -695,13 +700,13 @@ impl ViewsWsWatcher {
         };
         timer(Duration::from_millis(delay_ms)).await;
         if watcher.inner.borrow().watcher_gen == sgen {
-          watcher.connect_once(sgen, origin, ws_id);
+          watcher.connect_once(sgen, server_url, cache_origin, ws_id);
         }
       });
     });
   }
 
-  fn schedule_refresh(&self, sgen: u64, origin: String, ws_id: Uuid) {
+  fn schedule_refresh(&self, sgen: u64, server_url: String, cache_origin: String, ws_id: Uuid) {
     let dgen = {
       let mut inner = self.inner.borrow_mut();
       if inner.watcher_gen != sgen {
@@ -723,7 +728,7 @@ impl ViewsWsWatcher {
         }
         let cb = watcher.on_views_changed.borrow().clone();
         if let Some(cb) = cb {
-          cb(origin, ws_id);
+          cb(server_url, cache_origin, ws_id);
         }
       });
     });

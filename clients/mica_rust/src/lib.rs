@@ -805,7 +805,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         {
           let epoch = doc_save_gen.get_untracked().wrapping_add(1);
           doc_save_gen.set(epoch);
-          let (cc_a, v_a, email_req) = (cc_c.clone(), vault_c.clone(), account_email.get_untracked());
+          let (cc_a, v_a, srv_req, email_req) = (
+            cc_c.clone(),
+            vault_c.clone(),
+            server_url.get_untracked(),
+            account_email.get_untracked(),
+          );
           spawn(async move {
             timer(std::time::Duration::from_millis(600)).await;
             if doc_save_gen.get_untracked() != epoch
@@ -825,7 +830,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             match res {
               Ok((conn, rot)) if rot.is_some() => {
                 *cc_a.borrow_mut() = conn;
-                cloud_sync::persist_refreshed_tokens(&v_a, &orig, &email_req, rot);
+                if allow_local {
+                  cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+                }
               }
               Ok(_) => {}
               Err(err) => cloud_status.set(format!("云端保存失败：{err}")),
@@ -1094,7 +1101,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
 
       if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
-        ds.open_cloud_doc(orig.clone(), ws_id, doc_id, account_name.get_untracked());
+        let srv_req = server_url.get_untracked();
+        ds.open_cloud_doc(srv_req.clone(), orig.clone(), ws_id, doc_id, account_name.get_untracked());
         let fetch_epoch = doc_fetch_gen.get_untracked().wrapping_add(1);
         doc_fetch_gen.set(fetch_epoch);
         let dirty_snap = doc_dirty_gen.get_untracked();
@@ -1117,7 +1125,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           if let Ok((conn, remote_md, rot)) = res {
             if rot.is_some() {
               *cc_a.borrow_mut() = conn;
-              cloud_sync::persist_refreshed_tokens(&v_a, &orig, &email_req, rot);
+              if allow_local {
+                cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+              }
             }
             docs_a.borrow_mut().insert(doc_id, remote_md.clone());
             if !ds_a.is_ready_for(&orig, ws_id, doc_id)
@@ -1206,6 +1216,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
+  let account_id = signal(String::new());
   let cloud_session = cloud_sync::CloudSessionHandles {
     vault: vault.clone(),
     tree: tree.clone(),
@@ -1237,6 +1248,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     world_busy,
     world_error,
     world_info,
+    account_id,
     account_name,
     account_email,
     is_cloud_signed_in,
@@ -1255,8 +1267,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   {
     let cs_views = cloud_session.clone();
-    views_watcher.set_on_views_changed(Rc::new(move |origin: String, ws_id: Uuid| {
-      cs_views.refresh_views_only(origin, ws_id);
+    views_watcher.set_on_views_changed(Rc::new(move |srv: String, cache_orig: String, ws_id: Uuid| {
+      cs_views.refresh_views_only(srv, cache_orig, ws_id);
     }));
   }
 
