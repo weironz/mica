@@ -1503,10 +1503,12 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
               text(move || {
                 let raw = account_name.get();
                 let t = raw.trim();
-                if t.is_empty() || t.eq_ignore_ascii_case("local") || t == "本地工作区" {
-                  "本".to_string()
+                if t == "未登录" {
+                  "M".to_string()
+                } else if t.is_empty() || t.eq_ignore_ascii_case("local") || t == "本地工作区" {
+                  if crate::web_runtime::is_web() { "M".to_string() } else { "本".to_string() }
                 } else {
-                  t.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "本".to_string())
+                  t.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "M".to_string())
                 }
               })
               .text_size(px(12.0)).font_weight(FontWeight::MEDIUM)
@@ -1517,7 +1519,11 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
           text(move || {
             let raw = account_name.get();
             let t = raw.trim();
-            if t.is_empty() || t.eq_ignore_ascii_case("local") { "本地工作区".to_string() } else { raw }
+            if t.is_empty() || t.eq_ignore_ascii_case("local") {
+              if crate::web_runtime::is_web() { "未登录".to_string() } else { "本地工作区".to_string() }
+            } else {
+              raw
+            }
           })
           .text_size(px(14.0)).font_weight(FontWeight::MEDIUM)
           .text_color(move || palette(dark_mode.get()).text_primary)

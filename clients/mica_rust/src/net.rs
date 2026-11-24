@@ -4,32 +4,26 @@
 //! generation guards ([`ClaimTracker`]), and [`mica_sync`] for the Sans-I/O
 //! document synchronization state machine.
 //!
-//! Blocking HTTP calls (`ureq`) are isolated behind `#[cfg(not(target_arch = "wasm32"))]`
-//! so the module compiles cleanly for both desktop and Web (`wasm32`) targets.
+//! Transport is unified through [`send_http`]: desktop uses `ureq` on a
+//! dedicated worker thread ([`run_blocking`]), and Web (`wasm32`) uses
+//! `XMLHttpRequest` via [`crate::web_runtime::xhr_request`].
 
 use mica_api_types::{View, Workspace};
+use mica_client::protocol::{decode_auth, decode_views, decode_workspaces};
 use mica_client::{ApiEndpoints, ClaimTracker, WorldOrigin};
 use mica_sync::{
   MemoryMirrorStorage, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase, SyncStorage,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
-use mica_client::protocol::{LoginRequest, RefreshRequest, decode_auth, decode_views, decode_workspaces};
-#[cfg(not(target_arch = "wasm32"))]
-use serde_json::{Value, json};
-
-#[cfg(not(target_arch = "wasm32"))]
 const HEALTH_TIMEOUT_SECS: u64 = 5;
-#[cfg(not(target_arch = "wasm32"))]
 const LOGIN_TIMEOUT_SECS: u64 = 10;
-#[cfg(not(target_arch = "wasm32"))]
 const API_TIMEOUT_SECS: u64 = 15;
-#[cfg(not(target_arch = "wasm32"))]
 const AI_TIMEOUT_SECS: u64 = 60;
 
 /// Serializable cloud connection & session configuration.
@@ -261,23 +255,10 @@ impl CloudConnector {
   /// Probe `GET /api/health` on the configured server.
   pub fn check_health(&self) -> Result<String, String> {
     self.require_server()?;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let url = self.endpoints.health();
-      let mut resp = http_agent(HEALTH_TIMEOUT_SECS)
-        .get(&url)
-        .call()
-        .map_err(|e| format!("health check failed for {url}: {e}"))?;
-      let body = resp
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("failed to read health response: {e}"))?;
-      Ok(format_health_summary(&body))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      Err("blocking HTTP health check is unavailable on wasm32".to_string())
-    }
+    let url = self.endpoints.health();
+    let body = send_http("GET", &url, None, None, HEALTH_TIMEOUT_SECS)
+      .map_err(|e| format!("health check failed for {url}: {e}"))?;
+    Ok(format_health_summary(&body))
   }
 
   /// Probe `origin` via `GET /api/ready` (falling back to `GET /api/health`) to
@@ -291,22 +272,12 @@ impl CloudConnector {
       return Err("server URL is empty".to_string());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let agent = http_agent(HEALTH_TIMEOUT_SECS);
-      for path in ["/api/ready", "/api/health"] {
-        if let Ok(mut resp) = agent.get(&format!("{target}{path}")).call() {
-          let body = resp.body_mut().read_to_string().unwrap_or_default();
-          return Ok(parse_probe_meta(&body));
-        }
+    for path in ["/api/ready", "/api/health"] {
+      if let Ok(body) = send_http("GET", &format!("{target}{path}"), None, None, HEALTH_TIMEOUT_SECS) {
+        return Ok(parse_probe_meta(&body));
       }
-      Ok(ServerProbeMeta::default())
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = target;
-      Err("blocking HTTP probe is unavailable on wasm32".to_string())
-    }
+    Ok(ServerProbeMeta::default())
   }
 
   /// Authenticate via `POST /api/auth/login`, persist token & email in memory,
@@ -318,37 +289,23 @@ impl CloudConnector {
       return Err("email and password are required".to_string());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let claim = self.claims.capture();
-      let payload = LoginRequest { email: email_trimmed.to_string(), password: password.to_string() };
-      let mut resp = http_agent(LOGIN_TIMEOUT_SECS)
-        .post(&self.endpoints.login())
-        .send_json(&payload)
-        .map_err(|e| format!("login request failed: {e}"))?;
-      let body = resp
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("failed to read login response: {e}"))?;
-      let auth = decode_auth(&body).map_err(|e| format!("invalid login response: {e}"))?;
+    let claim = self.claims.capture();
+    let payload = json!({ "email": email_trimmed, "password": password });
+    let body = send_http("POST", &self.endpoints.login(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
+      .map_err(|e| format!("login request failed: {e}"))?;
+    let auth = decode_auth(&body).map_err(|e| format!("invalid login response: {e}"))?;
 
-      if !self.claims.matches_account(&claim) {
-        return Err("account session changed during login".to_string());
-      }
+    if !self.claims.matches_account(&claim) {
+      return Err("account session changed during login".to_string());
+    }
 
-      self.config.access_token = Some(auth.access_token);
-      self.refresh_token = (!auth.refresh_token.trim().is_empty()).then_some(auth.refresh_token);
-      self.config.email = Some(auth.user.email.clone());
-      self.claims.switch_account(WorldOrigin::Cloud {
-        server_url: self.endpoints.base_url().to_string(),
-      });
-      Ok(auth.user.email)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (email_trimmed, password);
-      Err("blocking HTTP login is unavailable on wasm32".to_string())
-    }
+    self.config.access_token = Some(auth.access_token);
+    self.refresh_token = (!auth.refresh_token.trim().is_empty()).then_some(auth.refresh_token);
+    self.config.email = Some(auth.user.email.clone());
+    self.claims.switch_account(WorldOrigin::Cloud {
+      server_url: self.endpoints.base_url().to_string(),
+    });
+    Ok(auth.user.email)
   }
 
   /// Rotate an expired JWT access token via `POST /api/auth/refresh`.
@@ -359,48 +316,27 @@ impl CloudConnector {
       .map(str::to_string)
       .ok_or_else(|| "refresh token is unavailable".to_string())?;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let payload = RefreshRequest { refresh_token: refresh_tok };
-      let mut resp = http_agent(LOGIN_TIMEOUT_SECS)
-        .post(&self.endpoints.refresh())
-        .send_json(&payload)
-        .map_err(|e| format!("token refresh failed: {e}"))?;
-      let body = resp
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("failed to read refresh response: {e}"))?;
-      let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
-      self.config.access_token = Some(auth.access_token);
-      if !auth.refresh_token.trim().is_empty() {
-        self.refresh_token = Some(auth.refresh_token);
-      }
-      self.config.email = Some(auth.user.email);
-      self.claims.switch_account(WorldOrigin::Cloud {
-        server_url: self.endpoints.base_url().to_string(),
-      });
-      Ok(())
+    let payload = json!({ "refresh_token": refresh_tok });
+    let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
+      .map_err(|e| format!("token refresh failed: {e}"))?;
+    let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
+    self.config.access_token = Some(auth.access_token);
+    if !auth.refresh_token.trim().is_empty() {
+      self.refresh_token = Some(auth.refresh_token);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = refresh_tok;
-      Err("blocking HTTP token refresh is unavailable on wasm32".to_string())
-    }
+    self.config.email = Some(auth.user.email);
+    self.claims.switch_account(WorldOrigin::Cloud {
+      server_url: self.endpoints.base_url().to_string(),
+    });
+    Ok(())
   }
 
   // ── Cloud Workspaces, Views & Documents ─────────────────────────────────
 
   /// Fetch all cloud workspaces the signed-in account belongs to (`GET /api/workspaces`).
   pub fn list_workspaces(&self) -> Result<Vec<Workspace>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get("/api/workspaces", API_TIMEOUT_SECS)?;
-      decode_workspaces(&body).map_err(|e| format!("invalid workspaces response: {e}"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      Err("blocking HTTP workspace list is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get("/api/workspaces", API_TIMEOUT_SECS)?;
+    decode_workspaces(&body).map_err(|e| format!("invalid workspaces response: {e}"))
   }
 
   /// Create a new cloud workspace (`POST /api/workspaces`).
@@ -409,19 +345,11 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("workspace name must not be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_post_json("/api/workspaces", &json!({ "name": trimmed }), API_TIMEOUT_SECS)?;
-      let val: Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("invalid create workspace response: {e}"))?;
-      let ws_val = val.get("workspace").cloned().unwrap_or(val);
-      serde_json::from_value(ws_val).map_err(|e| format!("invalid workspace payload: {e}"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = trimmed;
-      Err("blocking HTTP workspace creation is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_post_json("/api/workspaces", &json!({ "name": trimmed }), API_TIMEOUT_SECS)?;
+    let val: Value = serde_json::from_str(body.trim())
+      .map_err(|e| format!("invalid create workspace response: {e}"))?;
+    let ws_val = val.get("workspace").cloned().unwrap_or(val);
+    serde_json::from_value(ws_val).map_err(|e| format!("invalid workspace payload: {e}"))
   }
 
   /// Rename a cloud workspace (`PATCH /api/workspaces/{ws}`).
@@ -430,87 +358,47 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("workspace name must not be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_patch_json(
-        &format!("/api/workspaces/{workspace_id}"),
-        &json!({ "name": trimmed }),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, trimmed);
-      Err("blocking HTTP workspace rename is unavailable on wasm32".to_string())
-    }
+    self.authed_patch_json(
+      &format!("/api/workspaces/{workspace_id}"),
+      &json!({ "name": trimmed }),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Delete a cloud workspace (`DELETE /api/workspaces/{ws}`).
   pub fn delete_workspace(&self, workspace_id: Uuid) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(&format!("/api/workspaces/{workspace_id}"), API_TIMEOUT_SECS)?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP workspace deletion is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(&format!("/api/workspaces/{workspace_id}"), API_TIMEOUT_SECS)?;
+    Ok(())
   }
 
   /// Fetch all live views in a cloud workspace (`GET /api/workspaces/{ws}/views`).
   pub fn list_views(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/views"), API_TIMEOUT_SECS)?;
-      decode_views(&body).map_err(|e| format!("invalid views response: {e}"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP views list is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/views"), API_TIMEOUT_SECS)?;
+    decode_views(&body).map_err(|e| format!("invalid views response: {e}"))
   }
 
   /// Fetch trashed views in a cloud workspace (`GET /api/workspaces/{ws}/trash`).
   pub fn list_trash(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/trash"), API_TIMEOUT_SECS)?;
-      decode_views(&body).map_err(|e| format!("invalid trash views response: {e}"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP trash list is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/trash"), API_TIMEOUT_SECS)?;
+    decode_views(&body).map_err(|e| format!("invalid trash views response: {e}"))
   }
 
   /// Read a cloud document's Markdown (`GET /api/workspaces/{ws}/documents/{doc}/markdown`,
   /// falling back to `/export/markdown` for older servers).
   pub fn fetch_document_markdown(&self, workspace_id: Uuid, document_id: Uuid) -> Result<String, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let primary = format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown");
-      let body = match self.authed_get(&primary, API_TIMEOUT_SECS) {
-        Ok(b) => b,
-        Err(err) if err.contains("404") => self.authed_get(
-          &format!("/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"),
-          API_TIMEOUT_SECS,
-        )?,
-        Err(err) => return Err(err),
-      };
-      let val: Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("invalid document markdown response: {e}"))?;
-      Ok(j_str(&val, "markdown"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id);
-      Err("blocking HTTP markdown read is unavailable on wasm32".to_string())
-    }
+    let primary = format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown");
+    let body = match self.authed_get(&primary, API_TIMEOUT_SECS) {
+      Ok(b) => b,
+      Err(err) if err.contains("404") => self.authed_get(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"),
+        API_TIMEOUT_SECS,
+      )?,
+      Err(err) => return Err(err),
+    };
+    let val: Value = serde_json::from_str(body.trim())
+      .map_err(|e| format!("invalid document markdown response: {e}"))?;
+    Ok(j_str(&val, "markdown"))
   }
 
   /// Persist a cloud document's Markdown via `PATCH /api/workspaces/{ws}/documents/{doc}/markdown`
@@ -521,20 +409,12 @@ impl CloudConnector {
     document_id: Uuid,
     markdown: &str,
   ) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_patch_json(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
-        &json!({ "mode": "replace_all", "markdown": markdown }),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id, markdown);
-      Err("blocking HTTP markdown save is unavailable on wasm32".to_string())
-    }
+    self.authed_patch_json(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
+      &json!({ "mode": "replace_all", "markdown": markdown }),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Create a new page in a cloud workspace (`POST /api/workspaces/{ws}/documents`).
@@ -544,27 +424,19 @@ impl CloudConnector {
     name: &str,
     parent_view_id: Option<Uuid>,
   ) -> Result<View, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut payload = json!({ "name": name });
-      if let Some(pid) = parent_view_id {
-        payload["parent_view_id"] = json!(pid);
-      }
-      let body = self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/documents"),
-        &payload,
-        API_TIMEOUT_SECS,
-      )?;
-      let val: Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("invalid create document response: {e}"))?;
-      let view_val = val.get("view").cloned().unwrap_or(val);
-      serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
+    let mut payload = json!({ "name": name });
+    if let Some(pid) = parent_view_id {
+      payload["parent_view_id"] = json!(pid);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, name, parent_view_id);
-      Err("blocking HTTP document creation is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/documents"),
+      &payload,
+      API_TIMEOUT_SECS,
+    )?;
+    let val: Value = serde_json::from_str(body.trim())
+      .map_err(|e| format!("invalid create document response: {e}"))?;
+    let view_val = val.get("view").cloned().unwrap_or(val);
+    serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
   }
 
   /// Create a new folder in a cloud workspace (`POST /api/workspaces/{ws}/folders`).
@@ -574,27 +446,19 @@ impl CloudConnector {
     name: &str,
     parent_view_id: Option<Uuid>,
   ) -> Result<View, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut payload = json!({ "name": name });
-      if let Some(pid) = parent_view_id {
-        payload["parent_view_id"] = json!(pid);
-      }
-      let body = self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/folders"),
-        &payload,
-        API_TIMEOUT_SECS,
-      )?;
-      let val: Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("invalid create folder response: {e}"))?;
-      let view_val = val.get("view").cloned().unwrap_or(val);
-      serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
+    let mut payload = json!({ "name": name });
+    if let Some(pid) = parent_view_id {
+      payload["parent_view_id"] = json!(pid);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, name, parent_view_id);
-      Err("blocking HTTP folder creation is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/folders"),
+      &payload,
+      API_TIMEOUT_SECS,
+    )?;
+    let val: Value = serde_json::from_str(body.trim())
+      .map_err(|e| format!("invalid create folder response: {e}"))?;
+    let view_val = val.get("view").cloned().unwrap_or(val);
+    serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
   }
 
   /// Rename or update the icon of a cloud view (`PATCH /api/workspaces/{ws}/views/{view}`).
@@ -605,79 +469,47 @@ impl CloudConnector {
     name: &str,
     icon: Option<&str>,
   ) -> Result<View, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut payload = json!({ "name": name });
-      if let Some(ic) = icon {
-        payload["icon"] = json!(ic);
-      }
-      let body = self.authed_patch_json(
-        &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
-        &payload,
-        API_TIMEOUT_SECS,
-      )?;
-      let val: Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("invalid update view response: {e}"))?;
-      let view_val = val.get("view").cloned().unwrap_or(val);
-      serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
+    let mut payload = json!({ "name": name });
+    if let Some(ic) = icon {
+      payload["icon"] = json!(ic);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, view_id, name, icon);
-      Err("blocking HTTP view update is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_patch_json(
+      &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
+      &payload,
+      API_TIMEOUT_SECS,
+    )?;
+    let val: Value = serde_json::from_str(body.trim())
+      .map_err(|e| format!("invalid update view response: {e}"))?;
+    let view_val = val.get("view").cloned().unwrap_or(val);
+    serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
   }
 
   /// Move a cloud view (and its subtree) into the recycle bin (`DELETE /api/workspaces/{ws}/views/{view}`).
   pub fn delete_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(
-        &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, view_id);
-      Err("blocking HTTP view delete is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(
+      &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Restore a trashed cloud view (`POST /api/workspaces/{ws}/views/{view}/restore`).
   pub fn restore_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/views/{view_id}/restore"),
-        &json!({}),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, view_id);
-      Err("blocking HTTP view restore is unavailable on wasm32".to_string())
-    }
+    self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/views/{view_id}/restore"),
+      &json!({}),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Permanently purge a trashed cloud view (`DELETE /api/workspaces/{ws}/trash/{view}`).
   pub fn purge_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(
-        &format!("/api/workspaces/{workspace_id}/trash/{view_id}"),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, view_id);
-      Err("blocking HTTP view purge is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(
+      &format!("/api/workspaces/{workspace_id}/trash/{view_id}"),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
@@ -687,23 +519,15 @@ impl CloudConnector {
     parent_view_id: Option<Uuid>,
     ordered_view_ids: &[Uuid],
   ) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/views/reorder"),
-        &json!({
-          "parent_view_id": parent_view_id,
-          "ordered_view_ids": ordered_view_ids,
-        }),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, parent_view_id, ordered_view_ids);
-      Err("blocking HTTP view reorder is unavailable on wasm32".to_string())
-    }
+    self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/views/reorder"),
+      &json!({
+        "parent_view_id": parent_view_id,
+        "ordered_view_ids": ordered_view_ids,
+      }),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Register a new account via `POST /api/auth/register`.
@@ -714,25 +538,20 @@ impl CloudConnector {
       return Err("email and password are required".to_string());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let payload = json!({
-        "email": email_t,
-        "display_name": if display_t.is_empty() { email_t } else { display_t },
-        "password": password,
-      });
-      let mut resp = http_agent(LOGIN_TIMEOUT_SECS)
-        .post(&format!("{base}/api/auth/register"))
-        .send_json(&payload)
-        .map_err(|e| format!("registration failed: {e}"))?;
-      let body = resp.body_mut().read_to_string().unwrap_or_default();
-      Ok(parse_register_user(&body, email_t, display_t))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (base, email_t, display_t, password);
-      Err("blocking HTTP registration is unavailable on wasm32".to_string())
-    }
+    let payload = json!({
+      "email": email_t,
+      "display_name": if display_t.is_empty() { email_t } else { display_t },
+      "password": password,
+    });
+    let body = send_http(
+      "POST",
+      &format!("{base}/api/auth/register"),
+      None,
+      Some(&payload),
+      LOGIN_TIMEOUT_SECS,
+    )
+    .map_err(|e| format!("registration failed: {e}"))?;
+    Ok(parse_register_user(&body, email_t, display_t))
   }
 
   /// Request a password-reset email (`POST /api/auth/password/forgot`, falling
@@ -744,26 +563,27 @@ impl CloudConnector {
       return Err("email is required".to_string());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let payload = json!({ "email": email_t });
-      let agent = http_agent(LOGIN_TIMEOUT_SECS);
-      match agent.post(&format!("{base}/api/auth/password/forgot")).send_json(&payload) {
-        Ok(_) => Ok(()),
-        Err(ureq::Error::StatusCode(404)) => {
-          agent
-            .post(&format!("{base}/api/auth/forgot-password"))
-            .send_json(&payload)
-            .map_err(|e| format!("forgot password request failed: {e}"))?;
-          Ok(())
-        }
-        Err(e) => Err(format!("forgot password request failed: {e}")),
+    let payload = json!({ "email": email_t });
+    match send_http(
+      "POST",
+      &format!("{base}/api/auth/password/forgot"),
+      None,
+      Some(&payload),
+      LOGIN_TIMEOUT_SECS,
+    ) {
+      Ok(_) => Ok(()),
+      Err(err) if err.contains("404") => {
+        send_http(
+          "POST",
+          &format!("{base}/api/auth/forgot-password"),
+          None,
+          Some(&payload),
+          LOGIN_TIMEOUT_SECS,
+        )
+        .map_err(|e| format!("forgot password request failed: {e}"))?;
+        Ok(())
       }
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (base, email_t);
-      Err("blocking HTTP forgot-password is unavailable on wasm32".to_string())
+      Err(e) => Err(format!("forgot password request failed: {e}")),
     }
   }
 
@@ -771,76 +591,44 @@ impl CloudConnector {
 
   /// Query current public share state for a cloud document.
   pub fn get_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
-        API_TIMEOUT_SECS,
-      )?;
-      parse_share_state(&body, self.endpoints.base_url())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id);
-      Err("blocking HTTP share query is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+      API_TIMEOUT_SECS,
+    )?;
+    parse_share_state(&body, self.endpoints.base_url())
   }
 
   /// Create or retrieve the active public share link for a cloud document.
   pub fn create_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
-        &json!({}),
-        API_TIMEOUT_SECS,
-      )?;
-      parse_share_state(&body, self.endpoints.base_url())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id);
-      Err("blocking HTTP share creation is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+      &json!({}),
+      API_TIMEOUT_SECS,
+    )?;
+    parse_share_state(&body, self.endpoints.base_url())
   }
 
   /// Revoke the active public share link for a cloud document.
   pub fn delete_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_delete(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
-        API_TIMEOUT_SECS,
-      )?;
-      if body.trim().is_empty() {
-        return Ok(ShareState::default());
-      }
-      parse_share_state(&body, self.endpoints.base_url())
+    let body = self.authed_delete(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+      API_TIMEOUT_SECS,
+    )?;
+    if body.trim().is_empty() {
+      return Ok(ShareState::default());
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id);
-      Err("blocking HTTP share deletion is unavailable on wasm32".to_string())
-    }
+    parse_share_state(&body, self.endpoints.base_url())
   }
 
   // ── Document Comments ───────────────────────────────────────────────────
 
   /// List comment threads for a cloud document.
   pub fn list_comments(&self, workspace_id: Uuid, document_id: Uuid) -> Result<Vec<CommentThread>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
-        API_TIMEOUT_SECS,
-      )?;
-      parse_comment_threads(&body)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id);
-      Err("blocking HTTP comments fetch is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
+      API_TIMEOUT_SECS,
+    )?;
+    parse_comment_threads(&body)
   }
 
   /// Create a new anchored comment thread on a cloud document.
@@ -860,26 +648,18 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("comment body cannot be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let payload = json!({
-        "start_block": start_block, "start_offset": start_offset,
-        "end_block": end_block, "end_offset": end_offset,
-        "quote": quote, "body": trimmed,
-      });
-      let resp = self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
-        &payload,
-        API_TIMEOUT_SECS,
-      )?;
-      let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid create comment response: {e}"))?;
-      parse_comment_thread(val.get("thread").unwrap_or(&val))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id, start_block, start_offset, end_block, end_offset, quote, trimmed);
-      Err("blocking HTTP comment creation is unavailable on wasm32".to_string())
-    }
+    let payload = json!({
+      "start_block": start_block, "start_offset": start_offset,
+      "end_block": end_block, "end_offset": end_offset,
+      "quote": quote, "body": trimmed,
+    });
+    let resp = self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
+      &payload,
+      API_TIMEOUT_SECS,
+    )?;
+    let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid create comment response: {e}"))?;
+    parse_comment_thread(val.get("thread").unwrap_or(&val))
   }
 
   /// Reply to an existing comment thread.
@@ -894,21 +674,13 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("reply body cannot be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let resp = self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/reply"),
-        &json!({ "body": trimmed }),
-        API_TIMEOUT_SECS,
-      )?;
-      let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid comment reply response: {e}"))?;
-      Ok(parse_comment_item(val.get("comment").unwrap_or(&val)))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id, thread_id, trimmed);
-      Err("blocking HTTP comment reply is unavailable on wasm32".to_string())
-    }
+    let resp = self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/reply"),
+      &json!({ "body": trimmed }),
+      API_TIMEOUT_SECS,
+    )?;
+    let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid comment reply response: {e}"))?;
+    Ok(parse_comment_item(val.get("comment").unwrap_or(&val)))
   }
 
   /// Mark a comment thread resolved or reopened.
@@ -919,51 +691,28 @@ impl CloudConnector {
     thread_id: Uuid,
     resolved: bool,
   ) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/resolve"),
-        &json!({ "resolved": resolved }),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id, thread_id, resolved);
-      Err("blocking HTTP comment resolve is unavailable on wasm32".to_string())
-    }
+    self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/resolve"),
+      &json!({ "resolved": resolved }),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Delete a comment thread.
   pub fn delete_comment(&self, workspace_id: Uuid, document_id: Uuid, thread_id: Uuid) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(
-        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}"),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, document_id, thread_id);
-      Err("blocking HTTP comment delete is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(
+      &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}"),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   // ── Personal Access Tokens ──────────────────────────────────────────────
 
   /// List Personal Access Tokens for the signed-in user.
   pub fn list_tokens(&self) -> Result<Vec<ApiTokenInfo>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_token_list(&self.authed_get("/api/auth/tokens", API_TIMEOUT_SECS)?)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      Err("blocking HTTP token list is unavailable on wasm32".to_string())
-    }
+    parse_token_list(&self.authed_get("/api/auth/tokens", API_TIMEOUT_SECS)?)
   }
 
   /// Mint a new Personal Access Token (`POST /api/auth/tokens`).
@@ -977,20 +726,12 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("token name cannot be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let scopes = if can_write { vec!["read", "write"] } else { vec!["read"] };
-      let mut payload = json!({ "name": trimmed, "scopes": scopes });
-      if let Some(days) = expires_in_days {
-        payload["expires_in_days"] = json!(days);
-      }
-      parse_created_token(&self.authed_post_json("/api/auth/tokens", &payload, API_TIMEOUT_SECS)?)
+    let scopes = if can_write { vec!["read", "write"] } else { vec!["read"] };
+    let mut payload = json!({ "name": trimmed, "scopes": scopes });
+    if let Some(days) = expires_in_days {
+      payload["expires_in_days"] = json!(days);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (trimmed, can_write, expires_in_days);
-      Err("blocking HTTP token creation is unavailable on wasm32".to_string())
-    }
+    parse_created_token(&self.authed_post_json("/api/auth/tokens", &payload, API_TIMEOUT_SECS)?)
   }
 
   /// Revoke an existing Personal Access Token (`DELETE /api/auth/tokens/{id}`).
@@ -999,30 +740,15 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("token id cannot be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(&format!("/api/auth/tokens/{trimmed}"), API_TIMEOUT_SECS)?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = trimmed;
-      Err("blocking HTTP token revocation is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(&format!("/api/auth/tokens/{trimmed}"), API_TIMEOUT_SECS)?;
+    Ok(())
   }
 
   // ── AI Settings & Completion ────────────────────────────────────────────
 
   /// List configured AI providers from `GET /api/ai/settings`.
   pub fn list_ai_providers(&self) -> Result<Vec<AiProviderConfig>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_ai_providers(&self.authed_get("/api/ai/settings", API_TIMEOUT_SECS)?)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      Err("blocking HTTP AI settings fetch is unavailable on wasm32".to_string())
-    }
+    parse_ai_providers(&self.authed_get("/api/ai/settings", API_TIMEOUT_SECS)?)
   }
 
   /// Save or activate an AI provider via `PATCH /api/ai/settings`.
@@ -1031,24 +757,16 @@ impl CloudConnector {
     config: &AiProviderConfig,
     api_key: Option<&str>,
   ) -> Result<Vec<AiProviderConfig>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut payload = json!({
-        "provider_id": config.id,
-        "provider": config.protocol,
-        "base_url": config.base_url,
-        "model": config.model,
-      });
-      if let Some(key) = api_key {
-        payload["api_key"] = json!(key);
-      }
-      parse_ai_providers(&self.authed_patch_json("/api/ai/settings", &payload, API_TIMEOUT_SECS)?)
+    let mut payload = json!({
+      "provider_id": config.id,
+      "provider": config.protocol,
+      "base_url": config.base_url,
+      "model": config.model,
+    });
+    if let Some(key) = api_key {
+      payload["api_key"] = json!(key);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (config, api_key);
-      Err("blocking HTTP AI provider save is unavailable on wasm32".to_string())
-    }
+    parse_ai_providers(&self.authed_patch_json("/api/ai/settings", &payload, API_TIMEOUT_SECS)?)
   }
 
   /// Delete a configured AI provider via `DELETE /api/ai/providers/{id}`.
@@ -1057,15 +775,7 @@ impl CloudConnector {
     if trimmed.is_empty() {
       return Err("provider_id cannot be empty".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_ai_providers(&self.authed_delete(&format!("/api/ai/providers/{trimmed}"), API_TIMEOUT_SECS)?)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = trimmed;
-      Err("blocking HTTP AI provider delete is unavailable on wasm32".to_string())
-    }
+    parse_ai_providers(&self.authed_delete(&format!("/api/ai/providers/{trimmed}"), API_TIMEOUT_SECS)?)
   }
 
   /// Fetch live available models from an AI provider via `POST /api/ai/models`.
@@ -1076,30 +786,22 @@ impl CloudConnector {
     protocol: &str,
     api_key: Option<&str>,
   ) -> Result<Vec<String>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut payload = json!({ "base_url": base_url.trim(), "provider": protocol.trim() });
-      if let Some(pid) = provider_id.map(str::trim).filter(|s| !s.is_empty()) {
-        payload["provider_id"] = json!(pid);
-      }
-      if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
-        payload["api_key"] = json!(key);
-      }
-      let body = self.authed_post_json("/api/ai/models", &payload, API_TIMEOUT_SECS)?;
-      let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI models response: {e}"))?;
-      Ok(
-        val
-          .get("models")
-          .and_then(Value::as_array)
-          .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect())
-          .unwrap_or_default(),
-      )
+    let mut payload = json!({ "base_url": base_url.trim(), "provider": protocol.trim() });
+    if let Some(pid) = provider_id.map(str::trim).filter(|s| !s.is_empty()) {
+      payload["provider_id"] = json!(pid);
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (provider_id, base_url, protocol, api_key);
-      Err("blocking HTTP AI models fetch is unavailable on wasm32".to_string())
+    if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
+      payload["api_key"] = json!(key);
     }
+    let body = self.authed_post_json("/api/ai/models", &payload, API_TIMEOUT_SECS)?;
+    let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI models response: {e}"))?;
+    Ok(
+      val
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect())
+        .unwrap_or_default(),
+    )
   }
 
   /// Execute an AI writing prompt against the cloud server (`POST /api/ai/complete`),
@@ -1112,46 +814,31 @@ impl CloudConnector {
     if self.endpoints.base_url().is_empty() || !self.is_authenticated() {
       return Err("AI assistant requires a signed-in cloud connection".to_string());
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut payload = json!({ "prompt": prompt_t });
-      if !system.trim().is_empty() {
-        payload["system"] = json!(system.trim());
-      }
-      let body = self
-        .authed_post_json("/api/ai/complete", &payload, AI_TIMEOUT_SECS)
-        .map_err(|e| format!("AI request unavailable: {e}"))?;
-      let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI completion response: {e}"))?;
-      let text = val
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "AI completion response missing text".to_string())?;
-      if text.trim().is_empty() {
-        return Err("AI returned an empty response".to_string());
-      }
-      Ok(text.to_string())
+    let mut payload = json!({ "prompt": prompt_t });
+    if !system.trim().is_empty() {
+      payload["system"] = json!(system.trim());
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (system, prompt_t);
-      Err("blocking HTTP AI prompt is unavailable on wasm32".to_string())
+    let body = self
+      .authed_post_json("/api/ai/complete", &payload, AI_TIMEOUT_SECS)
+      .map_err(|e| format!("AI request unavailable: {e}"))?;
+    let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI completion response: {e}"))?;
+    let text = val
+      .get("text")
+      .and_then(Value::as_str)
+      .ok_or_else(|| "AI completion response missing text".to_string())?;
+    if text.trim().is_empty() {
+      return Err("AI returned an empty response".to_string());
     }
+    Ok(text.to_string())
   }
 
   // ── Usage Statistics ─────────────────────────────────────────────────────
 
   /// Fetch global & per-workspace usage statistics (`GET /api/stats/overview`).
   pub fn get_usage_overview(&self) -> Result<mica_core::UsageStatsOverview, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get("/api/stats/overview", API_TIMEOUT_SECS)?;
-      serde_json::from_str(&body)
-        .map_err(|e| format!("invalid usage stats overview response: {e}"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      Err("blocking HTTP usage stats overview is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get("/api/stats/overview", API_TIMEOUT_SECS)?;
+    serde_json::from_str(&body)
+      .map_err(|e| format!("invalid usage stats overview response: {e}"))
   }
 
   /// Fetch writing activity trend & 180-day heatmap (`GET /api/stats/activity`).
@@ -1162,39 +849,23 @@ impl CloudConnector {
     workspace_id: Option<&str>,
     include_imports: bool,
   ) -> Result<mica_core::UsageStatsActivity, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let mut path = format!(
-        "/api/stats/activity?range={range}&tz_offset={tz_offset_minutes}&include_imports={include_imports}"
-      );
-      if let Some(ws_id) = workspace_id.filter(|s| !s.trim().is_empty()) {
-        path.push_str("&workspace_id=");
-        path.push_str(ws_id.trim());
-      }
-      let body = self.authed_get(&path, API_TIMEOUT_SECS)?;
-      serde_json::from_str(&body)
-        .map_err(|e| format!("invalid usage stats activity response: {e}"))
+    let mut path = format!(
+      "/api/stats/activity?range={range}&tz_offset={tz_offset_minutes}&include_imports={include_imports}"
+    );
+    if let Some(ws_id) = workspace_id.filter(|s| !s.trim().is_empty()) {
+      path.push_str("&workspace_id=");
+      path.push_str(ws_id.trim());
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (range, tz_offset_minutes, workspace_id, include_imports);
-      Err("blocking HTTP usage stats activity is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get(&path, API_TIMEOUT_SECS)?;
+    serde_json::from_str(&body)
+      .map_err(|e| format!("invalid usage stats activity response: {e}"))
   }
 
   // ── Workspace Members & Invitations ─────────────────────────────────────
 
   /// List members of `workspace_id` (`GET /api/workspaces/{ws}/members`).
   pub fn list_members(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceMemberInfo>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_member_list(&self.authed_get(&format!("/api/workspaces/{workspace_id}/members"), API_TIMEOUT_SECS)?)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP member list is unavailable on wasm32".to_string())
-    }
+    parse_member_list(&self.authed_get(&format!("/api/workspaces/{workspace_id}/members"), API_TIMEOUT_SECS)?)
   }
 
   /// Invite a user by email into `workspace_id` (`POST /api/workspaces/{ws}/members`).
@@ -1204,133 +875,70 @@ impl CloudConnector {
       return Err("email is required".to_string());
     }
     let role_t = if role.trim().is_empty() { "editor" } else { role.trim() };
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_post_json(
-        &format!("/api/workspaces/{workspace_id}/members"),
-        &json!({ "email": email_t, "role": role_t }),
-        API_TIMEOUT_SECS,
-      )?;
-      let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid invite response: {e}"))?;
-      Ok(parse_invitation(val.get("invitation").unwrap_or(&val)))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, email_t, role_t);
-      Err("blocking HTTP invite member is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_post_json(
+      &format!("/api/workspaces/{workspace_id}/members"),
+      &json!({ "email": email_t, "role": role_t }),
+      API_TIMEOUT_SECS,
+    )?;
+    let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid invite response: {e}"))?;
+    Ok(parse_invitation(val.get("invitation").unwrap_or(&val)))
   }
 
   /// List pending invitations sent for `workspace_id` (`GET /api/workspaces/{ws}/invitations`).
   pub fn list_invitations(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceInvitationInfo>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_invitation_list(
-        &self.authed_get(&format!("/api/workspaces/{workspace_id}/invitations"), API_TIMEOUT_SECS)?,
-      )
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP invitation list is unavailable on wasm32".to_string())
-    }
+    parse_invitation_list(
+      &self.authed_get(&format!("/api/workspaces/{workspace_id}/invitations"), API_TIMEOUT_SECS)?,
+    )
   }
 
   /// Fetch workspace storage usage `(bytes_used, quota_bytes)` (`GET /api/workspaces/{ws}/usage`).
   pub fn workspace_usage(&self, workspace_id: Uuid) -> Result<(u64, u64), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/usage"), API_TIMEOUT_SECS)?;
-      let val: Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("invalid usage response: {e}"))?;
-      let used = val.get("bytes_used").and_then(Value::as_u64).unwrap_or(0);
-      let quota = val.get("quota_bytes").and_then(Value::as_u64).unwrap_or(0);
-      Ok((used, quota))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP workspace usage is unavailable on wasm32".to_string())
-    }
+    let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/usage"), API_TIMEOUT_SECS)?;
+    let val: Value = serde_json::from_str(body.trim())
+      .map_err(|e| format!("invalid usage response: {e}"))?;
+    let used = val.get("bytes_used").and_then(Value::as_u64).unwrap_or(0);
+    let quota = val.get("quota_bytes").and_then(Value::as_u64).unwrap_or(0);
+    Ok((used, quota))
   }
 
   /// Revoke a pending workspace invitation (`DELETE /api/workspaces/{ws}/invitations/{id}`).
   pub fn revoke_invitation(&self, workspace_id: Uuid, invitation_id: &str) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(
-        &format!("/api/workspaces/{workspace_id}/invitations/{invitation_id}"),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, invitation_id);
-      Err("blocking HTTP revoke invitation is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(
+      &format!("/api/workspaces/{workspace_id}/invitations/{invitation_id}"),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Change a workspace member's role (`PATCH /api/workspaces/{ws}/members/{user_id}`).
   pub fn update_member_role(&self, workspace_id: Uuid, user_id: &str, role: &str) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_patch_json(
-        &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
-        &json!({ "role": role }),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, user_id, role);
-      Err("blocking HTTP update member role is unavailable on wasm32".to_string())
-    }
+    self.authed_patch_json(
+      &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
+      &json!({ "role": role }),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// Remove a member from a workspace (`DELETE /api/workspaces/{ws}/members/{user_id}`).
   pub fn remove_member(&self, workspace_id: Uuid, user_id: &str) -> Result<(), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      self.authed_delete(
-        &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
-        API_TIMEOUT_SECS,
-      )?;
-      Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = (workspace_id, user_id);
-      Err("blocking HTTP remove member is unavailable on wasm32".to_string())
-    }
+    self.authed_delete(
+      &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
+      API_TIMEOUT_SECS,
+    )?;
+    Ok(())
   }
 
   /// List pending invitations addressed to the signed-in user (`GET /api/invitations`).
   pub fn list_received_invitations(&self) -> Result<Vec<WorkspaceInvitationInfo>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_invitation_list(&self.authed_get("/api/invitations", API_TIMEOUT_SECS)?)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      Err("blocking HTTP received invitations is unavailable on wasm32".to_string())
-    }
+    parse_invitation_list(&self.authed_get("/api/invitations", API_TIMEOUT_SECS)?)
   }
 
   // ── Knowledge Graph ─────────────────────────────────────────────────────
 
   /// Fetch the page-link graph for `workspace_id` (`GET /api/workspaces/{ws}/graph`).
   pub fn fetch_graph(&self, workspace_id: Uuid) -> Result<CloudGraphPayload, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      parse_graph_payload(&self.authed_get(&format!("/api/workspaces/{workspace_id}/graph"), API_TIMEOUT_SECS)?)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      let _ = workspace_id;
-      Err("blocking HTTP graph fetch is unavailable on wasm32".to_string())
-    }
+    parse_graph_payload(&self.authed_get(&format!("/api/workspaces/{workspace_id}/graph"), API_TIMEOUT_SECS)?)
   }
 
   // ── Session & SyncEngine Lifecycle ──────────────────────────────────────
@@ -1359,7 +967,11 @@ impl CloudConnector {
   /// Current derived sync status label for UI chrome.
   pub fn sync_phase_label(&self) -> String {
     if !self.is_authenticated() {
-      return "Local Only".to_string();
+      return if cfg!(target_arch = "wasm32") {
+        "Offline".to_string()
+      } else {
+        "Local Only".to_string()
+      };
     }
     match self.phase {
       SyncPhase::Synced => "Synced".to_string(),
@@ -1425,7 +1037,11 @@ impl CloudConnector {
   /// Human-readable account badge for the UI header/settings panel.
   pub fn account_label(&self) -> String {
     if !self.is_authenticated() {
-      return "Local Vault".to_string();
+      return if cfg!(target_arch = "wasm32") {
+        "Not signed in".to_string()
+      } else {
+        "Local Vault".to_string()
+      };
     }
     self
       .config
@@ -1460,7 +1076,6 @@ impl CloudConnector {
     Ok(base)
   }
 
-  #[cfg(not(target_arch = "wasm32"))]
   fn require_auth(&self) -> Result<(&str, &str), String> {
     let base = self.require_server()?;
     let token = self
@@ -1473,48 +1088,28 @@ impl CloudConnector {
     Ok((base, token))
   }
 
-  #[cfg(not(target_arch = "wasm32"))]
   fn authed_get(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
-    let mut resp = http_agent(timeout_secs)
-      .get(&format!("{base}{path}"))
-      .header("Authorization", &format!("Bearer {token}"))
-      .call()
-      .map_err(|e| format!("GET {path} failed: {e}"))?;
-    resp.body_mut().read_to_string().map_err(|e| format!("failed to read GET {path} response: {e}"))
+    send_http("GET", &format!("{base}{path}"), Some(token), None, timeout_secs)
+      .map_err(|e| format!("GET {path} failed: {e}"))
   }
 
-  #[cfg(not(target_arch = "wasm32"))]
   fn authed_post_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
-    let mut resp = http_agent(timeout_secs)
-      .post(&format!("{base}{path}"))
-      .header("Authorization", &format!("Bearer {token}"))
-      .send_json(payload)
-      .map_err(|e| format!("POST {path} failed: {e}"))?;
-    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+    send_http("POST", &format!("{base}{path}"), Some(token), Some(payload), timeout_secs)
+      .map_err(|e| format!("POST {path} failed: {e}"))
   }
 
-  #[cfg(not(target_arch = "wasm32"))]
   fn authed_patch_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
-    let mut resp = http_agent(timeout_secs)
-      .patch(&format!("{base}{path}"))
-      .header("Authorization", &format!("Bearer {token}"))
-      .send_json(payload)
-      .map_err(|e| format!("PATCH {path} failed: {e}"))?;
-    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+    send_http("PATCH", &format!("{base}{path}"), Some(token), Some(payload), timeout_secs)
+      .map_err(|e| format!("PATCH {path} failed: {e}"))
   }
 
-  #[cfg(not(target_arch = "wasm32"))]
   fn authed_delete(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
-    let mut resp = http_agent(timeout_secs)
-      .delete(&format!("{base}{path}"))
-      .header("Authorization", &format!("Bearer {token}"))
-      .call()
-      .map_err(|e| format!("DELETE {path} failed: {e}"))?;
-    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+    send_http("DELETE", &format!("{base}{path}"), Some(token), None, timeout_secs)
+      .map_err(|e| format!("DELETE {path} failed: {e}"))
   }
 }
 
@@ -1527,16 +1122,83 @@ fn http_agent(timeout_secs: u64) -> ureq::Agent {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn send_http(
+  method: &str,
+  url: &str,
+  bearer_token: Option<&str>,
+  json_body: Option<&Value>,
+  timeout_secs: u64,
+) -> Result<String, String> {
+  let agent = http_agent(timeout_secs);
+  let auth_header = bearer_token
+    .map(str::trim)
+    .filter(|t| !t.is_empty())
+    .map(|t| format!("Bearer {t}"));
+  let mut resp = match method {
+    "GET" => {
+      let mut req = agent.get(url);
+      if let Some(ref h) = auth_header {
+        req = req.header("Authorization", h);
+      }
+      req.call().map_err(|e| e.to_string())?
+    }
+    "DELETE" => {
+      let mut req = agent.delete(url);
+      if let Some(ref h) = auth_header {
+        req = req.header("Authorization", h);
+      }
+      req.call().map_err(|e| e.to_string())?
+    }
+    "POST" => {
+      let mut req = agent.post(url);
+      if let Some(ref h) = auth_header {
+        req = req.header("Authorization", h);
+      }
+      match json_body {
+        Some(payload) => req.send_json(payload).map_err(|e| e.to_string())?,
+        None => req.send_empty().map_err(|e| e.to_string())?,
+      }
+    }
+    "PATCH" => {
+      let mut req = agent.patch(url);
+      if let Some(ref h) = auth_header {
+        req = req.header("Authorization", h);
+      }
+      match json_body {
+        Some(payload) => req.send_json(payload).map_err(|e| e.to_string())?,
+        None => req.send_empty().map_err(|e| e.to_string())?,
+      }
+    }
+    other => return Err(format!("unsupported HTTP method {other}")),
+  };
+  Ok(resp.body_mut().read_to_string().unwrap_or_default())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn send_http(
+  method: &str,
+  url: &str,
+  bearer_token: Option<&str>,
+  json_body: Option<&Value>,
+  _timeout_secs: u64,
+) -> Result<String, String> {
+  let serialized = match json_body {
+    Some(payload) => Some(
+      serde_json::to_string(payload).map_err(|e| format!("failed to serialize request body: {e}"))?,
+    ),
+    None => None,
+  };
+  crate::web_runtime::xhr_request(method, url, bearer_token, serialized.as_deref())
+}
+
 fn j_str(v: &Value, key: &str) -> String {
   v.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn j_opt_str(v: &Value, key: &str) -> Option<String> {
   v.get(key).and_then(Value::as_str).map(String::from)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn format_health_summary(raw_body: &str) -> String {
   let trimmed = raw_body.trim();
   if let Ok(val) = serde_json::from_str::<Value>(trimmed)
@@ -1550,7 +1212,6 @@ fn format_health_summary(raw_body: &str) -> String {
   if trimmed.is_empty() { "ok".to_string() } else { trimmed.to_string() }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_probe_meta(raw_body: &str) -> ServerProbeMeta {
   let Ok(val) = serde_json::from_str::<Value>(raw_body.trim()) else {
     return ServerProbeMeta { reachable: true, version: None, registration_open: None };
@@ -1562,7 +1223,6 @@ fn parse_probe_meta(raw_body: &str) -> ServerProbeMeta {
   }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_register_user(raw_body: &str, email: &str, display_name: &str) -> CloudUser {
   let fallback = if display_name.is_empty() { email } else { display_name };
   let Ok(val) = serde_json::from_str::<Value>(raw_body.trim()) else {
@@ -1584,7 +1244,6 @@ fn parse_register_user(raw_body: &str, email: &str, display_name: &str) -> Cloud
   }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_share_state(raw_body: &str, base_url: &str) -> Result<ShareState, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid share response: {e}"))?;
   let shared = val.get("shared").and_then(Value::as_bool).unwrap_or(false);
@@ -1600,7 +1259,6 @@ fn parse_share_state(raw_body: &str, base_url: &str) -> Result<ShareState, Strin
   Ok(ShareState { shared, token, url })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_comment_item(val: &Value) -> CommentItem {
   CommentItem {
     id: j_str(val, "id"),
@@ -1612,7 +1270,6 @@ fn parse_comment_item(val: &Value) -> CommentItem {
   }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_comment_thread(val: &Value) -> Result<CommentThread, String> {
   let status = j_opt_str(val, "status").unwrap_or_else(|| "open".into());
   let resolved = val
@@ -1645,7 +1302,6 @@ fn parse_comment_thread(val: &Value) -> Result<CommentThread, String> {
   })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_comment_threads(raw_body: &str) -> Result<Vec<CommentThread>, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid comments response: {e}"))?;
   let arr = val
@@ -1656,7 +1312,6 @@ fn parse_comment_threads(raw_body: &str) -> Result<Vec<CommentThread>, String> {
   arr.iter().map(parse_comment_thread).collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_token_info(val: &Value) -> ApiTokenInfo {
   let can_write = val.get("can_write").and_then(Value::as_bool).unwrap_or_else(|| {
     val
@@ -1674,7 +1329,6 @@ fn parse_token_info(val: &Value) -> ApiTokenInfo {
   }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_token_list(raw_body: &str) -> Result<Vec<ApiTokenInfo>, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid token list: {e}"))?;
   let arr = val
@@ -1685,13 +1339,11 @@ fn parse_token_list(raw_body: &str) -> Result<Vec<ApiTokenInfo>, String> {
   Ok(arr.iter().map(parse_token_info).collect())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_created_token(raw_body: &str) -> Result<CreatedApiToken, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid created token: {e}"))?;
   Ok(CreatedApiToken { info: parse_token_info(&val), token: j_str(&val, "token") })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_ai_providers(raw_body: &str) -> Result<Vec<AiProviderConfig>, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid AI settings response: {e}"))?;
   let active_id = j_str(&val, "provider_id");
@@ -1743,7 +1395,6 @@ fn parse_ai_providers(raw_body: &str) -> Result<Vec<AiProviderConfig>, String> {
   Ok(Vec::new())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_member_list(raw_body: &str) -> Result<Vec<WorkspaceMemberInfo>, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid members response: {e}"))?;
   let arr = val
@@ -1766,7 +1417,6 @@ fn parse_member_list(raw_body: &str) -> Result<Vec<WorkspaceMemberInfo>, String>
   )
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_invitation(val: &Value) -> WorkspaceInvitationInfo {
   WorkspaceInvitationInfo {
     id: j_str(val, "id"),
@@ -1779,7 +1429,6 @@ fn parse_invitation(val: &Value) -> WorkspaceInvitationInfo {
   }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_invitation_list(raw_body: &str) -> Result<Vec<WorkspaceInvitationInfo>, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid invitations response: {e}"))?;
   let arr = val
@@ -1790,7 +1439,6 @@ fn parse_invitation_list(raw_body: &str) -> Result<Vec<WorkspaceInvitationInfo>,
   Ok(arr.iter().map(parse_invitation).collect())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_graph_payload(raw_body: &str) -> Result<CloudGraphPayload, String> {
   let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid graph response: {e}"))?;
   let nodes = val

@@ -3371,6 +3371,7 @@ dependencies = [
  "serde_json",
  "ureq",
  "uuid",
+ "web-sys",
 ]
 
 [[package]]

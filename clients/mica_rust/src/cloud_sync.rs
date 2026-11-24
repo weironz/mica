@@ -268,6 +268,8 @@ pub(crate) struct CloudSessionHandles {
   pub selected_cloud_origin: Signal<String>,
   pub world_active_origin: Signal<String>,
   pub world_switcher_open: Signal<bool>,
+  pub world_can_close: Signal<bool>,
+  pub allow_local: bool,
   pub world_busy: Signal<bool>,
   pub world_error: Signal<String>,
   pub world_info: Signal<String>,
@@ -503,6 +505,7 @@ impl CloudSessionHandles {
     self.account_email.set(email.clone());
     self.account_name.set(email);
     self.is_cloud_signed_in.set(true);
+    self.world_can_close.set(true);
     self.world_switcher_open.set(false);
 
     let ws_pairs: Vec<(Uuid, String)> = payload
@@ -607,8 +610,13 @@ impl CloudSessionHandles {
   pub(crate) fn enter_origin(&self, raw_origin: String, interactive: bool) {
     let origin = canonicalize_cloud_url(&raw_origin);
     let Some((email, token, refresh)) = self.vault.saved_server_credential_full(&origin) else {
-      if interactive {
-        self.world_error.set("未找到该服务器的登录凭证，请重新登录".to_string());
+      if interactive || !self.allow_local {
+        if interactive {
+          self.world_error.set("未找到该服务器的登录凭证，请重新登录".to_string());
+        }
+        if !self.allow_local {
+          self.world_can_close.set(false);
+        }
         self.world_switcher_open.set(true);
       }
       return;
@@ -618,8 +626,11 @@ impl CloudSessionHandles {
       let mut creds = self.signed_in_origins_sig.get_untracked();
       creds.retain(|(o, _)| o != &origin);
       self.signed_in_origins_sig.set(creds);
-      if interactive {
+      if interactive || !self.allow_local {
         self.world_error.set("登录凭证已失效，请重新输入密码登录".to_string());
+        if !self.allow_local {
+          self.world_can_close.set(false);
+        }
         self.world_switcher_open.set(true);
       }
       return;
@@ -703,13 +714,20 @@ impl CloudSessionHandles {
             h.is_cloud_signed_in.set(false);
             h.world_error.set("登录已过期，请重新登录".to_string());
             h.cloud_status.set("云端登录已过期，请重新登录".to_string());
-            if interactive {
+            if !h.allow_local {
+              h.world_can_close.set(false);
+              h.world_switcher_open.set(true);
+            } else if interactive {
               h.world_switcher_open.set(true);
             }
           } else {
             h.cloud_status.set(format!("连接云端失败：{err}"));
-            if interactive {
+            if interactive || (!h.allow_local && !h.is_cloud_signed_in.get_untracked()) {
               h.world_error.set(err);
+              if !h.allow_local {
+                h.world_can_close.set(false);
+                h.world_switcher_open.set(true);
+              }
             }
           }
         }
@@ -771,7 +789,8 @@ impl CloudSessionHandles {
     });
   }
 
-  /// Leave the cloud world and restore the local SQLite workspaces cleanly.
+  /// Leave the cloud world: restore local SQLite workspaces on Desktop, or
+  /// clear cloud session & return to the full-screen Cloud Sign-In gate on Web.
   pub(crate) fn logout_to_local(&self) {
     self.auth_gen.set(self.auth_gen.get_untracked().wrapping_add(1));
     self
@@ -784,6 +803,41 @@ impl CloudSessionHandles {
       .doc_save_gen
       .set(self.doc_save_gen.get_untracked().wrapping_add(1));
     self.world_busy.set(false);
+
+    if !self.allow_local {
+      let web_origin = {
+        let cur = self.selected_cloud_origin.get_untracked();
+        if cur.is_empty() { self.server_url.get_untracked() } else { cur }
+      };
+      let prev_origin = self.active_origin.get_untracked();
+      if is_cloud_origin(&prev_origin) {
+        let _ = self.vault.clear_server_credential(&prev_origin);
+      }
+      if is_cloud_origin(&web_origin) {
+        let _ = self.vault.clear_server_credential(&web_origin);
+      }
+      let mut creds = self.signed_in_origins_sig.get_untracked();
+      creds.retain(|(o, _)| o != &prev_origin && o != &web_origin);
+      self.signed_in_origins_sig.set(creds);
+      *self.cloud_connector.borrow_mut() = CloudConnector::new(CloudConfig {
+        server_url: web_origin.clone(),
+        access_token: None,
+        email: None,
+      });
+      self.is_cloud_signed_in.set(false);
+      self.world_active_origin.set(web_origin.clone());
+      self.account_email.set(String::new());
+      self.account_name.set("未登录".to_string());
+      self.cloud_status.set("请登录云端账户".to_string());
+      self.world_error.set(String::new());
+      self.world_info.set(String::new());
+      self.workspaces.set(Vec::new());
+      self.apply_workspace_views(web_origin, Uuid::nil(), String::new(), Vec::new(), None, false);
+      self.world_can_close.set(false);
+      self.world_switcher_open.set(true);
+      return;
+    }
+
     let _ = self.vault.set_active_origin(DEFAULT_ORIGIN);
     *self.cloud_connector.borrow_mut() = CloudConnector::new(CloudConfig {
       server_url: self.server_url.get_untracked(),
@@ -791,6 +845,7 @@ impl CloudSessionHandles {
       email: None,
     });
     self.is_cloud_signed_in.set(false);
+    self.world_can_close.set(true);
     self.world_active_origin.set(LOCAL_ORIGIN.to_string());
     self.account_email.set("这台设备".to_string());
     self.account_name.set("本地工作区".to_string());
@@ -971,9 +1026,25 @@ impl CloudSessionHandles {
     });
   }
 
-  /// If the last active origin persisted in the vault was a cloud server with
-  /// valid credentials, automatically restore and refresh it on startup.
+  /// Automatically restore a valid cloud session on startup (and keep the
+  /// full-screen Cloud Sign-In gate open on Web when unauthenticated).
   pub(crate) fn restore_startup_session(&self) {
+    if !self.allow_local {
+      let web_origin = self.selected_cloud_origin.get_untracked();
+      if is_cloud_origin(&web_origin)
+        && self
+          .vault
+          .saved_server_credential_full(&web_origin)
+          .is_some_and(|(_, tok, rt)| !tok.trim().is_empty() || !rt.trim().is_empty())
+      {
+        self.enter_origin(web_origin, true);
+      } else {
+        self.world_can_close.set(false);
+        self.world_switcher_open.set(true);
+      }
+      return;
+    }
+
     let saved_origin = self.vault.active_origin();
     if is_cloud_origin(&saved_origin)
       && self

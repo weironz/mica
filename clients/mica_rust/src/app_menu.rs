@@ -653,6 +653,7 @@ pub fn about_modal_view(
 /// Reactive state and callbacks for the bottom-left grouped-card Account Menu popover.
 #[derive(Clone)]
 pub struct AccountMenuState {
+  pub allow_local: bool,
   pub is_local: Signal<bool>,
   pub is_signed_in: Signal<bool>,
   pub show_cloud_signin: Signal<bool>,
@@ -892,14 +893,25 @@ pub fn account_menu_popover(
                     }
                   },
                 ))
-                .child(account_action_row(
-                  "account-switch-world-btn",
-                  "切换世界…",
-                  String::new,
-                  swap_horiz_icon,
-                  open,
-                  dark_mode,
-                  on_switch_world,
+                .child(when(
+                  {
+                    let allow_local = st.allow_local;
+                    move || allow_local
+                  },
+                  {
+                    let on_switch_world = on_switch_world.clone();
+                    move || {
+                      account_action_row(
+                        "account-switch-world-btn",
+                        "切换世界…",
+                        String::new,
+                        swap_horiz_icon,
+                        open,
+                        dark_mode,
+                        on_switch_world.clone(),
+                      )
+                    }
+                  },
                 ))
                 .child(account_action_row(
                   "account-menu-update-btn",

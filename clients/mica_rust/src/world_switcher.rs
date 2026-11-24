@@ -40,6 +40,9 @@ const AUTH_MODE_REGISTER: u8 = 1;
 pub struct WorldSwitcherState {
   pub open: Signal<bool>,
   pub can_close: Signal<bool>,
+  /// Whether the on-device local workspace mode and multi-server switcher are
+  /// available (`true` on Desktop, `false` on Web cloud-only same-origin builds).
+  pub allow_local: bool,
   pub dark_mode: Signal<bool>,
   pub app_version: &'static str,
   pub active_origin: Signal<String>,
@@ -235,6 +238,7 @@ pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
     let state = state.clone();
     move || {
       let st = state.clone();
+      let allow_local = st.allow_local;
       let dark_mode = st.dark_mode;
       let can_close = st.can_close;
       let app_version = st.app_version;
@@ -243,7 +247,7 @@ pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
       let viewport_width = signal(1200.0_f32);
 
       // Pane-local state preserved across viewport width crossings.
-      let cloud_tab = signal(st.active_origin.get_untracked() != LOCAL_ORIGIN);
+      let cloud_tab = signal(!allow_local || st.active_origin.get_untracked() != LOCAL_ORIGIN);
       let servers_open = signal(false);
       let adding_server = signal(false);
       let new_server_url = signal(String::new());
@@ -273,7 +277,7 @@ pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
         })
         .child(when(
           move || viewport_width.get() >= SIGN_IN_SPLIT_MIN_WIDTH,
-          move || sign_in_hero(app_version),
+          move || sign_in_hero(app_version, allow_local),
         ))
         .child(
           view()
@@ -303,8 +307,11 @@ pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
                       .w_full()
                       .max_w(px(364.0))
                       .gap(px(24.0))
-                      .child(world_tabs(st.clone(), cloud_tab))
-                      .child(when(move || cloud_tab.get(), {
+                      .child(when(move || allow_local, {
+                        let st = st.clone();
+                        move || world_tabs(st.clone(), cloud_tab)
+                      }))
+                      .child(when(move || !allow_local || cloud_tab.get(), {
                         let st = st.clone();
                         move || {
                           cloud_pane(
@@ -321,7 +328,7 @@ pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
                           )
                         }
                       }))
-                      .child(when(move || !cloud_tab.get(), {
+                      .child(when(move || allow_local && !cloud_tab.get(), {
                         let st = st.clone();
                         move || local_pane(st.clone())
                       })),
@@ -364,12 +371,35 @@ pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
 }
 
 /// Left dark brand hero panel matching `sign_in_hero.dart`.
-fn sign_in_hero(app_version: &'static str) -> impl IntoElement {
-  let features = [
-    "离线也能写，联网后自动同步",
-    "实时协作：多人同时编辑，能看见彼此的光标",
-    "块编辑器 · 代码高亮 · 数学公式 · 表格",
-  ];
+fn sign_in_hero(app_version: &'static str, allow_local: bool) -> impl IntoElement {
+  let features = if allow_local {
+    [
+      "离线也能写，联网后自动同步",
+      "实时协作：多人同时编辑，能看见彼此的光标",
+      "块编辑器 · 代码高亮 · 数学公式 · 表格",
+    ]
+  } else {
+    [
+      "云端实时同步，多端设备无缝衔接",
+      "实时协作：多人同时编辑，能看见彼此的光标",
+      "块编辑器 · 代码高亮 · 数学公式 · 表格",
+    ]
+  };
+  let headline = if allow_local {
+    "本地优先的\n协作知识库"
+  } else {
+    "云端协作\n知识库"
+  };
+  let subtitle = if allow_local {
+    "块编辑器、实时协作。改动经 CRDT 合并，多台设备之间不会互相覆盖。"
+  } else {
+    "打开浏览器即写。改动经 CRDT 实时同步，多人协作不会互相覆盖。"
+  };
+  let footer_tag = if allow_local {
+    format!("CRDT SYNC · OFFLINE-FIRST · v{app_version}")
+  } else {
+    format!("CRDT SYNC · CLOUD WORKSPACE · v{app_version}")
+  };
 
   let mut feature_col = view().w_full().gap(px(12.0));
   for line in features {
@@ -436,14 +466,14 @@ fn sign_in_hero(app_version: &'static str) -> impl IntoElement {
               )
               .child(view().h(px(26.0)))
               .child(
-                text("本地优先的\n协作知识库")
+                text(headline)
                   .text_size(px(34.0))
                   .font_weight(FontWeight::SEMIBOLD)
                   .text_color(white()),
               )
               .child(view().h(px(14.0)))
               .child(
-                text("块编辑器、实时协作。改动经 CRDT 合并，多台设备之间不会互相覆盖。")
+                text(subtitle)
                   .text_size(px(14.0))
                   .text_color(rgb(0x94A3B8)),
               )
@@ -451,7 +481,7 @@ fn sign_in_hero(app_version: &'static str) -> impl IntoElement {
               .child(feature_col)
               .child(view().h(px(26.0)))
               .child(
-                text(format!("CRDT SYNC · OFFLINE-FIRST · v{app_version}"))
+                text(footer_tag)
                   .text_size(px(11.0))
                   .text_color(rgb(0x64748B)),
               ),
@@ -684,6 +714,7 @@ fn server_selector_section(
   add_server_err: Signal<String>,
   confirm_remove_origin: Signal<Option<String>>,
 ) -> impl IntoElement {
+  let allow_local = state.allow_local;
   let dark_mode = state.dark_mode;
   let health_status = state.health_status;
   let st_label = state.clone();
@@ -711,10 +742,13 @@ fn server_selector_section(
         .child(
           button()
             .test_id("world-server-toggle")
-            .accessibility_label("展开或收起服务器列表")
+            .accessibility_label(if allow_local { "展开或收起服务器列表" } else { "当前服务器" })
             .flex_1()
             .min_w(px(0.0))
             .on_press(move || {
+              if !allow_local {
+                return;
+              }
               let next = !servers_open.get_untracked();
               servers_open.set(next);
               if !next {
@@ -802,7 +836,7 @@ fn server_selector_section(
             }
           },
         ))
-        .child(
+        .child(when(move || allow_local, move || {
           button()
             .test_id("world-server-chevron")
             .accessibility_label("切换服务器列表")
@@ -820,10 +854,10 @@ fn server_selector_section(
               } else {
                 mica_icons::chevron_down(hex)
               }
-            })),
-        ),
+            }))
+        })),
     )
-    .child(when(move || servers_open.get(), {
+    .child(when(move || allow_local && servers_open.get(), {
       let st_list = st_list.clone();
       let st_add = st_add.clone();
       move || {
@@ -1281,7 +1315,11 @@ fn signed_in_card(state: WorldSwitcherState) -> impl IntoElement {
       text(move || {
         let origin = effective_cloud_origin(&st_hint);
         if origin == active_origin.get() {
-          "要去别处的话，在上面选另一个服务器或本地模式；否则点「返回」回到刚才的页面。"
+          if st_hint.allow_local {
+            "要去别处的话，在上面选另一个服务器或本地模式；否则点「返回」回到刚才的页面。"
+          } else {
+            "点击「返回」回到刚才的云端工作区。"
+          }
         } else {
           "凭据还在，点「进入」直接用这台服务器，不用再输密码。"
         }

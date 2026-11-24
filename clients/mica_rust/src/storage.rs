@@ -46,6 +46,8 @@ const DEFAULT_VERSION_LABEL: &str = "Manual Snapshot";
 
 #[cfg(not(target_arch = "wasm32"))]
 const PREFS_FILENAME: &str = "mica_prefs.json";
+#[cfg(target_arch = "wasm32")]
+const WEB_PREFS_STORAGE_KEY: &str = "mica_prefs_v1";
 
 const PREF_PAGE_WIDTH: &str = "pageWidth";
 const PREF_SIDEBAR_WIDTH: &str = "sidebarWidth";
@@ -57,8 +59,7 @@ const DEFAULT_PAGE_WIDTH: f32 = 800.0;
 const DEFAULT_SIDEBAR_WIDTH: f32 = 280.0;
 
 /// Lightweight client-local key-value preferences snapshot persisted to
-/// `<vault_dir>/mica_prefs.json` on desktop (or kept in memory for ephemeral /
-/// `wasm32` vaults).
+/// `<vault_dir>/mica_prefs.json` on desktop and `window.localStorage` on Web.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppPrefs {
   #[serde(flatten)]
@@ -70,11 +71,21 @@ struct PrefsState {
   entries: BTreeMap<String, String>,
   #[cfg(not(target_arch = "wasm32"))]
   path: Option<PathBuf>,
+  #[cfg(target_arch = "wasm32")]
+  persist_web: bool,
 }
 
 impl PrefsState {
   fn in_memory() -> Self {
     Self::default()
+  }
+
+  #[cfg(target_arch = "wasm32")]
+  fn load_web() -> Self {
+    let entries = crate::web_runtime::local_storage_get(WEB_PREFS_STORAGE_KEY)
+      .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+      .unwrap_or_default();
+    Self { entries, persist_web: true }
   }
 
   #[cfg(not(target_arch = "wasm32"))]
@@ -106,6 +117,12 @@ impl PrefsState {
       }
       std::fs::write(path, body)
         .map_err(|e| format!("failed to write prefs {}: {e}", path.display()))?;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if self.persist_web {
+      let body = serde_json::to_string(&self.entries)
+        .map_err(|e| format!("failed to serialize web prefs: {e}"))?;
+      crate::web_runtime::local_storage_set(WEB_PREFS_STORAGE_KEY, &body)?;
     }
     Ok(())
   }
@@ -185,7 +202,12 @@ impl VaultStore {
     }
     #[cfg(target_arch = "wasm32")]
     {
-      Self::in_memory()
+      Self {
+        origin: DEFAULT_ORIGIN.to_string(),
+        client_id: 1,
+        prefs: Arc::new(Mutex::new(PrefsState::load_web())),
+        memory: Arc::new(Mutex::new(MemoryVault::default())),
+      }
     }
   }
 
