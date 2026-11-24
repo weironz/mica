@@ -126,6 +126,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [fullstack-rust-branch-review-2026-11-24.md](reviews/fullstack-rust-branch-review-2026-11-24.md) | `feat/fullstack-rust-architecture` 分支评审：方向保留、不整体合入；拆分合入与预览渠道路线、P0/P1/P2 整改清单（缓存键 #111 回归、Web 同步请求与离线、包体、自动更新等）与切换闸门 |
 | [wasm-size-budget-2026-11-17.md](reviews/wasm-size-budget-2026-11-17.md) | Markdown 引擎 wasm 体积预算：为什么设、业界做法、高亮器入引擎（gh#178）后的实测与调到 288 KiB 的决定、以后怎么调 |
 | [redundancy-and-home-review-2026-11-10.md](reviews/redundancy-and-home-review-2026-11-10.md) | 双实现盘点、首页与三轮实施评估;前三项(Mermaid、公式、兼容层)已实施并审核;第二轮评估与用户决定;交给他人实施的待办清单 |
 | [crdt-web-wasm-spike-2026-11-01.md](reviews/crdt-web-wasm-spike-2026-11-01.md) | Web 端 CRDT 换成 mica-core wasm 的可行性验证:可行,净增约 194 KB gzip,待用户决定 |
