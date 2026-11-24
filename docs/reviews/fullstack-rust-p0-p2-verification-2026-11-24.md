@@ -18,7 +18,7 @@
 | **P0-3 (W1–W5)** | Web 首包压进 ≤ 4.0 MiB（Brotli-11）+ 启动体验与硬门禁 | **已完成并验真** | `8c100db7` | **W4**：Web `mica-md` 仅启用 `render-board`，公式/Mermaid 拆为按需懒加载 `mica_preview/{math,mermaid}.{js,wasm}`（经根 `Owner` + `nsh_core::prelude::spawn` 驱动）；**W2**：`wasm-opt -Oz`（`16.06 MB -> 13.93 MB`）；**W5**：`scripts/build-web-rust.sh` 硬门禁 ≤ `4,194,304 B`，CI 实测 **`3,926,345 B`（3.74 MiB）**（`math` gzip-9 `1,003,574 B`、`mermaid` gzip-9 `2,010,015 B`）；**W1**：内联 SVG 启动画面 + `modulepreload` / `preload as="fetch" crossorigin` |
 | **P0-4** | Windows 自动更新 + 单实例互斥（`#179`）+ Inno `[InstallDelete]` | **已完成（代码+打包全绿；待物理机覆盖升级/回滚演练）** | `86fa49fc` | `clients/mica_rust/src/single_instance.rs`（与旧 Flutter 同公式的 FNV-1a UTF-16 命名互斥锁）；`clients/mica_rust/src/updater.rs`（GitHub Releases 拉取、强制大小与 SHA-256 校验、RAII 临时清理、退出前 flush、`/VERYSILENT ... /MICAWAITPID=<pid>`）；`clients/mica_rust/installer/mica.iss` 添加 `[InstallDelete]` 清理旧 Flutter 残留 DLL；已在 [Release dry-run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409) 由真实 `ISCC.exe` 编译出 `Mica-Setup-0.14.11.exe` 并通过 `test-installer-wait.ps1` |
 | **P1-1** | 明确并文档化平台交付范围 | **已完成** | `eb605e76` | 更新 `docs/architecture/fullstack-rust-architecture.md`（红线 3）、`README.md`、`README.zh-CN.md`、`docs/ops/release.md`：正式交付 Windows 桌面、Web、可选 Linux `.deb` 与跨平台 CLI；不交付 Android 与 macOS 桌面包，并在切换版发布说明标注 Android 止步 `0.14.x` |
-| **P1-2** | 桌面中文输入法与多浏览器兼容性实测 | **自动化全绿；待真人实测签收** | 本次提交 | 已归档独立验证与签收清单 [`fullstack-rust-ime-browser-verification-2026-11-24.md`](fullstack-rust-ime-browser-verification-2026-11-24.md)，严格区分自动化回归与真人 IME / 多浏览器手测签收，不以合成事件冒充 |
+| **P1-2** | 桌面中文输入法与多浏览器兼容性实测 | **自动化全绿；用户本机桌面+Web 真人实测确认通过** | `f497d4d9` | 已归档 [`fullstack-rust-ime-browser-verification-2026-11-24.md`](fullstack-rust-ime-browser-verification-2026-11-24.md)；2026-11-24 用户于物理 Windows 机器实测桌面端与 Web 端确认通过；未覆盖端（如 macOS Safari）与 `W-8` 安装包演练按实标注 |
 | **P1-3** | 重建高价值编辑器回归与新 Web 端 E2E + 拉高 CI 回执下限 | **已完成并验真** | `3bdb9a9a`、`6daa44f7`、`23bfecfa` | **重质量不凑水测试**：`crates/mica-editor` 新增 46 条高价值行为回归 + `proptest`（26 → **72 条**），并顺带捕获修复 3 个真实编辑器 bug（空文档撤销掉 0 块、嵌套列表序号重置、空嵌套列表回车未退缩进）；`e2e/web_e2e.mjs` 6 大核心场景在 CI 真实容器栈全过；CI `cargo_receipt` 下限上调为 `--workspace ≥ 550`（实测 **1,581**）、`mica-editor ≥ 70`（实测 **72**）、`mica-client ≥ 30`（实测 **32**）、`clients/mica_rust ≥ 110`（实测 **129**） |
 | **P1-4** | 修复 Linux GTK4/GStreamer CI 依赖并跑通完整 CI 与 Release dry-run | **已完成并验真** | `6daa44f7`、`d71011a1`、`23bfecfa` | 修复 `.github/workflows/{ci,release,release-dryrun}.yml`、`crates/cli/src/backup.rs` Linux `Stdio` 告警、升级 `url 2.5.9` / `cookie 0.18.3` 并登记 `nsh 0.6.1` 传递依赖 RustSec 豁免、恢复官方 `@modelcontextprotocol/inspector@1`（**39 个 MCP 工具通过**）、修复 `e2e/docker-compose.from-source.yml`；完整 CI（[45377675471](https://github.com/weironz/mica/actions/runs/45377675471)）7/7 与 Release dry-run（[45374949409](https://github.com/weironz/mica/actions/runs/45374949409)）9/9 双双全绿 |
 | **P1-5** | 消除内联脚本 `'unsafe-inline'`，落地精确 `sha256` CSP 校验 | **已完成并验真** | `8c100db7` | `deploy/nginx.conf` 与 `deploy/nginx.dev.conf` 使用 `'sha256-RBDgFD9prAEUa1zzW08ImyUTCJYoF2SOC6nga7ZjqJ0='`（零 `'unsafe-inline'`），由 `scripts/test-web-csp-hashes.sh`、`scripts/web-entry-cache-check.sh` 与 Playwright E2E（0 CSP report）三层锁死 |
@@ -54,9 +54,8 @@
 
 ---
 
-## 3. 合并 `main` 前仅剩的两项真人签收门禁
+## 3. 合并 `main` 前的最后核对项
 
-所有代码实现、自动化测试、安全审计、容器栈 Playwright E2E 与多平台发布彩排均已绿灯；合并 `main` 前仅保留两项必须由真人在物理机上执行的签收项：
+所有代码实现、自动化测试、安全审计、容器栈 Playwright E2E、多平台发布彩排及用户本机 Windows 桌面/Web 真人实测均已通过；合并 `main` / 正式发版前仅剩一项物理机演练供决定是否执行：
 
-1. **P1-2 真人输入法与多浏览器手测**：按 [`fullstack-rust-ime-browser-verification-2026-11-24.md`](fullstack-rust-ime-browser-verification-2026-11-24.md) 逐项勾完 Windows 桌面（微软拼音 / 搜狗）与 Web（Chrome / Firefox / 可测 Safari）。
-2. **P0-4 真实覆盖安装与回滚演练**：在已安装 `v0.14.11`（Flutter）的 Windows 机器上用彩排产出的 `Mica-Setup-0.14.11.exe` 执行覆盖升级 → 验证旧 DLL 清理、`store.db` 接管与单实例互斥 → 验证卸载回滚 `v0.14.11`。
+1. **P0-4 真实覆盖安装与回滚演练**：在已安装 `v0.14.11`（Flutter）的 Windows 机器上用彩排产出的 `Mica-Setup-0.14.11.exe` 执行覆盖升级 → 验证旧 DLL 清理、`store.db` 接管与单实例互斥 → 验证卸载回滚 `v0.14.11`。
