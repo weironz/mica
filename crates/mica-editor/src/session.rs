@@ -122,7 +122,33 @@ impl EditorSession {
 
   /// Like [`Self::from_markdown`], with an explicit 53-bit yrs `client_id`.
   pub fn from_markdown_with_client_id(markdown: &str, client_id: Option<u64>) -> Self {
-    let parsed = mica_md::parse(markdown, &mica_md::ParseOptions::default());
+    let mut parsed = mica_md::parse(markdown, &mica_md::ParseOptions::default());
+    // An empty Markdown document must still start with one editable paragraph
+    // in `MicaDoc` so initial caret placement and Undo never drop to 0 blocks.
+    let root_has_children = parsed
+      .blocks
+      .iter()
+      .find(|b| b.id == parsed.root_block_id)
+      .is_some_and(|b| !b.children.is_empty());
+    if !root_has_children {
+      let empty_id = uuid::Uuid::new_v4().to_string();
+      if let Some(root) = parsed
+        .blocks
+        .iter_mut()
+        .find(|b| b.id == parsed.root_block_id)
+      {
+        root.children.push(empty_id.clone());
+      } else {
+        parsed.blocks.push(mica_core::Block {
+          id: parsed.root_block_id.clone(),
+          kind: "page".to_string(),
+          text: String::new(),
+          data: Value::Null,
+          children: vec![empty_id.clone()],
+        });
+      }
+      parsed.blocks.push(mica_core::Block::new(empty_id, "paragraph"));
+    }
     let doc = MicaDoc::from_blocks_with_client_id(
       &parsed.root_block_id,
       &parsed.blocks,
@@ -1117,8 +1143,13 @@ impl EditorSession {
     let len = node.utf16_len();
     let at = snap_utf16_boundary(&node.text, sel.focus_pos().offset.min(len), false);
 
-    // Enter on empty list/todo/quote exits to paragraph.
+    // Enter on empty nested list item outdents one level first; at indent 0
+    // (or for quote/todo at indent 0), exits to a plain paragraph.
     if node.text.is_empty() && EditorBlock::continues_on_enter(&node.kind) {
+      if node.is_list_kind() && node.indent() > 0 {
+        self.cmd_indent(-1, ctx);
+        return;
+      }
       let b = &mut self.blocks[idx];
       b.kind = "paragraph".to_string();
       b.data = json!({});
@@ -1702,6 +1733,9 @@ impl EditorSession {
       return;
     };
     self.blocks = read_body_blocks(&self.doc, &self.root_block_id);
+    if self.blocks.is_empty() {
+      self.blocks.push(EditorBlock::new(self.gen_block_id(), "paragraph", ""));
+    }
     ctx.ops = diff_block_ops(&self.root_block_id, prev_blocks, &self.blocks);
     self.selection = restored_sel
       .restore(&self.blocks)

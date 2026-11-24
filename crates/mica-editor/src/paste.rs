@@ -321,32 +321,51 @@ pub fn copy_language(block: &EditorBlock) -> String {
 }
 
 /// Visible ordinal of a `numbered_list` item, walking back to the head of its
-/// run (same indent / quoteDepth / `li`). Mirrors `controller.dart::_visibleOrdinal`.
+/// run (same indent / quoteDepth / `li`), skipping over deeper nested list
+/// children that belong to preceding sibling items.
 pub fn visible_ordinal(blocks: &[EditorBlock], index: usize) -> Option<u64> {
   let node = blocks.get(index)?;
   if node.kind != "numbered_list" {
     return None;
   }
-  let same_run = |at: &EditorBlock| {
-    at.kind == "numbered_list"
-      && at.indent() == node.indent()
-      && at.quote_depth() == node.quote_depth()
-      && at.li_level() == node.li_level()
-  };
+  let target_indent = node.indent();
+  let target_quote = node.quote_depth();
+  let target_li = node.li_level();
   let restarts = |at: &EditorBlock| {
     let m = at.data_map();
     m.contains_key("start") || m.contains_key("marker")
   };
+
   let mut head = index;
-  while head > 0 && same_run(&blocks[head - 1]) && !restarts(&blocks[head]) {
-    head -= 1;
+  let mut siblings_before: u64 = 0;
+  let mut cursor = index;
+  while cursor > 0 && !restarts(&blocks[head]) {
+    let prev = &blocks[cursor - 1];
+    if prev.quote_depth() != target_quote {
+      break;
+    }
+    // Deeper nested children belong to the preceding sibling item — skip them.
+    if prev.indent() > target_indent || prev.li_level() > target_li {
+      cursor -= 1;
+      continue;
+    }
+    if prev.kind == "numbered_list"
+      && prev.indent() == target_indent
+      && prev.li_level() == target_li
+    {
+      siblings_before += 1;
+      head = cursor - 1;
+      cursor -= 1;
+    } else {
+      break;
+    }
   }
   let base = blocks[head]
     .data_map()
     .get("start")
     .and_then(Value::as_u64)
     .unwrap_or(1);
-  let ordinal = base.saturating_add((index - head) as u64);
+  let ordinal = base.saturating_add(siblings_before);
   Some(if ordinal <= 999_999_999 { ordinal } else { 1 })
 }
 
