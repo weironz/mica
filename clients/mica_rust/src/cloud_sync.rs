@@ -907,9 +907,19 @@ impl CloudSessionHandles {
 
     if !self.allow_local {
       let logout_conn = self.cloud_connector.borrow().clone();
-      spawn(async move {
-        let _ = net::run_blocking(move || logout_conn.logout_server()).await;
-      });
+      #[cfg(target_arch = "wasm32")]
+      {
+        // Execute synchronous same-origin `POST /api/auth/logout` directly so
+        // the server revokes the refresh family and clears HttpOnly cookies
+        // before returning — immune to popover Owner disposal or immediate F5.
+        let _ = logout_conn.logout_server();
+      }
+      #[cfg(not(target_arch = "wasm32"))]
+      {
+        spawn(async move {
+          let _ = net::run_blocking(move || logout_conn.logout_server()).await;
+        });
+      }
       let web_origin = {
         let cur = self.selected_cloud_origin.get_untracked();
         if cur.is_empty() { self.server_url.get_untracked() } else { cur }

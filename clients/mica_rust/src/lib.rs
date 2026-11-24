@@ -2613,7 +2613,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   // Cloud auth handlers shared between Settings and World Switcher
   let do_cloud_login: Rc<dyn Fn(String, String, String)> = {
     let cs = cloud_session.clone();
-    Rc::new(move |url: String, email: String, password: String| cs.login(url, email, password))
+    Rc::new(move |url: String, email: String, password: String| {
+      let cs_run = cs.clone();
+      app_owner.run(move || cs_run.login(url, email, password));
+    })
   };
 
   let do_cloud_logout: Rc<dyn Fn()> = {
@@ -2621,7 +2624,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move || {
       settings_modal_open.set(false);
       account_menu_open.set(false);
-      cs.logout_to_local();
+      let cs_run = cs.clone();
+      app_owner.run(move || cs_run.logout_to_local());
     })
   };
 

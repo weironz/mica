@@ -26,7 +26,7 @@
 - **`CAP-15-03` 多源导入（文件 / 文件夹 / ZIP / Notion）**：
   - 支持多选 `.md` 文件导入、本地目录递归导入（自动映射为 Mica 文件夹与页面树，支持根包裹）、`.mica.zip` 备份还原、普通 Markdown ZIP 导入、Notion 导出 ZIP 解析导入（自动清理 Notion 哈希后缀并修复内部链接）。
   - **自包含画板 SVG 自动无损还原**：无论通过服务端 ZIP 导入、桌面 ZIP 导入、解压后的本地文件夹导入、还是单文件 `.md` 导入，遇到指向自包含 Mica 画板 `.svg`（含 `<metadata id="mica-board-v1">`）的相对路径图片引用时，自动提取源码并还原为可编辑的 ` ```mica-board ` 块（不重复上传预览图）；画板编辑器本身也支持直接导出/重导自包含 `.svg`。普通 SVG 或被第三方剥离 metadata 的 SVG 安全降级为普通图片。
-  - 桌面端使用原生系统文件/文件夹/另存为对话框，支持 Headless/自动化测试降级路径。
+  - 桌面端使用原生系统文件/文件夹/另存为对话框（支持 Headless 降级路径）；Web 端使用浏览器原生 `Blob` + `<a download>` 下载与 `<input type="file">` + `FileReader` 选择上传，并在云端模式下直接通过服务端 API 持久化导入的文件夹与页面。
 
 ### Vault 本地文件模式与外部集成
 - **`CAP-15-04` 开放接口（CLI / HTTP API / MCP）**：文档读写同时通过 `mica-cli`、REST API 与 `mica-mcp` 暴露给外部脚本与 AI Agent（如 Claude Code / Antigravity），所有写入口遵守同一份树规则与 Markdown 规范。
@@ -48,3 +48,4 @@
 
 - **2026-11-23**：沉淀导入导出、`.mica.zip` 无损备份、Notion 导入与 Markdown 往返不变量规格。
 - **2026-11-24**：实现「自包含画板 SVG」全链路互通——`crates/mica-board` 支持 `<metadata id="mica-board-v1">` 嵌入与提取；`crates/interchange` 在纯 Markdown ZIP（工作区/文件夹/单页）导出时将 `mica-board` 块物化为 `assets/<标题>.svg` 标准图片引用，并在 ZIP、本地目录及单文件 `.md` 导入时自动无损还原为可编辑 ` ```mica-board ` 块；Mica 备份（`.mica.zip`）保持原生 ` ```mica-board ` 不变；画板独立 SVG 导出/导入同步支持无损往返。
+- **2026-11-24**：打通 Web 端浏览器原生导出下载（Markdown / HTML / ZIP / 画板 SVG / 画板 JSON）与 `<input type="file">` 导入（`.md` / `.zip` / `.mica.zip` / 自包含画板 `.svg` / draw.io），修复云端页面 `view.id != object_id` 导出子树 ZIP 匹配问题，并支持云端导入直接写入服务端工作区。

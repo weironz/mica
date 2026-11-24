@@ -23,7 +23,7 @@ use mica_sync::{
   PresenceUser, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase, TimerKind,
   is_empty_yrs_update, merge_yrs_updates, reconnect_backoff_ms,
 };
-use nsh_core::prelude::{Signal, spawn, timer};
+use nsh_core::prelude::{Owner, Signal, spawn, timer};
 use uuid::Uuid;
 
 use crate::editor_bridge::MicaDocumentBridge;
@@ -74,6 +74,7 @@ struct DocSyncInner {
 /// Manages the active cloud document's real-time `/ws/` CRDT [`SyncEngine`].
 #[derive(Clone)]
 pub(crate) struct DocSyncController {
+  owner: Owner,
   inner: Rc<RefCell<DocSyncInner>>,
   vault: Rc<VaultStore>,
   bridge: Rc<MicaDocumentBridge>,
@@ -98,6 +99,7 @@ impl DocSyncController {
     sync_badge: Signal<String>,
   ) -> Self {
     Self {
+      owner: Owner::current(),
       inner: Rc::new(RefCell::new(DocSyncInner::default())),
       vault,
       bridge,
@@ -207,15 +209,17 @@ impl DocSyncController {
     }
 
     let ctrl = self.clone();
-    spawn(async move {
-      timer(Duration::from_millis(LOCAL_DIFF_COALESCE_MS)).await;
-      let should_run = {
-        let inner = ctrl.inner.borrow();
-        inner.session_gen == sgen && inner.coalesce_gen == coalesce_gen
-      };
-      if should_run {
-        ctrl.flush_coalesced_diffs(sgen);
-      }
+    self.owner.run(move || {
+      spawn(async move {
+        timer(Duration::from_millis(LOCAL_DIFF_COALESCE_MS)).await;
+        let should_run = {
+          let inner = ctrl.inner.borrow();
+          inner.session_gen == sgen && inner.coalesce_gen == coalesce_gen
+        };
+        if should_run {
+          ctrl.flush_coalesced_diffs(sgen);
+        }
+      });
     });
   }
 
@@ -365,22 +369,24 @@ impl DocSyncController {
             *entry
           };
           let ctrl = self.clone();
-          spawn(async move {
-            timer(Duration::from_millis(delay_ms)).await;
-            let still_valid = {
-              let inner = ctrl.inner.borrow();
-              inner.session_gen == sgen && inner.timer_gens.get(&kind).copied() == Some(tgen)
-            };
-            if still_valid {
-              ctrl.dispatch_engine_event(
-                sgen,
-                SyncEvent::Tick {
-                  now_ms: now_ms(),
-                  timer_kind: kind,
-                  epoch,
-                },
-              );
-            }
+          self.owner.run(move || {
+            spawn(async move {
+              timer(Duration::from_millis(delay_ms)).await;
+              let still_valid = {
+                let inner = ctrl.inner.borrow();
+                inner.session_gen == sgen && inner.timer_gens.get(&kind).copied() == Some(tgen)
+              };
+              if still_valid {
+                ctrl.dispatch_engine_event(
+                  sgen,
+                  SyncEvent::Tick {
+                    now_ms: now_ms(),
+                    timer_kind: kind,
+                    epoch,
+                  },
+                );
+              }
+            });
           });
         }
         SyncEffect::CancelTimer { kind } => {
@@ -411,6 +417,10 @@ impl DocSyncController {
             && let Some(did) = doc_id
           {
             self.docs_store.borrow_mut().insert(did, self.bridge.export_markdown());
+            self.update_badge(
+              self.sync_phase.get_untracked(),
+              self.presence_users.get_untracked().len(),
+            );
           }
         }
         SyncEffect::RemoteBlocksChanged { .. } => {
@@ -489,50 +499,52 @@ impl DocSyncController {
     }
 
     let ctrl = self.clone();
-    spawn(async move {
-      let mut closed_reported = false;
-      while let Some(ev) = rx.recv().await {
-        let still_owner = {
-          let inner = ctrl.inner.borrow();
-          inner.session_gen == sgen && inner.ws_epoch == epoch
-        };
-        if !still_owner {
-          return;
+    self.owner.run(move || {
+      spawn(async move {
+        let mut closed_reported = false;
+        while let Some(ev) = rx.recv().await {
+          let still_owner = {
+            let inner = ctrl.inner.borrow();
+            inner.session_gen == sgen && inner.ws_epoch == epoch
+          };
+          if !still_owner {
+            return;
+          }
+          match ev {
+            WsEvent::Opened => {
+              ctrl.dispatch_engine_event(sgen, SyncEvent::SocketOpened { epoch });
+            }
+            WsEvent::Text(json) => {
+              ctrl.dispatch_engine_event(sgen, SyncEvent::SocketFrame { epoch, json });
+            }
+            WsEvent::Closed(_code, reason) => {
+              closed_reported = true;
+              ctrl.dispatch_engine_event(sgen, SyncEvent::SocketClosed { epoch, reason });
+              break;
+            }
+            WsEvent::Error(reason) => {
+              closed_reported = true;
+              ctrl.dispatch_engine_event(sgen, SyncEvent::SocketClosed { epoch, reason });
+              break;
+            }
+          }
         }
-        match ev {
-          WsEvent::Opened => {
-            ctrl.dispatch_engine_event(sgen, SyncEvent::SocketOpened { epoch });
-          }
-          WsEvent::Text(json) => {
-            ctrl.dispatch_engine_event(sgen, SyncEvent::SocketFrame { epoch, json });
-          }
-          WsEvent::Closed(_code, reason) => {
-            closed_reported = true;
-            ctrl.dispatch_engine_event(sgen, SyncEvent::SocketClosed { epoch, reason });
-            break;
-          }
-          WsEvent::Error(reason) => {
-            closed_reported = true;
-            ctrl.dispatch_engine_event(sgen, SyncEvent::SocketClosed { epoch, reason });
-            break;
+        if !closed_reported {
+          let still_owner = {
+            let inner = ctrl.inner.borrow();
+            inner.session_gen == sgen && inner.ws_epoch == epoch
+          };
+          if still_owner {
+            ctrl.dispatch_engine_event(
+              sgen,
+              SyncEvent::SocketClosed {
+                epoch,
+                reason: "socket_eof".to_string(),
+              },
+            );
           }
         }
-      }
-      if !closed_reported {
-        let still_owner = {
-          let inner = ctrl.inner.borrow();
-          inner.session_gen == sgen && inner.ws_epoch == epoch
-        };
-        if still_owner {
-          ctrl.dispatch_engine_event(
-            sgen,
-            SyncEvent::SocketClosed {
-              epoch,
-              reason: "socket_eof".to_string(),
-            },
-          );
-        }
-      }
+      });
     });
   }
 
@@ -571,6 +583,7 @@ type ViewsChangedCallback = Rc<dyn Fn(String, Uuid)>;
 /// notifications from other devices, CLI, or MCP and triggers a debounced tree refresh.
 #[derive(Clone)]
 pub(crate) struct ViewsWsWatcher {
+  owner: Owner,
   inner: Rc<RefCell<ViewsWatcherInner>>,
   cloud_connector: Rc<RefCell<CloudConnector>>,
   on_views_changed: Rc<RefCell<Option<ViewsChangedCallback>>>,
@@ -579,6 +592,7 @@ pub(crate) struct ViewsWsWatcher {
 impl ViewsWsWatcher {
   pub(crate) fn new(cloud_connector: Rc<RefCell<CloudConnector>>) -> Self {
     Self {
+      owner: Owner::current(),
       inner: Rc::new(RefCell::new(ViewsWatcherInner::default())),
       cloud_connector,
       on_views_changed: Rc::new(RefCell::new(None)),
@@ -651,37 +665,39 @@ impl ViewsWsWatcher {
     }
 
     let watcher = self.clone();
-    spawn(async move {
-      while let Some(ev) = rx.recv().await {
+    self.owner.run(move || {
+      spawn(async move {
+        while let Some(ev) = rx.recv().await {
+          if watcher.inner.borrow().watcher_gen != sgen {
+            return;
+          }
+          match ev {
+            WsEvent::Opened => {
+              watcher.inner.borrow_mut().reconnect_attempt = 0;
+            }
+            WsEvent::Text(raw) => {
+              if is_views_changed_frame(&raw) {
+                watcher.schedule_refresh(sgen, origin.clone(), ws_id);
+              }
+            }
+            WsEvent::Closed(_, _) | WsEvent::Error(_) => break,
+          }
+        }
+
         if watcher.inner.borrow().watcher_gen != sgen {
           return;
         }
-        match ev {
-          WsEvent::Opened => {
-            watcher.inner.borrow_mut().reconnect_attempt = 0;
-          }
-          WsEvent::Text(raw) => {
-            if is_views_changed_frame(&raw) {
-              watcher.schedule_refresh(sgen, origin.clone(), ws_id);
-            }
-          }
-          WsEvent::Closed(_, _) | WsEvent::Error(_) => break,
+        let delay_ms = {
+          let mut inner = watcher.inner.borrow_mut();
+          let d = reconnect_backoff_ms(inner.reconnect_attempt);
+          inner.reconnect_attempt = inner.reconnect_attempt.saturating_add(1);
+          d
+        };
+        timer(Duration::from_millis(delay_ms)).await;
+        if watcher.inner.borrow().watcher_gen == sgen {
+          watcher.connect_once(sgen, origin, ws_id);
         }
-      }
-
-      if watcher.inner.borrow().watcher_gen != sgen {
-        return;
-      }
-      let delay_ms = {
-        let mut inner = watcher.inner.borrow_mut();
-        let d = reconnect_backoff_ms(inner.reconnect_attempt);
-        inner.reconnect_attempt = inner.reconnect_attempt.saturating_add(1);
-        d
-      };
-      timer(Duration::from_millis(delay_ms)).await;
-      if watcher.inner.borrow().watcher_gen == sgen {
-        watcher.connect_once(sgen, origin, ws_id);
-      }
+      });
     });
   }
 
@@ -695,19 +711,21 @@ impl ViewsWsWatcher {
       inner.debounce_gen
     };
     let watcher = self.clone();
-    spawn(async move {
-      timer(Duration::from_millis(VIEWS_REFRESH_DEBOUNCE_MS)).await;
-      let still_valid = {
-        let inner = watcher.inner.borrow();
-        inner.watcher_gen == sgen && inner.debounce_gen == dgen
-      };
-      if !still_valid {
-        return;
-      }
-      let cb = watcher.on_views_changed.borrow().clone();
-      if let Some(cb) = cb {
-        cb(origin, ws_id);
-      }
+    self.owner.run(move || {
+      spawn(async move {
+        timer(Duration::from_millis(VIEWS_REFRESH_DEBOUNCE_MS)).await;
+        let still_valid = {
+          let inner = watcher.inner.borrow();
+          inner.watcher_gen == sgen && inner.debounce_gen == dgen
+        };
+        if !still_valid {
+          return;
+        }
+        let cb = watcher.on_views_changed.borrow().clone();
+        if let Some(cb) = cb {
+          cb(origin, ws_id);
+        }
+      });
     });
   }
 }

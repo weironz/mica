@@ -367,7 +367,7 @@ pub fn build_subtree_zip_bytes(
 ) -> Result<Vec<u8>, String> {
   let target = views
     .iter()
-    .find(|v| !v.is_deleted && v.id == root_id)
+    .find(|v| !v.is_deleted && (v.id == root_id || v.object_id == root_id))
     .ok_or_else(|| format!("未找到要导出的节点：{root_id}"))?;
 
   let payloads = docs_to_payloads(views, docs);
@@ -375,7 +375,7 @@ pub fn build_subtree_zip_bytes(
 
   let entries = if target.object_type == "folder" {
     let nodes = views_to_tree_nodes(views);
-    let root_str = root_id.to_string();
+    let root_str = target.id.to_string();
     match format {
       ArchiveExportFormat::BackupMicaZip => {
         build_markdown_tree_zip(&nodes, Some(&root_str), &payloads, &images)
@@ -1389,5 +1389,34 @@ mod tests {
     let svg_specs = parse_picked_file_bytes("arch.svg", svg.as_bytes(), false).unwrap();
     assert_eq!(svg_specs.len(), 1);
     assert!(svg_specs[0].markdown.contains("```mica-board"));
+
+    // Cloud views have `view.id != view.object_id`; subtree ZIP export must match either.
+    let ws = Uuid::new_v4();
+    let view_id = Uuid::new_v4();
+    let doc_id = Uuid::new_v4();
+    assert_ne!(view_id, doc_id);
+    let cloud_view = View {
+      id: view_id,
+      workspace_id: ws,
+      parent_view_id: None,
+      object_id: doc_id,
+      object_type: "document".to_string(),
+      name: "Cloud Page".to_string(),
+      icon: None,
+      position: "0000000010".to_string(),
+      is_deleted: false,
+      created_by: Uuid::nil(),
+      created_at: chrono::Utc::now(),
+      updated_at: chrono::Utc::now(),
+      state_bytes: None,
+    };
+    let mut docs = HashMap::new();
+    docs.insert(doc_id, "# Cloud Body".to_string());
+    let zip_bytes =
+      build_subtree_zip_bytes(doc_id, &[cloud_view], &docs, ArchiveExportFormat::MarkdownZip)
+        .expect("export cloud page ZIP by object_id");
+    let reimported = parse_zip_archive_to_pages(&zip_bytes, false).unwrap();
+    assert_eq!(reimported.len(), 1);
+    assert!(reimported[0].markdown.contains("Cloud Body"));
   }
 }

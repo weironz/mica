@@ -9,7 +9,8 @@ RUN apk add --no-cache brotli \
   && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.wasm' \) -size +1k \
        -exec brotli --best --keep {} + \
   && apk del brotli \
-  && test -s /usr/share/nginx/html/mica_rust.wasm.br \
+  && test -s /usr/share/nginx/html/mica_rust_bg.wasm.br \
+  && test -s /usr/share/nginx/html/mica_rust.js.br \
   && test -s /usr/share/nginx/html/nsh.js.br
 # Refuse incomplete pure-Rust bundles or retired Flutter/JS assets.
 RUN test ! -e /usr/share/nginx/html/main.dart.js \
@@ -17,7 +18,8 @@ RUN test ! -e /usr/share/nginx/html/main.dart.js \
   && test ! -e /usr/share/nginx/html/mermaid.min.js \
   && test -s /usr/share/nginx/html/index.html \
   && test -s /usr/share/nginx/html/nsh.js \
-  && test -s /usr/share/nginx/html/mica_rust.wasm \
-  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -r /usr/share/nginx/html/mica_rust.wasm' \
+  && test -s /usr/share/nginx/html/mica_rust.js \
+  && test -s /usr/share/nginx/html/mica_rust_bg.wasm \
+  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -r /usr/share/nginx/html/nsh.js && test -r /usr/share/nginx/html/mica_rust.js && test -r /usr/share/nginx/html/mica_rust_bg.wasm' \
   || { echo "pure-Rust web bundle is incomplete, contains retired assets, or is unreadable by nginx" >&2; exit 1; }
 EXPOSE 80
