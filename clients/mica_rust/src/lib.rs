@@ -35,7 +35,6 @@ pub mod emoji_picker;
 pub mod graph_dialog;
 pub mod mica_icons;
 pub mod mica_theme;
-pub mod net;
 pub mod page_width;
 pub mod preview_render;
 pub mod property_panel;
@@ -46,7 +45,6 @@ pub mod settings_view;
 pub mod share_dialog;
 pub mod sidebar;
 pub mod single_instance;
-pub mod storage;
 pub mod table_view;
 pub mod text_geometry;
 pub mod tooltip;
@@ -57,11 +55,10 @@ pub mod tree_dnd;
 pub mod updater;
 pub mod usage_stats_view;
 pub mod version_history;
-pub mod web_idb;
-pub mod web_runtime;
 pub mod workspace_views;
 pub mod world_switcher;
-pub mod ws_transport;
+// Re-export pure L2 client modules (zero `nsh-*` dependencies, owned by `crates/mica-client`).
+pub use mica_client::{net, storage, web_idb, web_runtime, ws_transport};
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 

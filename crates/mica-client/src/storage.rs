@@ -1926,7 +1926,7 @@ fn seed_non_secret_prefs_from_legacy(legacy_path: &Path) -> BTreeMap<String, Str
 }
 
 fn canonical_cred_origin(origin: &str) -> String {
-  mica_client::normalize_server_url(origin).unwrap_or_else(|_| normalize_origin(origin))
+  crate::normalize_server_url(origin).unwrap_or_else(|_| normalize_origin(origin))
 }
 
 fn normalize_origin(origin: &str) -> String {
@@ -2553,10 +2553,10 @@ mod tests {
     let db_str = db_path.to_str().unwrap().to_string();
 
     let server_raw = "https://Mica.Example.com:443/app/";
-    let server_norm = mica_client::normalize_server_url(server_raw).unwrap();
-    let key_a = mica_client::cloud_cache_origin(server_raw, "user-a").unwrap();
-    let key_b = mica_client::cloud_cache_origin("https://mica.example.com/app", "user-b").unwrap();
-    let legacy_bare = mica_client::legacy_cloud_cache_origin(server_raw).unwrap();
+    let server_norm = crate::normalize_server_url(server_raw).unwrap();
+    let key_a = crate::cloud_cache_origin(server_raw, "user-a").unwrap();
+    let key_b = crate::cloud_cache_origin("https://mica.example.com/app", "user-b").unwrap();
+    let legacy_bare = crate::legacy_cloud_cache_origin(server_raw).unwrap();
     assert_eq!(server_norm, "https://mica.example.com/app");
     assert_eq!(key_a, r#"["https://mica.example.com/app","user-a"]"#);
 

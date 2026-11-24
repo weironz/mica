@@ -1,14 +1,6 @@
 //! Comprehensive unit & persistence tests for `storage.rs` (`VaultStore`) and
 //! `net.rs` (`CloudConnector`).
 
-#[allow(dead_code)]
-#[path = "../src/storage.rs"]
-mod storage;
-
-#[allow(dead_code)]
-#[path = "../src/net.rs"]
-mod net;
-
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -20,8 +12,8 @@ use mica_core::{Block, MicaDoc};
 use mica_sync::{SyncEffect, SyncEvent, SyncPhase};
 use uuid::Uuid;
 
-use crate::net::{CloudConfig, CloudConnector};
-use crate::storage::{DEFAULT_ORIGIN, VaultStore};
+use mica_client::net::{CloudConfig, CloudConnector};
+use mica_client::storage::{DEFAULT_ORIGIN, VaultStore};
 
 fn make_view(
   ws: Uuid,

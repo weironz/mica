@@ -47,7 +47,6 @@ mica-md = { path = "../../crates/md-core", features = ["render"] }
 mica-sync = { path = "../../crates/mica-sync", features = ["sqlite"] }
 dirs-next = "2"
 sha2 = "0.10"
-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -56,44 +55,7 @@ nsh-platform-web = { version = "=0.6.1", default-features = false }
 uuid = { version = "1.11", features = ["serde", "v4", "js"] }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = [
-  "AbortController",
-  "AbortSignal",
-  "Blob",
-  "BlobPropertyBag",
-  "CloseEvent",
-  "Document",
-  "DomException",
-  "DomStringList",
-  "Element",
-  "ErrorEvent",
-  "Event",
-  "File",
-  "FileList",
-  "FileReader",
-  "Headers",
-  "HtmlAnchorElement",
-  "HtmlElement",
-  "HtmlInputElement",
-  "IdbDatabase",
-  "IdbFactory",
-  "IdbObjectStore",
-  "IdbOpenDbRequest",
-  "IdbRequest",
-  "IdbTransaction",
-  "IdbTransactionMode",
-  "IdbVersionChangeEvent",
-  "Location",
-  "MessageEvent",
-  "Request",
-  "RequestCredentials",
-  "RequestInit",
-  "Response",
-  "Storage",
-  "Url",
-  "WebSocket",
-  "Window",
-] }
+web-sys = { version = "0.3", features = ["Window"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = "=0.6.1"

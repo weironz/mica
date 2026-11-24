@@ -9,8 +9,8 @@
 //! async `window.fetch` with `AbortController` timeouts via [`crate::web_runtime::fetch_request`].
 
 use mica_api_types::{View, Workspace};
-use mica_client::protocol::{decode_auth, decode_views, decode_workspaces};
-use mica_client::{ApiEndpoints, ClaimTracker, WorldOrigin};
+use crate::protocol::{decode_auth, decode_views, decode_workspaces};
+use crate::{ApiEndpoints, ClaimTracker, WorldOrigin};
 use mica_sync::{
   MemoryMirrorStorage, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase, SyncStorage,
 };
