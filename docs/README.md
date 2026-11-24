@@ -156,6 +156,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [fullstack-rust-branch-review-2026-11-24.md](reviews/fullstack-rust-branch-review-2026-11-24.md) | `feat/fullstack-rust-architecture` 分支评审与后续实施计划：已定方向（全栈 Rust、界面层留在 `nsh`、Flutter 冻结维护）、拆分合入与预览渠道里程碑、P0/P1/P2 任务（缓存键 #111、Web 异步与离线、自动更新等）、Web 首屏实测与 W1–W6 优化、切换闸门；复现脚本在 `reviews/assets/fullstack-rust-2026-11-24/` |
 | [fullstack-rust-p0-p2-verification-2026-11-24.md](reviews/fullstack-rust-p0-p2-verification-2026-11-24.md) | **全栈 Rust 架构评审（P0–P2）落地与验证总台账**（含全部 commit 映射、完整 CI 与 Release dry-run 实测回执及合并前真人签收项） |
 | [fullstack-rust-ime-browser-verification-2026-11-24.md](reviews/fullstack-rust-ime-browser-verification-2026-11-24.md) | 全栈 Rust 分支输入法与多浏览器验证记录与真人签收矩阵（P1-2） |
 | [fullstack-rust-p0-spike-2026-11-22.md](reviews/fullstack-rust-p0-spike-2026-11-22.md) | 全栈 Rust Phase 0 全景实证与 L2 代码边界摸底（NSH 纯 Rust 瘦身 Web 1.39 MiB Brotli、路线二-B 2,000 块/500 节点基准、Board/Sync/Editor 抽离蓝图） |
