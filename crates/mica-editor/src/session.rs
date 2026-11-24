@@ -1516,6 +1516,28 @@ impl EditorSession {
     if idx + 1 >= self.blocks.len() {
       return;
     }
+
+    // Empty plain paragraph with a block below: drop the empty line itself so
+    // the following block rises with its kind/formatting intact (and atomic
+    // blocks like images are selected rather than deleted on first press).
+    if self.blocks[idx].text.is_empty()
+      && self.blocks[idx].kind == "paragraph"
+      && !self.blocks[idx].is_atomic()
+    {
+      let next_is_atomic = self.blocks[idx + 1].is_atomic();
+      let removed_id = self.blocks.remove(idx).id;
+      ctx.ops.push(DocOp::DeleteBlock {
+        block_id: removed_id,
+      });
+      ctx.typing_block = None;
+      if next_is_atomic {
+        self.selection = Some(DocSelection::block_atom(idx));
+      } else {
+        self.collapse_to(DocPosition::new(idx, 0));
+      }
+      return;
+    }
+
     if self.blocks[idx + 1].is_atomic() {
       let removed_id = self.blocks.remove(idx + 1).id;
       ctx.ops.push(DocOp::DeleteBlock {

@@ -1942,21 +1942,23 @@ pub fn editor_view(
               }
             })
             .on_key_press(move |k: &str| {
-              if k == "Backspace"
-                && !st_key_press.borrow().composing
-                && st_key_press.borrow().text.is_empty()
-              {
-                if try_backspace_to_title(
-                  &br_key_press,
-                  show_page_title,
-                  title_ref,
-                  sink_ref,
-                  editor_focused,
-                ) {
-                  return;
+              if !st_key_press.borrow().composing && st_key_press.borrow().text.is_empty() {
+                if k == "Backspace" {
+                  if try_backspace_to_title(
+                    &br_key_press,
+                    show_page_title,
+                    title_ref,
+                    sink_ref,
+                    editor_focused,
+                  ) {
+                    return;
+                  }
+                  br_key_press.dispatch(EditorCommand::DeleteBackward);
+                  sync_slash_palette_from_caret(&br_key_press, slash, ai_enabled);
+                } else if k == "Delete" {
+                  br_key_press.dispatch(EditorCommand::DeleteForward);
+                  sync_slash_palette_from_caret(&br_key_press, slash, ai_enabled);
                 }
-                br_key_press.dispatch(EditorCommand::DeleteBackward);
-                sync_slash_palette_from_caret(&br_key_press, slash, ai_enabled);
               }
             })
             .on_paste(move |p: &PasteEvent| {
@@ -2375,17 +2377,16 @@ fn write_rich_clipboard(payload: mica_editor::ClipboardPayload) {
 
 /// If the caret is collapsed at `(block 0, offset 0)` of a plain paragraph and
 /// the page title input is visible, moves focus cleanly back onto the title.
-fn try_backspace_to_title(
-  bridge: &MicaDocumentBridge,
-  show_page_title: Signal<bool>,
-  title_ref: ElementRef,
-  sink_ref: ElementRef,
-  editor_focused: Signal<bool>,
+fn should_backspace_to_title(
+  show_page_title: bool,
+  selection: Option<&DocSelection>,
+  first_block: Option<&mica_editor::EditorBlock>,
+  block_count: usize,
 ) -> bool {
-  if !show_page_title.get_untracked() {
+  if !show_page_title {
     return false;
   }
-  let Some(sel) = bridge.selection() else {
+  let Some(sel) = selection else {
     return false;
   };
   if !sel.is_collapsed() {
@@ -2395,10 +2396,37 @@ fn try_backspace_to_title(
   if pos.node != 0 || pos.offset != 0 {
     return false;
   }
-  let Some(blk) = bridge.block_at(0) else {
+  let Some(blk) = first_block else {
     return false;
   };
   if blk.kind != "paragraph" {
+    return false;
+  }
+  // An empty first paragraph with following blocks must be dropped first by
+  // `EditorCommand::DeleteBackward` so the body rises by one line; only once
+  // block 0 holds real text (or is the document's sole block) does Backspace
+  // step focus up into the page title.
+  if blk.text.is_empty() && block_count >= 2 {
+    return false;
+  }
+  true
+}
+
+fn try_backspace_to_title(
+  bridge: &MicaDocumentBridge,
+  show_page_title: Signal<bool>,
+  title_ref: ElementRef,
+  sink_ref: ElementRef,
+  editor_focused: Signal<bool>,
+) -> bool {
+  let sel = bridge.selection();
+  let first = bridge.block_at(0);
+  if !should_backspace_to_title(
+    show_page_title.get_untracked(),
+    sel.as_ref(),
+    first.as_ref(),
+    bridge.block_count_signal().get_untracked(),
+  ) {
     return false;
   }
   sink_ref.blur();
@@ -3784,4 +3812,31 @@ fn menu_check_row(
       .text_size(px(12.5))
       .text_color(move || palette(dark_mode.get()).text_primary),
     )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::should_backspace_to_title;
+  use mica_editor::{DocSelection, EditorBlock};
+
+  #[test]
+  fn backspace_to_title_yields_to_drop_empty_first_line_when_following_block_exists() {
+    let sel0 = DocSelection::caret(0, 0);
+    let empty_para = EditorBlock::new("b0", "paragraph", "");
+    let non_empty_para = EditorBlock::new("b0", "paragraph", "Spectrum-X");
+    let heading = EditorBlock::new("b0", "heading", "");
+
+    // Empty first line with content below: must NOT steal Backspace to title,
+    // so `DeleteBackward` removes the leading blank line first.
+    assert!(!should_backspace_to_title(true, Some(&sel0), Some(&empty_para), 2));
+
+    // Sole empty block in document: Backspace steps focus to title.
+    assert!(should_backspace_to_title(true, Some(&sel0), Some(&empty_para), 1));
+
+    // Non-empty first paragraph at offset 0: Backspace steps focus to title.
+    assert!(should_backspace_to_title(true, Some(&sel0), Some(&non_empty_para), 2));
+
+    // Styled block (heading/list) sheds style first instead of jumping to title.
+    assert!(!should_backspace_to_title(true, Some(&sel0), Some(&heading), 1));
+  }
 }

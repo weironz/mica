@@ -526,3 +526,63 @@ fn caret_tracks_cleanly_after_typing_and_splitting_chinese_text() {
   assert_eq!(s.blocks()[1].text, "世界");
   assert_eq!(caret(&s), DocPosition::new(1, 0));
 }
+
+#[test]
+fn empty_first_line_dropped_by_backspace_and_delete_preserving_next_block_kind() {
+  // 1. Backspace on an empty first paragraph above a bold paragraph drops line 0.
+  let mut s = EditorSession::from_markdown("**Spectrum-X** 平台");
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, 0)),
+  });
+  s.dispatch(EditorCommand::SplitBlock);
+  assert_eq!(s.blocks().len(), 2);
+  assert_eq!(s.blocks()[0].text, "");
+  assert_eq!(s.blocks()[1].text, "Spectrum-X 平台");
+
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, 0)),
+  });
+  s.dispatch(EditorCommand::DeleteBackward);
+  assert_eq!(s.blocks().len(), 1);
+  assert_eq!(s.blocks()[0].text, "Spectrum-X 平台");
+  assert!(s.blocks()[0].marks().iter().any(|m| m.kind == "bold"));
+  assert_eq!(caret(&s), DocPosition::new(0, 0));
+
+  // 2. Delete (forward) on an empty first paragraph above a heading drops line 0
+  //    AND preserves the heading kind rather than flattening it to paragraph.
+  let mut s2 = EditorSession::from_markdown("## 架构概览");
+  s2.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, 0)),
+  });
+  s2.dispatch(EditorCommand::SplitBlock);
+  assert_eq!(s2.blocks().len(), 2);
+  assert_eq!(s2.blocks()[0].kind, "paragraph");
+  assert_eq!(s2.blocks()[0].text, "");
+  assert_eq!(s2.blocks()[1].kind, "heading");
+
+  s2.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, 0)),
+  });
+  s2.dispatch(EditorCommand::DeleteForward);
+  assert_eq!(s2.blocks().len(), 1);
+  assert_eq!(s2.blocks()[0].kind, "heading");
+  assert_eq!(s2.blocks()[0].text, "架构概览");
+  assert_eq!(caret(&s2), DocPosition::new(0, 0));
+
+  // 3. Delete (forward) on an empty paragraph above an image removes the blank
+  //    line and selects the image atom rather than deleting the image.
+  let mut s4 = EditorSession::from_markdown("placeholder\n\n![diagram](https://example.com/a.png)");
+  s4.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::from_positions(
+      DocPosition::new(0, 0),
+      DocPosition::new(0, 11),
+    )),
+  });
+  s4.dispatch(EditorCommand::DeleteBackward);
+  assert_eq!(s4.blocks()[0].text, "");
+  assert_eq!(s4.blocks()[1].kind, "image");
+  s4.dispatch(EditorCommand::DeleteForward);
+  assert_eq!(s4.blocks().len(), 1);
+  assert_eq!(s4.blocks()[0].kind, "image");
+  assert_eq!(s4.selection(), Some(&DocSelection::block_atom(0)));
+}
