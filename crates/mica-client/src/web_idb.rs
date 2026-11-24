@@ -69,6 +69,57 @@ pub fn decode_snapshot(raw: &str) -> Result<IdbHydrateSnapshot, String> {
   serde_json::from_str(raw).map_err(|e| format!("failed to decode IDB snapshot: {e}"))
 }
 
+// ── Legacy Flutter Web mirror (`mica-localfirst`) migration ──────────────────
+//
+// Flutter Web (<= 0.14.x) kept each cloud doc's offline edits in IndexedDB
+// database `mica-localfirst`, stores `base` / `outbox` / `remote` / `cursor`,
+// one record per doc keyed `"{cache_origin}|{doc_id}"` (the same #111 tuple
+// origin used here). Without a migration, edits a user made offline in the
+// Flutter Web client and never synced would be stranded at cutover. On every
+// cloud doc open the pure-Rust client folds the legacy outbox rows the server
+// has not acked (`clock > cursor.pushedClock`) into its own outbox, persists
+// that, and only then deletes the legacy record — so a crash in between leaves
+// a duplicate (harmless: yrs updates are idempotent), never a loss. `base` and
+// `remote` are server-derived caches and are dropped, not migrated.
+
+/// Row key of the legacy Flutter Web `mica-localfirst` stores.
+pub fn legacy_flutter_doc_key(cache_origin: &str, doc_id: &str) -> String {
+  format!("{cache_origin}|{doc_id}")
+}
+
+/// Append the legacy outbox rows the server never acknowledged
+/// (`clock > legacy_pushed_clock`) to `snap.outbox`, in their original order,
+/// renumbered after the snapshot's own clocks. Rows already present (a
+/// re-run after an interrupted migration) are skipped. Returns how many rows
+/// were appended.
+pub fn merge_legacy_outbox(
+  snap: &mut IdbHydrateSnapshot,
+  mut legacy_rows: Vec<(i64, Vec<u8>)>,
+  legacy_pushed_clock: i64,
+) -> usize {
+  legacy_rows.retain(|(clock, bytes)| *clock > legacy_pushed_clock && !bytes.is_empty());
+  legacy_rows.sort_by_key(|(clock, _)| *clock);
+  let mut next = snap
+    .outbox
+    .iter()
+    .map(|e| e.clock)
+    .max()
+    .unwrap_or(0)
+    .max(snap.cursor.pushed_clock);
+  let mut appended = 0;
+  for (_, bytes) in legacy_rows {
+    if snap.outbox.iter().any(|e| e.bytes == bytes) {
+      continue;
+    }
+    next += 1;
+    snap
+      .outbox
+      .push(mica_sync::OutboxEntry { clock: next, bytes });
+    appended += 1;
+  }
+  appended
+}
+
 // ── Browser IndexedDB + Web Locks implementation (wasm32) ────────────────────
 
 #[cfg(target_arch = "wasm32")]
@@ -250,7 +301,7 @@ mod imp {
   /// Run `op` inside a browser exclusive Web Lock (`navigator.locks.request`)
   /// when available, falling back to direct execution in browsers without Web
   /// Locks (e.g. insecure contexts). Prevents cross-tab read-modify-write races.
-  async fn with_doc_web_lock<T, F, Fut>(lock_name: &str, op: F) -> Result<T, String>
+  pub(super) async fn with_doc_web_lock<T, F, Fut>(lock_name: &str, op: F) -> Result<T, String>
   where
     T: 'static,
     F: FnOnce() -> Fut + 'static,
@@ -385,13 +436,378 @@ mod imp {
 }
 
 #[cfg(target_arch = "wasm32")]
+mod legacy {
+  use std::cell::Cell;
+
+  use mica_sync::IdbHydrateSnapshot;
+  use wasm_bindgen::closure::Closure;
+  use wasm_bindgen::{JsCast, JsValue};
+  use wasm_bindgen_futures::JsFuture;
+  use web_sys::{Event, IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
+
+  use super::{
+    decode_snapshot, encode_snapshot, idb_doc_key, legacy_flutter_doc_key, merge_legacy_outbox,
+  };
+
+  const LEGACY_DB: &str = "mica-localfirst";
+  const LEGACY_STORES: [&str; 4] = ["base", "outbox", "remote", "cursor"];
+  const NEW_DB: &str = "mica_sync_v1";
+  const NEW_STORE: &str = "docs";
+
+  thread_local! {
+    /// Set once this page learns there is no legacy database, so later doc
+    /// opens skip the probe.
+    static LEGACY_ABSENT: Cell<bool> = const { Cell::new(false) };
+  }
+
+  /// Turn an IDBRequest into a future. NOT an `async fn` on purpose: the
+  /// success/error handlers must be attached in the same turn the request is
+  /// issued. Several requests issued together can complete before a lazily
+  /// polled future would attach its handlers, and that future never resolves.
+  fn request(req: &IdbRequest) -> JsFuture {
+    let target = req.clone();
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+      let ok_req = target.clone();
+      let on_ok = Closure::once_into_js(move |_e: Event| {
+        let _ = resolve.call1(
+          &JsValue::NULL,
+          &ok_req.result().unwrap_or(JsValue::UNDEFINED),
+        );
+      });
+      let on_err = Closure::once_into_js(move |_e: Event| {
+        let _ = reject.call1(
+          &JsValue::NULL,
+          &JsValue::from_str("IndexedDB request failed"),
+        );
+      });
+      target.set_onsuccess(Some(on_ok.unchecked_ref()));
+      target.set_onerror(Some(on_err.unchecked_ref()));
+    });
+    JsFuture::from(promise)
+  }
+
+  /// Open the legacy database only if it already exists: a fresh open fires
+  /// `upgradeneeded`, which we abort so no empty database is left behind.
+  async fn open_existing_legacy_db() -> Result<Option<IdbDatabase>, String> {
+    let factory = web_sys::window()
+      .ok_or("window unavailable")?
+      .indexed_db()
+      .map_err(|e| format!("{e:?}"))?
+      .ok_or("indexedDB disabled")?;
+    let open_req: IdbOpenDbRequest = factory.open(LEGACY_DB).map_err(|e| format!("{e:?}"))?;
+    let upgrade_req = open_req.clone();
+    let on_upgrade = Closure::once_into_js(move |_e: Event| {
+      if let Some(tx) = upgrade_req.transaction() {
+        let _ = tx.abort();
+      }
+    });
+    open_req.set_onupgradeneeded(Some(on_upgrade.unchecked_ref()));
+    let req: &IdbRequest = open_req.as_ref();
+    let Ok(val) = request(req).await else {
+      return Ok(None); // aborted upgrade = the database did not exist
+    };
+    let db: IdbDatabase = val.dyn_into().map_err(|_| "not an IDBDatabase")?;
+    let names = db.object_store_names();
+    if !LEGACY_STORES.iter().all(|s| names.contains(s)) {
+      db.close();
+      return Ok(None);
+    }
+    Ok(Some(db))
+  }
+
+  fn bytes_of(v: &JsValue) -> Option<Vec<u8>> {
+    if let Some(arr) = v.dyn_ref::<js_sys::Uint8Array>() {
+      return Some(arr.to_vec());
+    }
+    let arr = v.dyn_ref::<js_sys::Array>()?;
+    Some(
+      arr
+        .iter()
+        .map(|n| n.as_f64().unwrap_or(0.0) as u8)
+        .collect(),
+    )
+  }
+
+  fn number_field(obj: &JsValue, name: &str) -> Option<i64> {
+    js_sys::Reflect::get(obj, &JsValue::from_str(name))
+      .ok()?
+      .as_f64()
+      .map(|n| n as i64)
+  }
+
+  fn err(e: JsValue) -> String {
+    format!("{e:?}")
+  }
+
+  // An IndexedDB transaction closes as soon as control returns to the event
+  // loop with no request pending, so every request of one transaction is
+  // issued BEFORE the first await; a read-modify-write uses two transactions
+  // (the caller holds the doc's Web Lock across both).
+
+  /// Read the legacy outbox rows and acked clock for one doc.
+  async fn read_legacy(
+    db: &IdbDatabase,
+    key: &str,
+  ) -> Result<(Vec<(i64, Vec<u8>)>, i64, bool), String> {
+    let stores = js_sys::Array::new();
+    stores.push(&JsValue::from_str("outbox"));
+    stores.push(&JsValue::from_str("cursor"));
+    let tx = db
+      .transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readonly)
+      .map_err(err)?;
+    let k = JsValue::from_str(key);
+    let outbox_req = tx
+      .object_store("outbox")
+      .map_err(err)?
+      .get(&k)
+      .map_err(err)?;
+    let cursor_req = tx
+      .object_store("cursor")
+      .map_err(err)?
+      .get(&k)
+      .map_err(err)?;
+    let (outbox_fut, cursor_fut) = (request(&outbox_req), request(&cursor_req));
+    let outbox_rec = outbox_fut.await.map_err(err)?;
+    let cursor_rec = cursor_fut.await.map_err(err)?;
+    let present = !outbox_rec.is_undefined() || !cursor_rec.is_undefined();
+    let pushed = if cursor_rec.is_object() {
+      number_field(&cursor_rec, "pushedClock").unwrap_or(0)
+    } else {
+      0
+    };
+    let mut rows = Vec::new();
+    if outbox_rec.is_object()
+      && let Ok(list) = js_sys::Reflect::get(&outbox_rec, &JsValue::from_str("rows"))
+      && let Some(list) = list.dyn_ref::<js_sys::Array>()
+    {
+      for row in list.iter() {
+        let clock = number_field(&row, "clock");
+        let bytes = js_sys::Reflect::get(&row, &JsValue::from_str("bytes"))
+          .ok()
+          .and_then(|b| bytes_of(&b));
+        if let (Some(clock), Some(bytes)) = (clock, bytes) {
+          rows.push((clock, bytes));
+        }
+      }
+    }
+    Ok((rows, pushed, present))
+  }
+
+  async fn delete_legacy(db: &IdbDatabase, key: &str) -> Result<(), String> {
+    let stores = js_sys::Array::new();
+    for s in LEGACY_STORES {
+      stores.push(&JsValue::from_str(s));
+    }
+    let tx = db
+      .transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readwrite)
+      .map_err(err)?;
+    let k = JsValue::from_str(key);
+    let mut pending = Vec::new();
+    for s in LEGACY_STORES {
+      let req = tx.object_store(s).map_err(err)?.delete(&k).map_err(err)?;
+      pending.push(request(&req));
+    }
+    for fut in pending {
+      fut.await.map_err(err)?;
+    }
+    Ok(())
+  }
+
+  /// Fold `rows` into the new `mica_sync_v1` record for the doc, persisted
+  /// before returning.
+  async fn persist_into_new(
+    new_key: &str,
+    rows: Vec<(i64, Vec<u8>)>,
+    pushed: i64,
+  ) -> Result<usize, String> {
+    let factory = web_sys::window()
+      .ok_or("window unavailable")?
+      .indexed_db()
+      .map_err(err)?
+      .ok_or("indexedDB disabled")?;
+    let open_req = factory.open_with_u32(NEW_DB, 1).map_err(err)?;
+    let upgrade_req = open_req.clone();
+    let on_upgrade = Closure::once_into_js(move |_e: Event| {
+      if let Ok(val) = upgrade_req.result()
+        && let Ok(db) = val.dyn_into::<IdbDatabase>()
+        && !db.object_store_names().contains(NEW_STORE)
+      {
+        let _ = db.create_object_store(NEW_STORE);
+      }
+    });
+    open_req.set_onupgradeneeded(Some(on_upgrade.unchecked_ref()));
+    let req: &IdbRequest = open_req.as_ref();
+    let db: IdbDatabase = request(req)
+      .await
+      .map_err(err)?
+      .dyn_into()
+      .map_err(|_| "not an IDBDatabase")?;
+    let k = JsValue::from_str(new_key);
+    let result = async {
+      let read = db
+        .transaction_with_str_and_mode(NEW_STORE, IdbTransactionMode::Readonly)
+        .map_err(err)?
+        .object_store(NEW_STORE)
+        .map_err(err)?
+        .get(&k)
+        .map_err(err)?;
+      let existing = request(&read).await.map_err(err)?;
+      let mut snap: IdbHydrateSnapshot = existing
+        .as_string()
+        .and_then(|raw| decode_snapshot(&raw).ok())
+        .unwrap_or_default();
+      let appended = merge_legacy_outbox(&mut snap, rows, pushed);
+      if appended > 0 {
+        let encoded = encode_snapshot(&snap)?;
+        let write = db
+          .transaction_with_str_and_mode(NEW_STORE, IdbTransactionMode::Readwrite)
+          .map_err(err)?
+          .object_store(NEW_STORE)
+          .map_err(err)?
+          .put_with_key(&JsValue::from_str(&encoded), &k)
+          .map_err(err)?;
+        request(&write).await.map_err(err)?;
+      }
+      Ok(appended)
+    }
+    .await;
+    db.close();
+    result
+  }
+
+  /// Migrate one doc's unsynced Flutter Web edits into the pure-Rust store.
+  /// Call before hydrating the doc. Returns how many updates were carried
+  /// over. Safe to call repeatedly; a no-op once the legacy record is gone.
+  pub async fn migrate_legacy_flutter_doc(
+    cache_origin: &str,
+    doc_id: &str,
+  ) -> Result<usize, String> {
+    if LEGACY_ABSENT.with(Cell::get) {
+      return Ok(0);
+    }
+    let Some(legacy_db) = open_existing_legacy_db().await? else {
+      LEGACY_ABSENT.with(|c| c.set(true));
+      return Ok(0);
+    };
+    let legacy_key = legacy_flutter_doc_key(cache_origin, doc_id);
+    let result = async {
+      let (rows, pushed, present) = read_legacy(&legacy_db, &legacy_key).await?;
+      if !present {
+        return Ok(0);
+      }
+      // Persist into the new store first, then drop the legacy record: an
+      // interruption between the two re-runs next open and dedups.
+      let appended = super::imp::with_doc_web_lock(
+        &format!("mica-idb:{}", idb_doc_key(cache_origin, doc_id)),
+        {
+          let new_key = idb_doc_key(cache_origin, doc_id);
+          move || async move { persist_into_new(&new_key, rows, pushed).await }
+        },
+      )
+      .await?;
+      delete_legacy(&legacy_db, &legacy_key).await?;
+      Ok(appended)
+    }
+    .await;
+    legacy_db.close();
+    result
+  }
+}
+
+#[cfg(target_arch = "wasm32")]
 pub use imp::{commit_mirror_ops, load_doc_snapshot};
+#[cfg(target_arch = "wasm32")]
+pub use legacy::migrate_legacy_flutter_doc;
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use mica_core::{Block, MicaDoc};
   use mica_sync::{MemoryMirrorStorage, SyncConfig, SyncEffect, SyncEngine, SyncEvent};
+
+  #[test]
+  fn legacy_flutter_key_matches_main_web_idb_doc_store() {
+    // main: WebIdbDocStore.open -> key = '$origin|$docId', origin = cloudCacheOrigin(...)
+    let origin = crate::cloud_cache_origin("https://Mica.Example.com/", "user-a").unwrap();
+    assert_eq!(
+      legacy_flutter_doc_key(&origin, "doc-1"),
+      r#"["https://mica.example.com","user-a"]|doc-1"#
+    );
+  }
+
+  #[test]
+  fn legacy_outbox_merge_keeps_only_unacked_rows_in_order_and_is_idempotent() {
+    let mut snap = IdbHydrateSnapshot::default();
+    snap.cursor.pushed_clock = 3;
+    snap.outbox.push(mica_sync::OutboxEntry {
+      clock: 4,
+      bytes: vec![9],
+    });
+    let legacy = vec![
+      (7, vec![3]),
+      (5, vec![1]),
+      (6, vec![2]),
+      (2, vec![0]),
+      (8, vec![]),
+    ];
+    // legacy pushedClock = 5: rows 2 and 5 were acked; the empty row is skipped.
+    assert_eq!(merge_legacy_outbox(&mut snap, legacy.clone(), 5), 2);
+    let got: Vec<(i64, Vec<u8>)> = snap
+      .outbox
+      .iter()
+      .map(|e| (e.clock, e.bytes.clone()))
+      .collect();
+    assert_eq!(got, vec![(4, vec![9]), (5, vec![2]), (6, vec![3])]);
+    // A re-run after an interrupted migration appends nothing.
+    assert_eq!(merge_legacy_outbox(&mut snap, legacy, 5), 0);
+    assert_eq!(snap.outbox.len(), 3);
+  }
+
+  #[test]
+  fn migrated_legacy_edit_replays_through_the_sync_engine() {
+    // The server-side base the Flutter Web replica started from:
+    let base = MicaDoc::from_blocks_with_client_id(
+      "root",
+      &[
+        Block::new("root", "page").with_children(vec!["b1".into()]),
+        Block::new("b1", "paragraph").with_text("Server text"),
+      ],
+      Some(1),
+    );
+    // An offline edit the Flutter Web client queued but never pushed:
+    let mut flutter = MicaDoc::from_update(&base.encode_state()).unwrap();
+    let sv = flutter.state_vector();
+    flutter.text_insert("b1", 11, " + flutter offline");
+    let pending = flutter.encode_diff(&sv).unwrap();
+
+    // New client: server base cached, then the legacy row is migrated in.
+    let mut mem = MemoryMirrorStorage::new();
+    use mica_sync::SyncStorage;
+    mem.save_base(&base.encode_state(), 5).unwrap();
+    let mut snap = IdbHydrateSnapshot::default();
+    apply_mirror_ops(&mut snap, &mem.take_pending_mirror_txns());
+    assert_eq!(merge_legacy_outbox(&mut snap, vec![(1, pending)], 0), 1);
+
+    let mut engine = SyncEngine::new(
+      SyncConfig {
+        client_id: Some(33),
+        self_name: None,
+        document_id: Some("doc-1".into()),
+        restore_unacked: Vec::new(),
+      },
+      Some(Box::new(MemoryMirrorStorage::hydrate(snap))),
+    );
+    let _ = engine.handle_event(SyncEvent::Connect);
+    assert!(
+      !engine.outbox_empty(),
+      "migrated edit must be queued for push"
+    );
+    assert!(
+      engine
+        .all_blocks_json()
+        .contains("Server text + flutter offline")
+    );
+  }
 
   #[test]
   fn idb_mirror_ops_persist_offline_edits_and_hydrate_across_reload() {

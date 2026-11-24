@@ -202,6 +202,17 @@ impl DocSyncController {
       let doc_key = doc_id.to_string();
       self.owner.run(move || {
         spawn(async move {
+          // Carry over edits the Flutter Web client (<= 0.14.x) left unsynced in
+          // its own IndexedDB before hydrating, so they ride this doc's outbox.
+          match crate::web_idb::migrate_legacy_flutter_doc(&cache_origin, &doc_key).await {
+            Ok(0) => {}
+            Ok(n) => web_sys::console::info_1(
+              &format!("[mica] migrated {n} unsynced Flutter Web edit(s) for {doc_key}").into(),
+            ),
+            Err(e) => web_sys::console::warn_1(
+              &format!("[mica] legacy Flutter Web migration skipped for {doc_key}: {e}").into(),
+            ),
+          }
           let hydrated = crate::web_idb::load_doc_snapshot(&cache_origin, &doc_key)
             .await
             .ok()

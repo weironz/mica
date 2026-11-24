@@ -16,6 +16,9 @@
  *      reload and reconciles once back online — P0-2).
  *   6. Lazy `mica_preview/math` WASM fetch & render on `/math` block (P0-3 W4),
  *      plus clean logout (`POST /api/auth/logout` -> 204 -> Sign-In gate on reload).
+ *   7. Flutter Web (<= 0.14.x) unsynced edits left in the legacy `mica-localfirst`
+ *      IndexedDB are migrated on doc open, pushed to the server, and the legacy
+ *      record is deleted.
  *
  * Usage:
  *   node web_e2e.mjs --base http://127.0.0.1:8090 --email demo@mica.dev --password password123
@@ -191,6 +194,95 @@ async function focusEditorAndType(page, text) {
   await page.keyboard.type(text, { delay: 15 });
 }
 
+// Move a doc's unsynced outbox from the new store (`mica_sync_v1`) into a
+// legacy Flutter Web database (`mica-localfirst`, same record shapes as main's
+// WebIdbDocStore), so the edit exists ONLY where a 0.14.x Flutter Web client
+// would have left it.
+async function plantLegacyFlutterOutbox(page) {
+  return page.evaluate(async () => {
+    const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const fresh = await req(indexedDB.open('mica_sync_v1', 1));
+    const tx = fresh.transaction('docs', 'readwrite');
+    const store = tx.objectStore('docs');
+    const keys = await req(store.getAllKeys());
+    const vals = await req(store.getAll());
+    let planted = null;
+    for (let i = 0; i < keys.length; i += 1) {
+      const snap = JSON.parse(String(vals[i]));
+      const pending = (snap.outbox || []).filter((e) => e.clock > (snap.cursor?.pushed_clock ?? 0));
+      if (pending.length === 0) continue;
+      const [origin, docId] = String(keys[i]).split('\u0000');
+      planted = { origin, docId, legacyKey: `${origin}|${docId}`, rows: pending.length };
+      await req(store.delete(keys[i]));
+      fresh.close();
+      const open = indexedDB.open('mica-localfirst', 1);
+      open.onupgradeneeded = () => {
+        for (const s of ['base', 'outbox', 'remote', 'cursor']) open.result.createObjectStore(s);
+      };
+      const legacy = await req(open);
+      const ltx = legacy.transaction(['outbox', 'cursor'], 'readwrite');
+      ltx.objectStore('outbox').put(
+        { rows: pending.map((e) => ({ clock: e.clock, bytes: new Uint8Array(e.bytes) })) },
+        planted.legacyKey,
+      );
+      ltx.objectStore('cursor').put({ lastSyncedRid: 0, pushedClock: 0 }, planted.legacyKey);
+      await new Promise((res, rej) => { ltx.oncomplete = res; ltx.onerror = () => rej(ltx.error); });
+      legacy.close();
+      return planted;
+    }
+    fresh.close();
+    return planted;
+  });
+}
+
+async function legacyRecordExists(page, legacyKey) {
+  return page.evaluate(async (key) => {
+    const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const db = await req(indexedDB.open('mica-localfirst', 1));
+    const v = await req(db.transaction('outbox').objectStore('outbox').get(key));
+    db.close();
+    return v !== undefined;
+  }, legacyKey);
+}
+
+async function legacyFlutterWebMigration(browser, opts) {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  try {
+    const page = await ctx.newPage();
+    await signInOnPage(page, opts.base, opts.email, opts.password);
+    const marker = ` LEGACY-FLUTTER-${Date.now()}`;
+    await ctx.setOffline(true);
+    await page.waitForTimeout(400);
+    await focusEditorAndType(page, marker);
+    await page.waitForTimeout(1200);
+    const planted = await plantLegacyFlutterOutbox(page);
+    assert(planted, 'expected an unsynced outbox to plant into mica-localfirst');
+    // Leave while still offline: the edit now exists only in the legacy DB.
+    await page.close();
+    await ctx.setOffline(false);
+
+    const page2 = await ctx.newPage();
+    await page2.goto(`${opts.base}/`, { waitUntil: 'domcontentloaded' });
+    await waitForSyncBadge(page2, 25000);
+    await page2.getByText(marker.trim()).waitFor({ state: 'visible', timeout: 15000 });
+    await page2.waitForTimeout(1500);
+    assert.equal(await legacyRecordExists(page2, planted.legacyKey), false, 'legacy record must be deleted after migration');
+
+    // The server has it: a fresh profile (no IndexedDB) sees the edit.
+    const ctxB = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    try {
+      const pageB = await ctxB.newPage();
+      await signInOnPage(pageB, opts.base, opts.email, opts.password);
+      await pageB.getByText(marker.trim()).waitFor({ state: 'visible', timeout: 15000 });
+    } finally {
+      await ctxB.close();
+    }
+    console.log(`    Migrated ${planted.rows} legacy Flutter Web edit(s); server has them; legacy record deleted.`);
+  } finally {
+    await ctx.close();
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.register) {
@@ -223,7 +315,7 @@ async function main() {
 
   try {
     // ── 1. Cold start: single WASM load, strict CSP, zero preview, zero XHR ──
-    console.log('==> [1/6] Cold start, CSP, single WASM download & zero XHR...');
+    console.log('==> [1/7] Cold start, CSP, single WASM download & zero XHR...');
     await signInOnPage(pageA, opts.base, opts.email, opts.password);
     await pageA.waitForTimeout(800);
 
@@ -253,7 +345,7 @@ async function main() {
     assert.equal(localStorageSecrets.length, 0, `JWT secret leaked to localStorage: ${JSON.stringify(localStorageSecrets)}`);
 
     // ── 2. Verify #111-scoped IndexedDB persistence (`mica_sync_v1`) ─────────
-    console.log('==> [2/6] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
+    console.log('==> [2/7] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
     const idb1 = await readIdbDocs(pageA);
     assert(!idb1.error, `IDB read error: ${idb1.error}`);
     assert(idb1.entries.length >= 1, `expected >=1 entry in mica_sync_v1/docs, got ${idb1.entries.length}`);
@@ -265,7 +357,7 @@ async function main() {
     console.log(`    IDB mica_sync_v1/docs: ${idb1.entries.length} doc(s), sample key=${idb1.entries[0].key.slice(0, 64)}…`);
 
     // ── 3. Create new page, edit & verify reload persistence via HttpOnly cookie ─
-    console.log('==> [3/6] Create page, edit, reload persistence (HttpOnly cookie)...');
+    console.log('==> [3/7] Create page, edit, reload persistence (HttpOnly cookie)...');
     const tag = `E2E-${Date.now()}`;
     await pageA.locator('[data-testid="new-page-btn"]').click();
     await waitForSyncBadge(pageA, 15000);
@@ -293,7 +385,7 @@ async function main() {
     await pageA.getByText(markerA).waitFor({ state: 'visible', timeout: 15000 });
 
     // ── 4. Two-browser real-time CRDT collaboration over /ws/ ────────────────
-    console.log('==> [4/6] Two-browser real-time CRDT collaboration over /ws/...');
+    console.log('==> [4/7] Two-browser real-time CRDT collaboration over /ws/...');
     const contextB = await browser.newContext({ viewport: { width: 1280, height: 820 } });
     const pageB = await contextB.newPage();
     try {
@@ -315,7 +407,7 @@ async function main() {
     }
 
     // ── 5. Offline edit recovery via IndexedDB (P0-2) ────────────────────────
-    console.log('==> [5/6] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
+    console.log('==> [5/7] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
     const offlineMarker = ` OFFLINE-IDB-${Date.now()}`;
     await contextA.setOffline(true);
     await pageA.waitForTimeout(400);
@@ -347,7 +439,7 @@ async function main() {
     console.log('    Offline edit persisted in mica_sync_v1 outbox and survived reload!');
 
     // ── 6. Lazy mica_preview/math load & clean logout (204 -> Sign-In gate) ──
-    console.log('==> [6/6] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
+    console.log('==> [6/7] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
     await pageA.locator('[data-testid="new-page-btn"]').click();
     await waitForSyncBadge(pageA, 15000);
     await pageA.waitForTimeout(300);
@@ -373,7 +465,12 @@ async function main() {
 
     assert.equal(consoleErrors.length, 0, `console errors: ${JSON.stringify(consoleErrors)}`);
     assert.equal(pageErrors.length, 0, `page errors: ${JSON.stringify(pageErrors)}`);
-    console.log('PASS: all 6 pure-Rust Web E2E scenarios passed (0 console errors, 0 CSP reports, 0 XHR)');
+    console.log('PASS: scenarios 1-6 passed (0 console errors, 0 CSP reports, 0 XHR)');
+
+    // ── 7. Legacy Flutter Web IndexedDB (`mica-localfirst`) migration ────────
+    console.log('==> [7/7] Flutter Web mica-localfirst unsynced edit -> migrated & pushed...');
+    await legacyFlutterWebMigration(browser, opts);
+    console.log('PASS: all 7 pure-Rust Web E2E scenarios passed');
   } finally {
     await contextA.close();
     await browser.close();
