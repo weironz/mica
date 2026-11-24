@@ -5,6 +5,12 @@
 services:
   api:
     image: mica-api:ci
+    environment:
+      # The 7-scenario Playwright Web E2E suite fires >10 /api/auth/{register,login,refresh}
+      # calls within ~20s from the single Docker bridge gateway IP, which exhausts the
+      # production default burst (10). Relax only in this CI E2E overlay.
+      AUTH_RATE_BURST: "60"
+      AUTH_RATE_PER_MIN: "60"
 
   web:
     image: mica-web:ci
