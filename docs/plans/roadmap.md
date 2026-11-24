@@ -8,20 +8,11 @@
 > `[等用户]` 表示仅用户能解锁的发布、策略或实机验证；不是尚未排期。
 > 2026-11-16（0.14.9 发版前）复核：以下事项仍未完成。安装包冒烟隔离已实现，但上一版覆盖升级验证仍未补齐；侧栏调整、Web 冷启动和浏览器发布门禁不对应其他既有条目。
 
-## 平台
-
-- 🔭 GPUI UI 转型候选 [#172](https://github.com/weironz/mica/issues/172)，未立项，当前不迁。
-  2026-11-10 部分验证的 Web 中文输入、桌面中文输入、性能和移动四关均未完整通过；
-  Windows 真实输入法、Android 真机、Safari/Firefox 仍待验证。
-  见 [调研与决策](../architecture/ui-gpui-evaluation.md)。
-
 ## SDK 与代码结构
 
 - `[等用户]` `mica-md` crate/npm 公开发布（S，2026-11-01 核实）。
   SDK 已就绪且保留 `publish = false`，严格 HTML 档已完成；由用户批准并亲自发布。
   见 [S5 发布手册](../single-source/stages/S5-sdk-release.md)。
-- 渲染库真正拆库（2026-11-01 评估后暂缓）。块渲染器依赖 `RenderDocument` 26 个私有字段，
-  下次新增块渲染器时先设计上下文接口；目前仅超软上限。见 [渲染架构](../architecture/render-architecture.md)。
 
 ## 交付验证
 

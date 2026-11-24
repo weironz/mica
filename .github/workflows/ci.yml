@@ -1,67 +1,44 @@
 name: CI
 
-# Fast pre-merge checks: compile the Rust backend workspace + run its pure
-# (no-database) crate tests, and run the Flutter Dart unit tests. Every command
-# here was verified green locally (2026-07-08): cargo test on the pure crates
-# (~45 tests) and `flutter test test` (206 tests).
-#
-# The Windows integration_test suite runs in flutter-integration.yml (a real
-# Windows runner builds the native FFI and drives the app). Only its OFFLINE
-# subset runs there; four files still need the whole dev stack (postgres +
-# rustfs + api-server) and are excluded, listed with reasons in that file's
-# header.
-#
-# 2026-07-21 audit (docs/reviews/code-review-2026-07-20.md) found 167 tests that never
-# ran here. Three causes, all fixed below:
-#   - app-core / infra were simply absent from `-p`, which alone silenced SEVEN
-#     pure-Rust, zero-dependency tests — including every bit of coverage for the
-#     root-erasure read path (the 2026-07-19 incident).
-#   - mica-core's `store` module is behind a non-default feature, so its 24
-#     SQLite migration tests were never even COMPILED.
-#   - sync_pg.rs skipped itself without a database. It now fails instead, so
-#     this job must actually provision one.
+# 100% Fullstack Rust CI: root workspace (L1+L2+server+CLI+MCP) +
+# pure-Rust L3 client (`clients/mica_rust` desktop & WebAssembly).
 
 on:
-  # Manual only (2026-10-20, user's call): the Actions quota ran out, and every
-  # push / PR / tag was spending it automatically. The local gates (`just ci`,
-  # `just release`) are the default path now; run this from the Actions page
-  # when a hosted run is actually wanted.
   workflow_dispatch:
     inputs:
       scope:
-        description: 'full runs every gate; auto selects jobs for the changed paths.'
+        description: 'Job selection: full runs everything; diff runs only groups affected by base_ref..HEAD'
         type: choice
-        required: true
         default: full
-        options:
-          - full
-          - auto
+        options: [full, diff]
       base_ref:
-        description: 'Diff base for auto (commit/tag/branch); empty uses HEAD^.'
-        type: string
-        required: false
-
+        description: 'Git ref for diff scope (ignored when scope=full)'
+        default: origin/main
   workflow_call:
     inputs:
       source_sha:
-        required: true
+        description: 'Commit to test (defaults to github.sha)'
         type: string
       scope:
+        description: 'Job selection: full or diff'
         type: string
         default: full
       base_ref:
+        description: 'Git ref for diff scope'
         type: string
+        default: origin/main
 
-# Pushing several commits in a row (five within an hour on 07-28) left four
-# superseded runs burning runners for a verdict nobody would read. The newest
-# commit's result is the one that matters; a broken commit in the middle is
-# still caught, because the fix is a later commit with its own run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ inputs.source_sha || github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
 jobs:
-  audit:
+  rustsec:
     name: RustSec (both lockfiles)
     runs-on: ubuntu-latest
     steps:
@@ -71,128 +48,63 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --locked --version 0.23.0
-      - name: Test the audit gate and audit both graphs
-        run: |
-          bash scripts/test-rust-audit.sh
-          bash scripts/check-rust-audit.sh
+      - name: Audit root and pure-Rust client lockfiles
+        run: bash scripts/check-rust-audit.sh
 
-  # Full remains the default gate. Auto is opt-in; unknown paths select every
-  # job, and a caller can cover several commits by supplying base_ref.
   paths:
     name: Scope (affected job groups)
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.groups.outputs.rust }}
-      flutter: ${{ steps.groups.outputs.flutter }}
-      web-e2e: ${{ steps.groups.outputs['web-e2e'] }}
+      client: ${{ steps.groups.outputs.client }}
       container: ${{ steps.groups.outputs.container }}
       mcp: ${{ steps.groups.outputs.mcp }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
-          # An explicit baseline may cover more than the latest commit.
           fetch-depth: 0
-      - name: Install the recipe runner used by script regression tests
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/just-bin"
-          curl -fsSL https://github.com/casey/just/releases/download/1.45.0/just-1.45.0-x86_64-unknown-linux-musl.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP/just-bin" just
-          echo "$RUNNER_TEMP/just-bin" >> "$GITHUB_PATH"
-      - name: Test job selection
-        run: |
-          bash scripts/test-ci-paths.sh
-          bash scripts/test-font-mirror.sh
-          bash scripts/test-md-wasm-build.sh
-          bash scripts/test-web-entry-cache-check.sh
-
-      # Release and CI scripts, exercised against disposable fixtures and a
-      # stubbed toolchain/Docker/gh. They are real behavioural tests, not reads
-      # of this file's text: a cross-built asset without its checksum manifest
-      # (#113), a release that cannot pass its own docs gate (#125), the version
-      # resolver every release job shares (#119), and the per-run Compose/nginx
-      # stacks this workflow starts and must tear down (#126).
-      - name: Test release scripts and CI stack scripts
-        run: |
-          bash scripts/test-release-artifacts.sh
-          bash scripts/test-release-orchestration.sh
-          bash scripts/test-release-workflow.sh
-          bash scripts/test-local-e2e.sh
-          bash scripts/test-flutter-perf-gate.sh
-          bash scripts/test-release-version.sh
-          bash scripts/test-ci-stacks.sh
-          bash scripts/test-android-signing.sh
-          bash scripts/test-release-canary.sh
-          bash scripts/test-release-site-canary.sh
-          bash scripts/test-smoke-installer.sh
-          bash scripts/test-web-csp-hashes.sh
-          bash scripts/test-ship.sh
-          python3 scripts/test-release-cli-matrix.py
-      - id: groups
+      - name: Resolve job groups
+        id: groups
         env:
-          CI_SCOPE: ${{ inputs.scope }}
-          CI_BASE_REF: ${{ inputs.base_ref }}
+          SCOPE: ${{ inputs.scope || 'full' }}
+          BASE_REF: ${{ inputs.base_ref || 'origin/main' }}
         run: |
-          set -euo pipefail
-          all=(rust flutter web-e2e container mcp)
-          if [ "$CI_SCOPE" = auto ]; then
-            base="${CI_BASE_REF:-HEAD^}"
-            if [ -z "$CI_BASE_REF" ] && ! git rev-parse --verify 'HEAD^' >/dev/null 2>&1; then
-              bash scripts/ci-paths-for-scope.sh > groups.txt
-            else
-              bash scripts/ci-paths-for-scope.sh "$base" HEAD > groups.txt
-            fi
+          if [ "$SCOPE" = "diff" ]; then
+            selected=$(bash scripts/ci-paths-for-scope.sh "$BASE_REF" HEAD)
           else
-            printf '%s\n' "${all[@]}" > groups.txt
+            selected=$(bash scripts/ci-paths-for-scope.sh)
           fi
-          echo "## Selected CI jobs ($CI_SCOPE)" >> "$GITHUB_STEP_SUMMARY"
-          for group in "${all[@]}"; do
-            found=$(grep -qx "$group" groups.txt && echo true || echo false)
-            echo "$group=$found" >> "$GITHUB_OUTPUT"
-            echo "- $group: $found" >> "$GITHUB_STEP_SUMMARY"
+          for job in rust client container mcp; do
+            if grep -qx "$job" <<<"$selected"; then
+              echo "$job=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$job=false" >> "$GITHUB_OUTPUT"
+            fi
           done
 
-  # 单元行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
-  # 2026-10-16 拆掉了三个巨石文件（main.dart 13,177 / routes/documents.rs 8,196 /
-  # markdown lib.rs 6,339 行）。三层防线都在 scripts/check-file-size.sh：
-  #   绝对限（8,000 硬失败 / 4,000 警告）+ 棘轮（预算文件登记的单元只许减
-  #   不许增）+ 增量（>2,000 行的存量单元一次净增 >300 行失败）。
-  # 2026-10-23（#87）起按「单元」计：Dart library = root + 全部 part 合计
-  # （拆 part 绕不过门禁），Rust 单文件，FFI crate 同在扫描范围。
-  # 增量门禁基线：PR 使用 base SHA 的 merge-base；手动触发回退 HEAD^（覆盖
-  # 最新一个提交）。首次推送或历史不可用时显式回退，不能用 origin/main
-  # 与 HEAD 比较，否则 main 直推时增量门禁恒为空。
   structure:
-    name: Structure (file-size gate)
+    name: Structure & Hygiene (size, ignored-sources, migrations)
     runs-on: ubuntu-latest
-    # The gate is cheap and structure drift is cheap to miss; run on every scope.
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
-      - name: Test structure gate against isolated Git fixtures
-        run: bash scripts/test-structure-gate.sh
-      - name: Check per-unit line limits and growth
-        env:
-          STRUCTURE_PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/check-structure-ci.sh
-      # Markdown has one implementation (crates/md-core); Dart must not grow a
-      # second one. The self-test proves the gate fails on real offenders.
-      - name: No Markdown syntax in Dart (single implementation)
+      - name: Check ignored source files
+        run: bash scripts/check-ignored-sources.sh
+      - name: Check SQL migrations
         run: |
-          bash scripts/test-check-dart-markdown.sh
-          bash scripts/check-dart-markdown.sh
+          bash scripts/check-migration-tracking.sh
+          bash scripts/test-migration-tracking.sh
+      - name: Check Rust file-size gate
+        run: bash scripts/check-file-size.sh
 
   rust:
-    name: Rust (build + lint + tests)
+    name: Rust Workspace (build + clippy + Postgres tests + SQLite store)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.rust == 'true'
     needs: paths
-
-    # sync_pg.rs asserts against real SQL (a conditional UPDATE IS the
-    # concurrency guard); a mock would test nothing. Cheap here — one container.
     services:
       postgres:
         image: postgres:18.6-alpine
@@ -200,91 +112,77 @@ jobs:
           POSTGRES_USER: mica
           POSTGRES_PASSWORD: mica
           POSTGRES_DB: mica
-        ports: ["5432:5432"]
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U mica"
           --health-interval 5s --health-timeout 5s --health-retries 10
-
     env:
       DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
       MICA_REQUIRE_DB: '1'
-
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
-      # rustfmt.toml was the law on paper only — nothing ran it, and 2/4-space
-      # indentation mixed inside single files (2026-10-21 review 工程链). This
-      # gate stops NEW drift; the existing tree's one-time normalization is a
-      # whitespace-only commit of its own (see #88). Root workspace only — the
-      # FFI crate is dominated by generated frb_generated.rs.
+      - uses: Swatinem/rust-cache@v2
       - name: rustfmt (deny drift)
         run: cargo fmt --all --check
-      # rust-cache, NOT a hand-rolled actions/cache of `target`: caching the
-      # whole target dir stored ~2.5GB PER ENTRY (and entries are scoped per
-      # ref, so every tag push doubled it) — 5.1GB of the repo's 10GB cache
-      # budget, blowing it past the limit and evicting everyone else's caches.
-      # rust-cache prunes the workspace's own artifacts (they change every
-      # commit and are worthless to restore) and keeps only deps: the cli job
-      # using it sits at ~115MB, 20x smaller, for the same speedup.
+      - name: Build workspace
+        run: cargo build --workspace --locked
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Apply migrations
+        run: cargo run -q -p mica-infra --example apply_migrations
+      - name: Test workspace (Postgres-backed)
+        run: |
+          source scripts/lib-local.sh && source scripts/lib-receipt.sh
+          cargo_receipt 550 cargo test --workspace --locked
+          cargo_receipt 70 cargo test -p mica-editor --locked
+          cargo_receipt 30 cargo test -p mica-client --locked
+      - name: Test mica-core gated SQLite store
+        run: |
+          source scripts/lib-local.sh && source scripts/lib-receipt.sh
+          cargo_receipt 1 cargo test -p mica-core --features store --locked
+      - name: Run shipped mica-md examples
+        run: |
+          for e in parse_and_serialize render_html table_cells inline; do
+            cargo run -q -p mica-md --example "$e" >/dev/null
+          done
+
+  client:
+    name: Pure-Rust Client (clients/mica_rust desktop + Web WASM + E2E)
+    runs-on: ubuntu-latest
+    if: needs.paths.outputs.client == 'true'
+    needs: paths
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+      - uses: ./.github/actions/setup-rust
+      - name: Install Linux GUI & wasm32 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends brotli clang pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-dev
+          rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
       - uses: Swatinem/rust-cache@v2
         with:
-          key: workspace
-      # rust-toolchain.toml pins an EXACT version (+ rustfmt, clippy); rustup
-      # honors it, so the composite action's `@stable` only guarantees that
-      # rustup exists. 〔This said "pins `stable`" until 2026-08-27 — stale
-      # since the commit that replaced the channel with a number. Believing it
-      # is what let the release workflow's `targets:` add a std slice to the
-      # wrong toolchain; see the `cli` job in release.yml.〕
-      # sqlx uses the runtime query API (not compile-time macros), so the
-      # workspace builds without a live database.
-      - name: Build workspace
-        run: cargo build --workspace
-
-      # `invisible_characters` is deny-by-default and fired on the `&shy;` entity
-      # in crates/markdown, which ABORTED clippy on the first crate — so the
-      # other eight had never been linted at all. With that one false positive
-      # allowed at its source, the whole workspace is clean, which is why this
-      # can start life at -D warnings instead of as an advisory.
-      - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      # Use the same sqlx migrator as local CI and the API. Running raw SQL
-      # leaves no migration ledger, so tests that call Migrator::run try to
-      # create existing tables again on a fresh hosted database.
-      - name: Apply migrations with their ledger
-        run: cargo run --locked -q -p mica-infra --example apply_migrations
-
-      # mica-core's legacy_yjs_state.rs pins a state the retired yjs web client
-      # wrote, so documents already in browsers' IndexedDB keep decoding now that
-      # the web runs the Rust core as wasm (no node needed any more).
-      - name: Test (incl. app-core + infra + api-server, Postgres-backed)
-        # cargo_receipt: exit 0 is not enough, the passed count must clear a
-        # floor (scripts/lib-receipt.sh).
+          workspaces: clients/mica_rust
+          key: mica-rust-client
+      - name: Clippy clients/mica_rust (deny warnings)
+        run: cargo clippy --manifest-path clients/mica_rust/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Test clients/mica_rust (unit + storage/sync + headless E2E)
         run: |
           source scripts/lib-local.sh && source scripts/lib-receipt.sh
-          # mica-md is the Markdown engine itself: its wire gold, security,
-          # proptest and public-API suites were missing from this list until
-          # 2026-11-01 and ran only in local-ci's --workspace.
-          cargo_receipt 500 cargo test -p mica-md -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server -p mica-cli -p mica-api-types
-
-      # Separate invocation: `store` is a non-default feature, and features do
-      # not apply across a multi-package `-p` list. Without this the 24 local
-      # SQLite migration tests are not compiled, let alone run.
-      - name: Test mica-core's gated SQLite store
+          cargo_receipt 110 cargo test --manifest-path clients/mica_rust/Cargo.toml --locked
+      - name: Build native desktop binary
+        run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --locked
+      - name: Build pure-Rust WebAssembly bundle
         run: |
-          source scripts/lib-local.sh && source scripts/lib-receipt.sh
-          cargo_receipt 1 cargo test -p mica-core --features store
+          bash scripts/test-web-csp-hashes.sh
+          bash scripts/build-web-rust.sh
 
-  mcp-conformance:
-    # Drive `mica-cli mcp` with the OFFICIAL MCP client and fail on anything
-    # it rejects. This exists because hand-rolled probes do not catch protocol
-    # bugs: ours shipped a server that declared no `tools` capability and an
-    # `outputSchema` of "AnyValue", and it looked perfectly healthy — the probe
-    # called tools/list directly and never validated a thing, so every real
-    # client registered ZERO tools while we believed it worked. A conforming
-    # client is the only thing that reads what we actually declare.
+  mcp:
     name: MCP (official inspector against mica-cli mcp)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.mcp == 'true'
@@ -295,510 +193,64 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: workspace
       - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Build mica-cli
-        run: cargo build -p mica-cli
-      # No live Mica needed: the handshake and tools/list are answered before
-      # any REST call, which is exactly the surface that broke. A dummy PAT
-      # keeps the credential chain satisfied without a server.
+        run: cargo build --locked -p mica-cli
       - name: tools/list must survive a conforming client
         env:
           MICA_API_BASE_URL: https://mica.invalid
           MICA_PAT: dummy-not-used-for-handshake
         run: |
           set -euo pipefail
-          # PINNED, and not to `@latest`. The inspector is a test harness, so
-          # `@latest` means any upstream publish can turn main red with no commit
-          # of ours involved - which is exactly what happened: 2.0.0 landed
-          # 2026-07-28T07:33Z and every run after it failed with "no server"
-          # (v2 stopped handing the parent env to the spawned server), across ten
-          # unrelated commits, for nine hours. A permanently red check is worse
-          # than no check: it is where a real failure goes unnoticed. Moving to
-          # v2 is fine, but as a deliberate change with its arg/env contract
-          # read, not as a surprise arriving on an unrelated commit.
           npx -y @modelcontextprotocol/inspector@1 --cli \
             ./target/debug/mica-cli mcp --method tools/list > tools.json
           python3 - <<'EOF'
-          import json, sys
+          import json
           tools = json.load(open("tools.json"))["tools"]
           assert tools, "the inspector returned no tools"
           for t in tools:
-              # The two bugs that shipped, pinned on the wire the client reads.
               assert t["inputSchema"].get("type") == "object", t["name"]
               out = t.get("outputSchema")
               assert out is None or out.get("type") == "object", (
-                  f"{t['name']}: outputSchema must be an object schema or absent; "
-                  "one invalid entry makes a client discard the whole list")
+                  f"{t['name']}: outputSchema must be an object schema or absent"
+              )
           print(f"{len(tools)} tools accepted by the official client")
           EOF
 
-  flutter:
-    name: Flutter (analyze + Dart unit tests)
-    runs-on: ubuntu-latest
-    if: needs.paths.outputs.flutter == 'true'
-    needs: paths
-    defaults:
-      run:
-        working-directory: clients/mica_flutter
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.source_sha || github.sha }}
-      - uses: ./.github/actions/setup-flutter
-      - run: flutter pub get --enforce-lockfile
-      - run: flutter gen-l10n
-      - name: Check Cargokit uses the pinned toolchain
-        working-directory: clients/mica_flutter/rust_builder/cargokit/build_tool
-        run: |
-          dart pub get
-          dart run test/toolchain_check.dart
-      # Warnings ARE fatal as of 2026-08-25. This comment used to say a separate
-      # cleanup pass would address the pre-existing info/warning lints; what
-      # actually happened is that an `invalid_return_type_for_catch_error`
-      # warning sat unread until it shipped a defect — a `.catchError` handler
-      # returning the wrong type, so the error path threw a TypeError instead of
-      # failing quietly. There were exactly two warnings when that was found.
-      # Both are gone, so the bar is met today; a raised bar that is already met
-      # costs nothing, and it cannot be quietly re-lowered later.
-      #
-      # Infos stay non-fatal (~130, style-level). scripts/release-check.sh runs
-      # this identically — that "identically" is load-bearing, see its comments.
-      - run: flutter analyze --no-fatal-infos
-      # The FFI-backed unit tests load rust/target/release and refuse a library
-      # whose source fingerprint does not match this checkout.
-      - uses: ./.github/actions/setup-rust
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: md-wasm-flutter
-      - name: Install pinned wasm-bindgen CLI
-        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
-      - name: Build Markdown Web engine before freshness tests
-        run: bash ../../scripts/build-md-wasm.sh
-      - name: Build Web document engine and editor previews
-        run: |
-          bash ../../scripts/build-doc-wasm.sh
-          bash ../../scripts/build-preview-wasm.sh
-          bash ../../scripts/build-board-wasm.sh
-      - name: FFI library for the unit tests
-        run: cargo build --release --manifest-path rust/Cargo.toml
-      - name: Dart unit tests
-        run: |
-          source ../../scripts/lib-local.sh && source ../../scripts/lib-receipt.sh
-          # Timed benchmarks use the same budgets in a fresh, serial test VM.
-          flutter_receipt 5 --tags perf --concurrency=1 \
-            test/markdown_codec_bench_test.dart test/perf/html_paste_bench_test.dart test/perf/table_cells_bench_test.dart
-          flutter_receipt 1000 --exclude-tags perf test
-      # dart2js resolves the WEB variant of every conditional import; analyze
-      # and `flutter test` resolve the IO one. So an IO/web stub drift (a member
-      # added to local_offline_io.dart but not mirrored in local_offline_web.dart)
-      # compiles clean everywhere EXCEPT the release web image — exactly what
-      # silently broke the v0.12.0–v0.12.3 web images at tag time. Compile the
-      # web bundle on every push so that class of drift fails pre-merge.
-      # Same flags as the release build (justfile build-web / release.yml) so
-      # this checks the artifact we actually ship.
-      - name: Web compiles (dart2js resolves the web stubs)
-        run: |
-          rm -rf build/web/{*,.[!.]*,..?*}
-          flutter build web --release --no-web-resources-cdn
-      # CI tracks `channel: stable`, so its engine can be newer than the one the
-      # committed web/gfonts mirror was generated from. The engine's fallback
-      # shard URLs are version-pinned (notosanssc/v37/…) — if a Flutter bump
-      # moves them, runtime font fallback would silently 404. Fail here instead.
-      - name: gfonts mirror matches this engine's fallback tables
-        run: bash tool/gfonts/mirror.sh --check
-
-  # The web half of the product had ZERO end-to-end coverage. Not an oversight in
-  # thoroughness: every one of the 14 integration tests in flutter-integration.yml
-  # imports `frb_generated.dart` or `LocalOffline`, neither of which exists on web,
-  # so none can be pointed at a browser. Meanwhile the web build is a categorically
-  # different binary — the Rust core as wasm instead of FFI, IndexedDB instead of SQLite,
-  # release-only so every `assert` is compiled out.
-  #
-  # Its own job, not a step in `flutter`: this one needs a database and a running
-  # api, and a browser harness failing must not be reported as "analyze failed".
-  web-e2e:
-    name: Web e2e (browser against a real stack)
-    runs-on: ubuntu-latest
-    if: needs.paths.outputs['web-e2e'] == 'true'
-    needs: paths
-
-    # Same block as the `rust` job above, for the same reason: the assertions are
-    # about the real server folding real CRDT updates into real Postgres.
-    services:
-      postgres:
-        image: postgres:18.6-alpine
-        env:
-          POSTGRES_USER: mica
-          POSTGRES_PASSWORD: mica
-          POSTGRES_DB: mica
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U mica"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      rustfs:
-        image: rustfs/rustfs:1.0.6
-        env:
-          RUSTFS_VOLUMES: /data
-          RUSTFS_ADDRESS: 0.0.0.0:9000
-          RUSTFS_CONSOLE_ENABLE: "false"
-          RUSTFS_ACCESS_KEY: mica
-          RUSTFS_SECRET_KEY: mica-default-not-a-secret
-          RUSTFS_CORS_ALLOWED_ORIGINS: http://127.0.0.1:8090
-        ports: ["9000:9000"]
-
-    env:
-      DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
-      # A seeded, already-verified account. The harness CANNOT register one:
-      # registration is closed by default and, when open, answers 204 pending an
-      # emailed confirmation — and a browser has no inbox. `MICA_SEED_TEST_USER`
-      # exists for exactly this and is hard-ignored in production.
-      E2E_EMAIL: e2e@mica.test
-      E2E_PASSWORD: e2epassword123
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.source_sha || github.sha }}
-
-      - uses: ./.github/actions/setup-rust
-      # Same cache key as the `rust` job so this reuses that build rather than
-      # compiling the workspace a second time.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: workspace
-
-      # NO psql migration loop here, unlike the `rust` job — the api migrates itself
-      # on startup and the two collide. That loop applies the schema WITHOUT writing
-      # sqlx's `_sqlx_migrations` bookkeeping, so `run_migrations` then starts from
-      # migration 1 and dies on `relation "users" already exists`. That is exactly
-      # what this job did on its first real run.
-      #
-      # Letting the api do it is the better test anyway: it exercises the migration
-      # path production takes, including the compile-time embedding that silently
-      # omits a new file when `crates/infra/src/db.rs` was not touched.
-      - name: Build the api
-        run: cargo build -p mica-api-server
-
-      - uses: ./.github/actions/setup-flutter
-      # Same flags as the release build. A bundle built differently from the one we
-      # ship would make the CDN and caching assertions meaningless.
-      - name: Install pinned wasm-bindgen CLI
-        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
-      - name: Build Markdown Web engine
-        run: bash scripts/build-md-wasm.sh
-      - name: Build Web document engine and editor previews
-        run: |
-          bash scripts/build-doc-wasm.sh
-          bash scripts/build-preview-wasm.sh
-          bash scripts/build-board-wasm.sh
-      - name: Build the web bundle
-        working-directory: clients/mica_flutter
-        run: |
-          rm -rf build/web/{*,.[!.]*,..?*}
-          flutter pub get
-          flutter build web --release --no-web-resources-cdn
-
-      # nginx, not a plain static server: two of the assertions are ABOUT nginx —
-      # that /verify-email, /reset-password and /s/ beat the SPA fallback, and that
-      # the fixed-name entry files are not cacheable. A different server would test
-      # a routing table nobody deploys. The steps live in scripts/ci-web-e2e.sh so
-      # the serve/stop pair is exercised by test-ci-stacks.sh, not only by reading
-      # this file.
-      - name: Serve the bundle through the real nginx config
-        run: bash scripts/ci-web-e2e.sh serve
-
-      # Deliberately NO `set -e` in this step, and the polling is written out longhand.
-      # The first version used `set -euo pipefail` with `curl … && break` inside the
-      # loop, and a failing curl in a `&&` list took the whole script down: the wait
-      # ran exactly one iteration, the nginx check then failed against an api that
-      # had not started yet, and the api's own "ok" landed in the log one line AFTER
-      # the error. A readiness wait that aborts on the first not-ready is not a wait.
-      - name: Start the api
-        run: |
-          APP_ENV=test \
-          HTTP_ADDR=0.0.0.0:8080 \
-          JWT_SECRET=ci-only-not-a-secret \
-          MICA_SEED_TEST_USER="${E2E_EMAIL}:${E2E_PASSWORD}" \
-          MICA_APP_BASE_URL=http://127.0.0.1:8090 \
-          S3_ENDPOINT=http://127.0.0.1:9000 \
-          S3_INTERNAL_ENDPOINT=http://127.0.0.1:9000 \
-          S3_BUCKET=mica \
-          S3_ACCESS_KEY_ID=mica \
-          S3_SECRET_ACCESS_KEY=mica-default-not-a-secret \
-            ./target/debug/mica-api-server > /tmp/api.log 2>&1 &
-
-          up=""
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8080/api/health > /dev/null 2>&1; then
-              up="yes"; echo "api up after $((i * 2))s"; break
-            fi
-            sleep 2
-          done
-          if [ -z "$up" ]; then
-            echo "the api never became healthy"; exit 1
-          fi
-
-          # And the same through nginx. If the stack is unreachable the run must fail
-          # HERE — otherwise the harness reports it as a convergence problem and
-          # whoever reads the log goes hunting in the CRDT layer for a wiring fault.
-          routed=""
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8090/api/health > /dev/null 2>&1; then
-              routed="yes"; echo "reachable through nginx after $((i * 2))s"; break
-            fi
-            sleep 2
-          done
-          if [ -z "$routed" ]; then
-            echo "nginx cannot reach the api"; docker logs mica-web-e2e; exit 1
-          fi
-
-      - name: Web entry cache and retired-file contract
-        run: bash scripts/web-entry-cache-check.sh http://127.0.0.1:8090
-
-      # The one-off legacy orphan audit and its test were retired in 8291c551.
-      # Do not invoke its removed test name: receipts correctly reject zero tests.
-      - name: Web end-to-end assertions
-        working-directory: e2e
-        run: |
-          set -euo pipefail
-          npm install --no-audit --no-fund
-          npx playwright install --with-deps chromium
-          node cdp_eval_test.mjs
-          node web_e2e.mjs --base http://127.0.0.1:8090 \
-                           --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
-
-      - name: Browser upload length is enforced by RustFS
-        working-directory: e2e
-        run: |
-          set -euo pipefail
-          node upload_length_e2e.mjs --api http://127.0.0.1:8080 \
-            --site http://127.0.0.1:8090 \
-            --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
-
-      - name: Upload length failure screenshot
-        if: failure()
-        uses: actions/upload-artifact@v5
-        with:
-          name: upload-length-e2e-failure
-          path: e2e/upload-length-e2e-failure.png
-          if-no-files-found: ignore
-
-      # Every browser-only suite (real IndexedDB, Web Locks, DOM clipboard …);
-      # the Dart VM run skips them or compiles their stubs. The local Windows
-      # Flutter test server 404s its own CanvasKit assets, so exercise them on
-      # Linux with the Chromium already installed for the browser E2E above.
-      # A missing browser must fail, never silently skip; each suite must
-      # report passed tests (scripts/browser-tests.sh).
-      - name: Browser-only Flutter suites
-        run: |
-          set -euo pipefail
-          CHROME_EXECUTABLE="$(cd e2e && node -e "const {chromium}=require('@playwright/test'); console.log(chromium.executablePath())")"
-          export CHROME_EXECUTABLE
-          test -x "$CHROME_EXECUTABLE"
-          bash scripts/browser-tests.sh
-
-      # The production bundle has no stable DOM handles for its self-painted
-      # editor, so the clipboard / settings / sidebar-rename regressions drive
-      # fixed-block harness pages. One build covers all three: the flags below
-      # are the union the three harnesses actually need — MICA_DEV_AUTOLOGIN is
-      # the only define any harness reads, and the API/cloud points come from
-      # ui_experience's mock-API page. See e2e/web_harness_entry.dart.
-      - name: Build the harness bundle (one build, three harness pages)
-        run: |
-          set -euo pipefail
-          bash scripts/build-md-wasm.sh
-          bash scripts/build-doc-wasm.sh
-          bash scripts/build-preview-wasm.sh
-          bash scripts/build-board-wasm.sh
-          cd clients/mica_flutter
-          flutter build web --release --no-web-resources-cdn \
-            --target=e2e/web_harness_entry.dart \
-            --dart-define=MICA_DEV_AUTOLOGIN=false \
-            --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8093 \
-            --dart-define=MICA_CLOUD_URL=http://127.0.0.1:8093 \
-            --output="$PWD/build/web_harness"
-
-      - name: Browser rendering and clipboard regressions through the real editor
-        run: |
-          set -euo pipefail
-          # The build step wrote clients/mica_flutter/build/web_harness; serve
-          # that directory, not a repo-root lookalike.
-          cd clients/mica_flutter
-          page="http://127.0.0.1:8091/?harness=clipboard"
-          python3 -m http.server 8091 --bind 127.0.0.1 \
-            --directory "$PWD/build/web_harness" > /tmp/clipboard-http.log 2>&1 &
-          server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
-          for _ in $(seq 1 20); do
-            if curl -fsS "http://127.0.0.1:8091/?harness=clipboard" > /dev/null 2>&1; then break; fi
-            sleep 1
-          done
-          curl -fsS "$page" > /dev/null
-          cd ../../e2e
-          node rich_preview_e2e.mjs --base "$page"
-          node clipboard_e2e.mjs --base "$page"
-
-      - name: Writing comfort and responsive settings browser regression
-        env:
-          MICA_UI_RESULTS_DIR: ${{ runner.temp }}/ui-experience
-          MICA_UI_BASE_URL: http://127.0.0.1:8093
-        run: |
-          set -euo pipefail
-          node e2e/ui_experience_e2e.mjs
-
-      - name: Sidebar double-click rename browser regression
-        env:
-          MICA_RENAME_RESULTS_DIR: ${{ runner.temp }}/sidebar-rename
-          MICA_RENAME_BASE_URL: http://127.0.0.1:8094
-        run: |
-          set -euo pipefail
-          node e2e/sidebar_rename_e2e.mjs
-
-      - name: Deferred UI modules and recovery after a failed chunk download
-        run: node e2e/deferred_modules_e2e.mjs
-
-      - name: Sidebar rename screenshots and results
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: sidebar-rename-e2e
-          path: ${{ runner.temp }}/sidebar-rename/sidebar-rename-*
-          if-no-files-found: ignore
-
-      - name: Writing comfort screenshots and results
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: ui-experience-e2e
-          path: ${{ runner.temp }}/ui-experience/ui-experience-*
-          if-no-files-found: ignore
-
-      - name: Clipboard failure screenshot
-        if: failure()
-        uses: actions/upload-artifact@v5
-        with:
-          name: clipboard-e2e-failure
-          path: e2e/clipboard-e2e-failure.png
-          if-no-files-found: ignore
-
-      # The api's own log is the only place a server-side cause shows up; without
-      # this a failure reads as "the browser did not see convergence" with no way
-      # to tell whether the server ever accepted the push.
-      - name: api log (on failure)
-        if: failure()
-        run: tail -100 /tmp/api.log
-
-      # The container started above has a FIXED NAME and a FIXED port, and
-      # nothing else reaps it: on a self-hosted runner the next run died with
-      #   docker: Error response from daemon: Conflict. The container name
-      #   "/mica-web-e2e" is already in use
-      # (`--rm` is not an option: the job runs `docker exec … nginx -t` and
-      # serves the whole browser suite out of this container, so it must live
-      # past its start step.) Always, and after the failure log above, so the
-      # evidence is captured before the container is removed. The
-      # GitHub-managed `services:` above are the runner's to clean up, not ours.
-      - name: Remove the nginx container
-        if: always()
-        run: bash scripts/ci-web-e2e.sh stop
-
-  # The api as a CONTAINER — the one shape nothing else here exercises.
-  #
-  # `rust` builds the binary on the runner. `web-e2e` proves nginx routes to an
-  # api, but that api is a host process (see its /tmp/api.log). Neither touches
-  # deploy/Dockerfile.api, so until now a broken image, or a container-only bug
-  # like binding HTTP_ADDR to loopback (unreachable from outside the container),
-  # first surfaced during a release — after the tag was already cut, because
-  # release.yml is the only workflow that builds images and it runs `on: tags`.
-  #
-  # This replaces `just parity-check`, a manual and optional recipe that covered
-  # exactly this and was therefore rarely run. A check nobody runs catches nothing.
   container:
-    name: Container (api image + stack boots)
+    name: Container (Dockerfile.api + Dockerfile.web + Dockerfile.cli)
     runs-on: ubuntu-latest
-    # Container image build is the most expensive job; it only makes sense when
-    # the backend, migrations or its own config changed.
     if: needs.paths.outputs.container == 'true'
     needs: paths
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
-
-      - name: Deployment smoke-gate and Compose configuration regressions
+      - uses: ./.github/actions/setup-rust
+      - name: Build pure-Rust Web bundle for Dockerfile.web
         run: |
-          bash scripts/test-verify-prod.sh
-          python3 scripts/test-compose-api-env.py
-
-      - uses: docker/setup-buildx-action@v4
-        with:
-          name: mica-buildx
-          keep-state: true
-
-      # Same action and cache scope shape as release.yml, so a warm layer cache
-      # is shared and a repeat run is cheap. `load` puts the image in the local
-      # daemon for compose to run; nothing is pushed.
-      - name: Build the api image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: deploy/Dockerfile.api
-          load: true
-          tags: willdockerhub/mica-api:ci-local
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
-
-      # nginx mounts this directory. A real Flutter bundle costs minutes and
-      # proves nothing here — the routing half is already covered by web-e2e —
-      # so a stub is enough to let nginx start and proxy /api.
-      - name: Stub the web bundle
-        run: mkdir -p deploy/web && echo 'ci stub' > deploy/web/index.html
-
-      # The quickstart stack pulls published images; the from-source overlay swaps
-      # the api for the one just built. The boot/logs/down trio lives in
-      # scripts/ci-container-stack.sh so it is exercised by test-ci-stacks.sh and
-      # all three commands always target ONE per-run compose project (never the
-      # checkout directory's `mica` — that name belongs to a developer's stack).
-      - name: Boot the stack
-        run: bash scripts/ci-container-stack.sh up
-
-      # /api/ready, not /api/health: ready touches the database, so this asserts
-      # the api reached postgres rather than merely that its process is alive.
-      # NOT redundant with --wait above, and this is the whole point of the job.
-      #
-      # The image's healthcheck curls 127.0.0.1:8080 from INSIDE the container,
-      # so an api bound to loopback — unreachable from anywhere else — passes it.
-      # Only a request from OUT HERE, through the published port and nginx,
-      # proves the stack is actually serving. That is the bug class this job
-      # exists to catch, so the check has to live outside the container.
-      #
-      # /api/ready rather than /api/health: ready touches the database, so a pass
-      # means the api reached postgres, not merely that its process is up.
-      - name: Reach the stack from outside
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends brotli clang
+          rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
+          bash scripts/test-web-csp-hashes.sh
+          bash scripts/build-web-rust.sh
+      - name: Build Docker images
         run: |
-          set -euo pipefail
-          for i in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1/api/ready > /dev/null 2>&1; then
-              echo "served from outside after $((i * 3))s"; exit 0
-            fi
-            sleep 3
-          done
-          echo "the stack reports healthy but is not reachable from outside"
-          exit 1
-
-      - name: Container logs (on failure)
+          docker build -f deploy/Dockerfile.web -t mica-web:ci .
+          docker build -f deploy/Dockerfile.cli -t mica-cli:ci .
+          docker build -f deploy/Dockerfile.api -t mica-api:ci .
+      - name: Boot CI container stack & run Playwright pure-Rust Web E2E
+        run: |
+          bash scripts/ci-container-stack.sh up
+          bash scripts/web-entry-cache-check.sh http://127.0.0.1
+          (cd e2e && npm ci --no-audit --no-fund && npx playwright install chromium --with-deps)
+          node e2e/web_e2e.mjs --base http://127.0.0.1 --email e2e@mica.test --password E2ePassword123! --register
+      - name: Dump CI stack logs on failure
         if: failure()
-        run: bash scripts/ci-container-stack.sh logs
-
-      # `up -d` leaves the whole stack behind — ports 80/9000/9001, the project
-      # network, the postgres/rustfs named volumes — and nothing else tears it
-      # down. Scoped to the same per-run project the boot step used, so a later
-      # run fails on "port is already allocated" instead of inheriting data, and
-      # a developer's stack on the same daemon is never in range. Always, and
-      # after the logs above.
-      - name: Tear the stack down
+        run: bash scripts/ci-container-stack.sh logs 120 || true
+      - name: Tear down CI container stack
         if: always()
-        run: bash scripts/ci-container-stack.sh down
+        run: bash scripts/ci-container-stack.sh down || true

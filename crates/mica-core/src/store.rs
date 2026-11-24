@@ -108,10 +108,18 @@ pub struct LocalSearchHit {
 /// Each is `None` — never an error — when it cannot be derived. See
 /// [`LocalStore::upsert_snapshot`]: the index is allowed to miss a document,
 /// the save is not allowed to fail because of it.
-fn derive_projections(doc_id: &str, state: &[u8]) -> (Option<String>, Option<String>) {
+#[derive(Debug, Default)]
+struct DocProjections {
+  content_text: Option<String>,
+  link_targets: Option<String>,
+  word_count: Option<i64>,
+  char_count: Option<i64>,
+}
+
+fn derive_projections(doc_id: &str, state: &[u8]) -> DocProjections {
   let doc = match contain_yrs_panic(doc_id, || Ok(MicaDoc::from_update(state)?)) {
     Ok(doc) => doc,
-    Err(_) => return (None, None),
+    Err(_) => return DocProjections::default(),
   };
   derive_projections_from_doc(&doc)
 }
@@ -120,24 +128,27 @@ fn derive_projections(doc_id: &str, state: &[u8]) -> (Option<String>, Option<Str
 /// ([`LocalStore::squash`] / [`LocalStore::compact_local`]) hold the doc they
 /// just folded; decoding the fresh state again inside `upsert_snapshot` would
 /// be a second full CRDT decode of the same content.
-fn derive_projections_from_doc(doc: &MicaDoc) -> (Option<String>, Option<String>) {
+fn derive_projections_from_doc(doc: &MicaDoc) -> DocProjections {
   let blocks = doc.to_blocks();
+  let counts = crate::word_count::count_blocks(&blocks);
   let content_text = blocks
     .iter()
     .map(|b| b.text.trim_end_matches('\n'))
     .filter(|t| !t.is_empty())
     .collect::<Vec<_>>()
-    .join(
-      "
-",
-    );
+    .join("\n");
   let mut targets: Vec<String> = blocks
     .iter()
     .flat_map(|b| crate::page_link_targets(&b.data))
     .collect();
   targets.sort_unstable();
   targets.dedup();
-  (Some(content_text), serde_json::to_string(&targets).ok())
+  DocProjections {
+    content_text: Some(content_text),
+    link_targets: serde_json::to_string(&targets).ok(),
+    word_count: Some(counts.words as i64),
+    char_count: Some(counts.chars as i64),
+  }
 }
 
 /// Does `table` (a live, opened table) have a column named `col`?
@@ -866,6 +877,34 @@ impl LocalStore {
       [],
     )?;
 
+    // Usage statistics (issue #191): additive nullable word/char projections on
+    // `doc_snapshot` + UTC hourly writing activity buckets. Additive so older
+    // builds remain compatible without bumping `SCHEMA_VERSION`.
+    for col in ["word_count", "char_count"] {
+      if !has_column(&conn, "doc_snapshot", col) {
+        conn.execute(
+          &format!("ALTER TABLE doc_snapshot ADD COLUMN {col} INTEGER"),
+          [],
+        )?;
+      }
+    }
+    conn.execute_batch(
+      "CREATE TABLE IF NOT EXISTS local_writing_activity_hourly(
+           origin        TEXT NOT NULL,
+           workspace_id  TEXT NOT NULL,
+           bucket_hour   INTEGER NOT NULL,
+           document_id   TEXT NOT NULL,
+           source        TEXT NOT NULL DEFAULT 'manual',
+           is_created    INTEGER NOT NULL DEFAULT 0,
+           edit_events   INTEGER NOT NULL DEFAULT 0,
+           words_added   INTEGER NOT NULL DEFAULT 0,
+           words_deleted INTEGER NOT NULL DEFAULT 0,
+           PRIMARY KEY(origin, bucket_hour, document_id, source)
+       );
+       CREATE INDEX IF NOT EXISTS local_writing_activity_ws_hour_idx
+           ON local_writing_activity_hourly(origin, workspace_id, bucket_hour DESC);",
+    )?;
+
     // Every migration succeeded — stamp the version this app writes. (The
     // too-new gate ran up top, before anything could mutate the store.)
     conn.execute(
@@ -974,17 +1013,33 @@ impl LocalStore {
     doc_id: &str,
     state: &[u8],
     crc: Option<i64>,
-    projections: (Option<String>, Option<String>),
+    projections: DocProjections,
   ) -> Result<(), StoreError> {
-    let (content_text, link_targets) = projections;
+    let DocProjections {
+      content_text,
+      link_targets,
+      word_count,
+      char_count,
+    } = projections;
     self.conn.execute(
-      "INSERT INTO doc_snapshot(origin,doc_id,state,updated_at,state_crc,content_text,link_targets,projection_stale)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,0)
+      "INSERT INTO doc_snapshot(origin,doc_id,state,updated_at,state_crc,content_text,link_targets,word_count,char_count,projection_stale)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,0)
              ON CONFLICT(origin,doc_id) DO UPDATE SET
                  state=excluded.state, updated_at=excluded.updated_at,
                  state_crc=excluded.state_crc, content_text=excluded.content_text,
-                 link_targets=excluded.link_targets, projection_stale=0",
-      params![origin, doc_id, state, now_millis(), crc, content_text, link_targets],
+                 link_targets=excluded.link_targets, word_count=excluded.word_count,
+                 char_count=excluded.char_count, projection_stale=0",
+      params![
+        origin,
+        doc_id,
+        state,
+        now_millis(),
+        crc,
+        content_text,
+        link_targets,
+        word_count,
+        char_count
+      ],
     )?;
     Ok(())
   }
@@ -1206,7 +1261,7 @@ impl LocalStore {
   pub fn backfill_content_text(&self, limit: usize) -> Result<usize, StoreError> {
     let mut stmt = self.conn.prepare(
       "SELECT origin, doc_id FROM doc_snapshot
-             WHERE content_text IS NULL OR link_targets IS NULL LIMIT ?1",
+             WHERE content_text IS NULL OR link_targets IS NULL OR word_count IS NULL OR char_count IS NULL LIMIT ?1",
     )?;
     let pending: Vec<(String, String)> = stmt
       .query_map(params![limit as i64], |r| {
@@ -1222,21 +1277,9 @@ impl LocalStore {
     Ok(filled)
   }
 
-  /// Rebuild one document's search/link projections from its CURRENT state —
+  /// Rebuild one document's search/link/word projections from its CURRENT state —
   /// the base snapshot plus both update logs — and store them.
-  ///
-  /// This is the read-side half of issue #104. `append_update` records an edit
-  /// without touching the base (that is what makes typing cheap), so the
-  /// projection columns describe the page as of the last fold. A reader that
-  /// answers from those columns must therefore refresh what it is about to
-  /// read. Refreshing here rather than on every append keeps the cost off the
-  /// keystroke path: N edits between two searches cost ONE decode.
-  ///
-  /// Never fails a read for a bad row: an undecodable document is written as
-  /// empty projections (`""`, `"[]"`), the same "not searchable, never wrong"
-  /// contract [`Self::backfill_content_text`] documents — and the same reason,
-  /// so a broken row is not re-decoded on every query.
-  fn reindex_doc(&self, origin: &str, doc_id: &str) -> Result<(), StoreError> {
+  pub(crate) fn reindex_doc(&self, origin: &str, doc_id: &str) -> Result<(), StoreError> {
     let state: Option<Vec<u8>> = self
       .conn
       .query_row(
@@ -1264,12 +1307,14 @@ impl LocalStore {
     if let Ok(folded) = folded {
       projections = folded;
     }
-    let text = projections.0.unwrap_or_default();
-    let links = projections.1.unwrap_or_else(|| "[]".to_string());
+    let text = projections.content_text.unwrap_or_default();
+    let links = projections.link_targets.unwrap_or_else(|| "[]".to_string());
+    let words = projections.word_count.unwrap_or(0);
+    let chars = projections.char_count.unwrap_or(0);
     self.conn.execute(
-      "UPDATE doc_snapshot SET content_text=?3, link_targets=?4, projection_stale=0
+      "UPDATE doc_snapshot SET content_text=?3, link_targets=?4, word_count=?5, char_count=?6, projection_stale=0
              WHERE origin=?1 AND doc_id=?2",
-      params![origin, doc_id, text, links],
+      params![origin, doc_id, text, links, words, chars],
     )?;
     Ok(())
   }

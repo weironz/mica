@@ -7,7 +7,7 @@
 /// The host's palette, handed to merman so a diagram is drawn in the SAME
 /// colours as the page around it. Values are CSS colour strings supplied by the
 /// client (`MicaTokens`), not copied here.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MermaidHostTheme {
   /// Dark appearance?
   pub dark: bool,
@@ -34,7 +34,7 @@ pub struct MermaidHostTheme {
 }
 
 /// A typeset formula with the original RaTeX view box and dimensions in em.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MathSvg {
   /// Standalone SVG, with glyph outlines where available.
   pub svg: String,

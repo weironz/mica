@@ -57,8 +57,7 @@ check fail 'wrong delivered binary version' CANARY_VERSION=9.9.9
 check fail 'draft release is refused' CANARY_DRAFT=true
 check fail 'old desktop contract is refused' OLD_CANARY_CONTRACT=1
 
-# Prove the downloaded desktop reaches the first-frame gate with Flutter's
-# actual version format, and that a nearby but wrong version stops before it.
+# Prove the downloaded pure-Rust desktop reaches the first-frame gate.
 touch "$fixture/assets/Mica-1.2.3-linux-amd64.deb"
 (cd "$fixture/assets" && sha256sum Mica-1.2.3-linux-amd64.deb > sha256-linux-desktop.txt)
 cat > "$fixture/bin/dpkg-deb" <<'STUB'
@@ -66,9 +65,9 @@ cat > "$fixture/bin/dpkg-deb" <<'STUB'
 case "$1" in
   -f) echo 1.2.3 ;;
   -x)
-    mkdir -p "$3/opt/mica"
-    printf '#!/usr/bin/env bash\nprintf "Mica %%s\\n" "$CANARY_DESKTOP_VERSION"\n' > "$3/opt/mica/mica_flutter"
-    chmod +x "$3/opt/mica/mica_flutter" ;;
+    mkdir -p "$3/usr/bin"
+    printf '#!/usr/bin/env bash\nprintf "Mica %%s\\n" "$CANARY_DESKTOP_VERSION"\n' > "$3/usr/bin/mica"
+    chmod +x "$3/usr/bin/mica" ;;
   *) exit 3 ;;
 esac
 STUB

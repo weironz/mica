@@ -13,6 +13,7 @@ pub mod layout;
 pub mod merge;
 pub mod model;
 pub mod routing;
+pub mod session;
 pub mod svg;
 
 use std::collections::HashMap;
@@ -25,13 +26,30 @@ pub use model::{
   NodeStyle, tech_icon_svg_inner,
 };
 pub use routing::route_edge;
-pub use svg::render_board_svg;
+pub use session::{
+  ActiveOverlay, BoardCommand, BoardPatch, BoardSession, BoardTool, PendingConnector, Rect,
+  ResizeHandle, SnapGuide, SnapshotDelta, UiEffect,
+};
+pub use svg::{
+  MICA_BOARD_SVG_METADATA_FORMAT, MICA_BOARD_SVG_METADATA_ID, extract_board_json_from_svg,
+  extract_board_snapshot_from_svg, render_board_svg, render_board_svg_with_source,
+};
 
 /// Parse a `mica-board` JSON payload and render it to a standalone SVG string.
 /// Returns `None` if `source` is not valid board JSON.
 pub fn render_board_json_svg(source: &str, theme: Option<&BoardSvgTheme>) -> Option<String> {
   let snap = BoardSnapshot::parse_json(source).ok()?;
   Some(render_board_svg(&snap, theme))
+}
+
+/// Parse a `mica-board` JSON payload and render it as a self-contained SVG
+/// carrying `<metadata id="mica-board-v1">` for lossless re-import into Mica.
+pub fn render_board_json_svg_with_source(
+  source: &str,
+  theme: Option<&BoardSvgTheme>,
+) -> Option<String> {
+  let snap = BoardSnapshot::parse_json(source).ok()?;
+  Some(render_board_svg_with_source(&snap, theme))
 }
 
 /// Re-layout mind map trees inside a board JSON string and return updated compact JSON.
@@ -263,5 +281,37 @@ mod tests {
     assert_eq!(sa.nodes[0].x, 333.0);
     assert_eq!(sa.nodes[0].text, "Yrs 并发文本");
     assert_eq!(sa.nodes[0], sb.nodes[0]);
+  }
+
+  #[test]
+  fn self_contained_svg_roundtrips_json_and_special_xml_chars() {
+    let mut snap = BoardSnapshot::template_mindmap();
+    snap.title = "系统架构 <v2> & ]]> 测试".into();
+    snap.nodes[0].text = "包含 ```围栏```、]]> 和 <tag> & 中文".into();
+
+    let svg = render_board_svg_with_source(&snap, None);
+    assert!(svg.starts_with("<svg "));
+    assert!(svg.ends_with("</svg>"));
+    assert!(svg.contains(MICA_BOARD_SVG_METADATA_ID));
+    // Must remain well-formed XML even with `]]>` and `<tag>` inside node text.
+    assert!(roxmltree::Document::parse(&svg).is_ok());
+
+    let extracted = extract_board_snapshot_from_svg(svg.as_bytes()).expect("extract snapshot");
+    assert_eq!(extracted, snap);
+
+    // Pretty-printed metadata with whitespace/newlines must still decode cleanly.
+    let pretty = svg.replace(
+      r#"data-format="mica-board-json-v1">"#,
+      "data-format=\"mica-board-json-v1\">\n  ",
+    );
+    assert_eq!(
+      extract_board_json_from_svg(pretty.as_bytes()).as_deref(),
+      Some(snap.to_compact_json().as_str())
+    );
+
+    // Ordinary SVGs and corrupted metadata return None cleanly.
+    assert!(extract_board_json_from_svg(b"<svg xmlns='http://www.w3.org/2000/svg'/>").is_none());
+    let bad = r#"<svg xmlns="http://www.w3.org/2000/svg"><metadata id="mica-board-v1">not-valid-base64!!!</metadata></svg>"#;
+    assert!(extract_board_json_from_svg(bad.as_bytes()).is_none());
   }
 }

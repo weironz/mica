@@ -1,27 +1,10 @@
 #!/usr/bin/env bash
 # Build every GitHub-release asset THIS machine can build, into dist/vX.Y.Z/.
-#
-#   just release-artifacts 0.13.57             # what this host can build
-#   just release-artifacts 0.13.57 --no-smoke  # skip the installer launch test
-#
-# The local twin of the `windows` + `cli` jobs in .github/workflows/release.yml:
-#
-#   asset                                  built on
-#   Mica-Setup-X.Y.Z.exe                   Windows (Flutter + Inno Setup), smoke-tested
+#   Mica-Setup-X.Y.Z.exe                   Windows (pure-Rust mica-rust.exe + Inno Setup)
 #   mica-cli-X.Y.Z-windows-x64.exe         Windows
-#   mica-cli-X.Y.Z-linux-x64  (static)     Linux natively; Windows/macOS through Docker
+#   mica-cli-X.Y.Z-linux-x64  (static)     Linux natively; Windows/macOS via Docker
 #   mica-cli-X.Y.Z-macos-arm64             macOS
-#
-# Opt-in, off unless asked (any host with Docker, or a native toolchain —
-# scripts/build-linux-deb.sh / build-android-apk.sh):
-#
-#   Mica-X.Y.Z-linux-amd64.deb             --deb  or MICA_BUILD_LINUX_DEB=1
-#   Mica-X.Y.Z-android-{arm64,armv7}.apk   --apk  or MICA_BUILD_ANDROID=1
-#
-# So one Windows box with Docker Desktop produces everything except the macOS
-# CLI. Run it on each machine you have, then `just release-upload X.Y.Z` from
-# each; `just release-publish X.Y.Z` flips the release public once the
-# required assets are all attached.
+#   Mica-X.Y.Z-linux-amd64.deb             --deb or MICA_BUILD_LINUX_DEB=1
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
@@ -30,12 +13,10 @@ version=${1:-}
 check_version_arg "$version"
 smoke=1
 deb=${MICA_BUILD_LINUX_DEB:-0}
-apk=${MICA_BUILD_ANDROID:-0}
 for a in "${@:2}"; do
   case "$a" in
     --no-smoke) smoke=0 ;;
     --deb) deb=1 ;;
-    --apk) apk=1 ;;
     *) fail "unknown flag $a" ;;
   esac
 done
@@ -43,9 +24,6 @@ done
 require_tagged_tree "$version"
 out=$(dist_dir "$version")
 mkdir -p "$out"
-# A failed run must not leave a stale manifest behind to claim coverage this
-# attempt never produced (the updater trusts the file's existence, not when it
-# was written). Cleared BEFORE anything builds, then rewritten at the end.
 rm -f "$out"/sha256-*.txt "$out/.built-from"
 os=$(host_os)
 note "host: $os  ->  $out/"
@@ -65,19 +43,10 @@ build_cli_native() {
   fi
 }
 
-# Linux CLI inside the SAME pinned toolchain image the api is built with, so a
-# Windows or macOS machine can produce it too. Its own target dir, so it never
-# fights the host build over target/.
-#
-# musl-tools and the musl target are baked into a local builder image ONCE per
-# Rust pin, not installed on every run. The per-run `apt-get update` put Debian's
-# mirrors on the release's critical path, and a transient DNS failure inside the
-# container stopped 0.14.8's train an hour in. Now only the first release after a
-# Rust bump touches apt; the image stays in the local Docker cache.
 build_cli_linux_docker() {
   local builder="mica-cli-musl-builder:$rust_pin"
   if ! docker image inspect "$builder" >/dev/null 2>&1; then
-    note "builder image $builder (first use of this Rust pin; reused afterwards)"
+    note "builder image $builder"
     printf '%s\n' \
       "FROM rust:$rust_pin-slim-bookworm" \
       "RUN apt-get update && apt-get install -y --no-install-recommends musl-tools \\" \
@@ -87,9 +56,6 @@ build_cli_linux_docker() {
   note "mica-cli (linux-x64, static, in $builder)"
   local repo; repo=$(pwd)
   case "$repo" in /[a-z]/*) repo="$(echo "${repo:1:1}" | tr a-z A-Z):${repo:2}" ;; esac
-  # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, whose `components`
-  # (clippy, rustfmt) the slim image lacks — rustup would otherwise download
-  # them for a build that uses neither. Same pinned version either way.
   MSYS_NO_PATHCONV=1 docker run --rm -v "$repo:/src" -w /src \
     -e CARGO_TARGET_DIR=/src/target/docker-musl -e "RUSTUP_TOOLCHAIN=$rust_pin" \
     "$builder" cargo build --locked -p mica-cli --release --target x86_64-unknown-linux-musl
@@ -102,18 +68,18 @@ verify_static() {
   kind=$(file "$f")
   case "$kind" in
     *"statically linked"* | *"static-pie linked"*) note "static: ok" ;;
-    *) fail "$f is not statically linked — it will refuse to start on older distros: $kind" ;;
+    *) fail "$f is not statically linked: $kind" ;;
   esac
 }
 
 case "$os" in
   windows)
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-installer-wait.ps1
-    note "Windows installer"
-    (cd clients/mica_flutter && "$FLUTTER" build windows --release)
+    note "Windows installer (pure-Rust mica-rust.exe)"
+    cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --release --locked
     iscc=$(find_iscc) || fail "Inno Setup 6 compiler not found — install it or set ISCC"
-    "$iscc" "//DAppVersion=$version" 'clients\mica_flutter\installer\mica.iss'
-    setup="clients/mica_flutter/installer/Output/Mica-Setup-$version.exe"
+    "$iscc" "//DAppVersion=$version" 'clients\mica_rust\installer\mica.iss'
+    setup="clients/mica_rust/installer/Output/Mica-Setup-$version.exe"
     cp "$setup" "$out/"
     if [ "$smoke" = 1 ]; then
       note "installer smoke test (install + launch)"
@@ -124,7 +90,7 @@ case "$os" in
       build_cli_linux_docker
       verify_static "$out/mica-cli-$version-linux-x64"
     else
-      note "Docker is not running: the Linux CLI is left for a Linux machine (or start Docker Desktop and re-run)"
+      note "Docker is not running: the Linux CLI is left for a Linux machine"
     fi
     ;;
   linux)
@@ -133,10 +99,9 @@ case "$os" in
     elif docker info >/dev/null 2>&1; then
       build_cli_linux_docker
     else
-      fail "need musl-tools (apt install musl-tools) or Docker to build the static Linux CLI"
+      fail "need musl-tools or Docker to build the static Linux CLI"
     fi
     verify_static "$out/mica-cli-$version-linux-x64"
-    note "the Windows installer and Windows CLI need a Windows machine"
     ;;
   macos)
     build_cli_native macos-arm64 mica-cli
@@ -144,39 +109,23 @@ case "$os" in
   *) fail "unsupported host $(uname -s)" ;;
 esac
 
-# The opt-in client packages build the same way on every host (pinned Docker
-# builder, or natively where the toolchain is present).
 if [ "$deb" = 1 ]; then note "Linux .deb"; bash scripts/build-linux-deb.sh "$version" "$out"; fi
-if [ "$apk" = 1 ]; then note "Android APKs"; bash scripts/build-android-apk.sh "$version" "$out"; fi
 
-# One manifest PER PLATFORM this run produced, not one for the host: the branch
-# above can build another platform's asset (Windows/macOS -> Linux CLI in
-# Docker), and the updater on that platform asks for its own sha256-<os>.txt by
-# name. The stale manifests were already cleared before the build, so only what
-# this run really produced is written now.
 for manifest in sha256-windows.txt sha256-windows-installer.txt sha256-linux.txt sha256-macos.txt \
-                sha256-linux-desktop.txt sha256-android.txt; do
+                sha256-linux-desktop.txt; do
   : > "$out/$manifest"
   for f in "$out"/*; do
     name=${f##*/}
     case "$name" in sha256-*.txt) continue ;; esac
     manifest_of_asset=$(manifest_for_asset "$name") \
-      || fail "$name has no platform manifest — teach manifest_for_asset (scripts/lib-local.sh) about it, or the updater on that platform can never verify it"
+      || fail "$name has no platform manifest"
     [ "$manifest_of_asset" = "$manifest" ] || continue
-    # `sha256sum` is not one program: GNU coreutils writes two spaces, and the
-    # Windows coreutils port writes GNU's binary-mode marker `*name`. Both the
-    # updater (crates/cli/src/update.rs) and release-publish match the filename
-    # exactly, so a `*` here makes the asset unverifiable — publish refused
-    # 0.13.69's manifests for exactly that. Emit the canonical `<hex>  <name>`.
     hash=$(cd "$out" && sha256sum "$name" | cut -d' ' -f1)
     printf '%s  %s\n' "$hash" "$name" >> "$out/$manifest"
   done
   [ -s "$out/$manifest" ] || rm -f "$out/$manifest"
 done
-# Which commit these files came from, written only once everything above
-# succeeded. `just ship` reads it on a resume to reuse this build instead of
-# compiling and smoke-testing the same tag again (REBUILD=1 forces a rebuild).
-# A dotfile, so release-upload's `$out/*` never attaches it.
+
 git rev-parse HEAD > "$out/.built-from"
 note "built:"
 ls -l "$out"

@@ -101,7 +101,7 @@ Mica 全部键盘快捷键的**权威清单**。加/改快捷键时三处必须�
 |---|---|
 | `Ctrl + Z` | 撤销 |
 | `Ctrl + Shift + Z` / `Ctrl + Y` | 重做 |
-| `Ctrl + A` | 全选 |
+| `Ctrl + A` | 全选（代码块内首次全选代码块内容，再次按 `Ctrl + A` 扩展至整页） |
 | `Ctrl + C` / `Ctrl + X` / `Ctrl + V` | 复制 / 剪切 / 粘贴 |
 | `Ctrl + Shift + V` | 粘贴为纯文本(不解析 Markdown) |
 | `Delete` / `Backspace` | 选中整块(分隔线 / 图片)时删除该块 —— 点一下分隔线或图片即选中 |

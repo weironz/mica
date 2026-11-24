@@ -1,68 +1,29 @@
 name: Release
 
-# Push a tag like `v0.1.0` (or run manually) to build EVERY release artifact.
-# Attached to the GitHub release for that tag:
-#   * the Flutter Windows desktop app, packaged with Inno Setup (unsigned for
-#     now — see installer/mica.iss); this drives the in-app auto-updater.
-#   * the `mica-cli` binary for Windows / Linux / macOS (a pure, thin HTTP client
-#     over the REST API — no backup engine baked in; see docs/ops/backup.md).
-  # Pushed to the container registries (`images` job):
-  #   * mica-api / mica-web / mica-cli, tagged with the IMMUTABLE version.
-  #
-  # The `cli` job also writes `sha256-<os>.txt` next to each binary: `mica-cli
-  # update` refuses to install bytes it cannot verify against that manifest
-  # (issue #38), so every release has to carry one — same `sha256sum` format
-  # `scripts/release-artifacts.sh` writes for locally-built releases.
-#
-# Deploying is not here, but the reason changed and this comment used to state
-# the old one as if it still held: "letting CI deploy would mean putting a prod
-# root SSH key in GitHub secrets… CI only ever holds registry-push credentials."
-# Both halves stopped being true on 2026-08-25. There IS a Deploy workflow, and
-# it holds exactly that key. The trade is argued in docs/ops/cd-plan.md §4.1 and
-# docs/ops/release.md; the short version is that the fence closed one door in a room
-# with another one open — the same CI could already publish a malicious image
-# that prod would pull.
-#
-# What survives is the SEPARATION, and for a different reason: building is a
-# consequence of tagging, while deploying is a decision. Deploy is
-# workflow_dispatch-only, so "which version is live" is never a side effect of
-# pushing a tag.
+# Build & publish pure-Rust Mica release artifacts:
+#   * Windows desktop installer (clients/mica_rust -> Mica-Setup-X.Y.Z.exe)
+#   * mica-cli binaries (Windows / Linux static / optional macOS)
+#   * Docker images (mica-api, mica-web pure-Rust WASM, mica-cli)
+#   * Optional Linux .deb (clients/mica_rust -> Mica-X.Y.Z-linux-amd64.deb)
 
 on:
-  # Manual only (2026-10-20, user's call): the Actions quota ran out, and every
-  # pushed tag was spending it automatically. The local gates (`just ci`,
-  # `just release`) are the default path now; run this from the Actions page
-  # when a hosted run is actually wanted.
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version without the leading v (e.g. 0.1.0)'
+        description: 'Version without the leading v (e.g. 0.14.12)'
         required: true
       publish:
-        description: 'Publish the installer to a GitHub release (off = dry-run: build + package + upload artifact only)'
+        description: 'Publish to GitHub release (off = dry-run)'
         type: boolean
         default: false
-      # Opt-in client packages. Off unless ticked here, or switched on for every
-      # run with the repository variable MICA_BUILD_LINUX_DEB / MICA_BUILD_ANDROID
-      # set to 'true' (Settings → Secrets and variables → Actions → Variables).
       build_macos_cli:
-        description: 'Also build macOS CLI (optional hosted runner)'
+        description: 'Also build macOS CLI'
         type: boolean
         default: false
       build_linux_deb:
-        description: 'Also build the Linux .deb (Mica-X.Y.Z-linux-amd64.deb)'
+        description: 'Also build the Linux .deb'
         type: boolean
         default: false
-      build_android:
-        description: 'Also build the Android APKs (Mica-X.Y.Z-android-arm64/armv7.apk)'
-        type: boolean
-        default: false
-  # Callable, so `release-dryrun.yml` can exercise these legs WITHOUT a tag.
-  # Every job below exists ONLY in this workflow, so nothing on an ordinary push
-  # ever runs them — which is how the pinned toolchain broke the musl leg on
-  # 2026-08-27 and survived 29 green CI runs before anyone found out, at release
-  # time. A plain `push:` trigger cannot do this: one `push:` block cannot carry
-  # both `tags:` (unfiltered) and `branches:` + `paths:`.
   workflow_call:
     inputs:
       source_sha:
@@ -83,69 +44,32 @@ on:
       build_linux_deb:
         type: boolean
         default: false
-      build_android:
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
 jobs:
-  # Create the release as a DRAFT before anything builds, so every producing job
-  # can attach its assets in parallel.
-  #
-  # `cli` used to carry `needs: windows` purely for ordering: the in-app updater
-  # reads /releases/latest and must never see a version whose installer is not
-  # attached yet. That guarantee was real, but serialising bought it at the price
-  # of the whole windows job — measured on v0.12.8, cli sat idle for 11.3 min and
-  # the run took 15.0 min instead of ~11.5.
-  #
-  # A draft gives the SAME guarantee for ~10 s: draft releases are invisible to
-  # /releases/latest. Nothing is publicly visible until `publish` flips it at the
-  # end, by which point every asset is attached.
-  #
-  # This job is deliberately NOT gated on the publish condition — only the step
-  # inside it is. Gating the job would make `needs: draft` skip the builders on a
-  # dry run (workflow_dispatch with publish=false), which must keep building and
-  # uploading artifacts as it does today.
   draft:
     runs-on: ubuntu-latest
-    # The ONE place the version is resolved, and the only place it is validated
-    # against this tree. `windows`, `cli` and `images` declare `needs: draft` and
-    # read these outputs, so a refusal here skips every build and push — and no
-    # leg can tag an artifact with a version another leg never saw (#119). This
-    # job is not gated on the publish condition; only the step that creates the
-    # draft is, so dry runs still resolve and validate.
     outputs:
       version: ${{ steps.ver.outputs.version }}
       sha: ${{ steps.ver.outputs.sha }}
       tag: ${{ steps.ver.outputs.tag }}
       cli-matrix: ${{ steps.cli-matrix.outputs.matrix }}
     steps:
-      # The tag is not evidence of anything: `git tag v0.13.29 && git push`
-      # without `just release` (which is what bumps) builds an installer FILE
-      # named 0.13.29 around a binary whose kAppVersion is still 0.13.28, and
-      # the in-app updater compares exactly that number. Resolution AND that
-      # check live in scripts/release-version.sh — one resolver, one validation,
-      # exercised by scripts/test-release-version.sh on both trigger paths.
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
-
-      - name: Resolve CLI runners (macOS is opt-in)
+      - name: Resolve CLI runners
         id: cli-matrix
         env:
           BUILD_MACOS_CLI: ${{ inputs.build_macos_cli }}
         run: |
           python3 scripts/test-release-cli-matrix.py
           python3 scripts/release-cli-matrix.py >> "$GITHUB_OUTPUT"
-
       - name: Resolve version
         id: ver
         shell: bash
-        # Through env, not interpolated into the script body: the value comes
-        # from a tag name or a dispatch input, and pasting either straight into
-        # shell is a script-injection seam for no benefit.
         env:
           RELEASE_VERSION_INPUT: ${{ inputs.version }}
           PUBLISH: ${{ inputs.publish }}
@@ -160,8 +84,7 @@ jobs:
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
-
-      - name: Create the draft release
+      - name: Create draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
@@ -171,265 +94,91 @@ jobs:
   windows:
     needs: draft
     runs-on: windows-latest
-    # NOTE: sccache was tried here and removed (v0.12.18) — measured 0% hit rate.
-    # The GitHub Actions cache is scoped per git-ref and this job only runs on tag
-    # pushes, so each release starts from an empty cache and never reuses the
-    # previous release's units. Even with hits it could only cache the Rust FFI
-    # slice; the job's long pole is `flutter build windows` (Dart/C++), which no
-    # Rust cache touches. rust-cache (below) stays: low overhead, and it at least
-    # keeps third-party deps. See docs/dev/lessons.md.
-    defaults:
-      run:
-        working-directory: clients/mica_flutter
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.draft.outputs.sha }}
-
       - name: Test installer completion gate
-        shell: powershell
-        working-directory: .
+        shell: pwsh
         run: ./scripts/test-installer-wait.ps1
-
-      - uses: ./.github/actions/setup-flutter
-
-      - run: flutter config --enable-windows-desktop
-
-      # `flutter build windows` compiles the Rust FFI crate too — cargokit builds
-      # `rust_lib_mica_flutter` (see windows/flutter/generated_plugins.cmake) —
-      # and that was entirely uncached: yrs, mica-core, mica-markdown and merman
-      # recompiled in RELEASE mode on every single run.
-      #
-      # Measured on v0.12.8: `flutter build windows --release` took 522 s — 78%
-      # of this job and 58% of the whole run's critical path. For contrast, the
-      # `cli` job does a full Rust build of the same dependency tree in 3.7 min
-      # WITH this cache.
-      #
-      # `workspaces:` points at the FFI crate because it declares its own
-      # `[workspace]` (it sits inside the backend tree but is not a member).
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: clients/mica_flutter/rust
-          # Distinct from the cli job's `mica-cli` key: different crate, different
-          # profile. One shared key would just thrash both.
-          key: mica-flutter-ffi
-          # READ-ONLY on a release. GitHub scopes caches per ref, so an entry
-          # written on `refs/tags/v0.13.21` is visible to that tag and nothing
-          # else — never to the next release. Three consecutive releases logged
-          # "No cache found", recompiled the whole dependency tree, and then
-          # saved an entry no run would ever read: the cost paid twice.
-          #
-          # Reads still work, because a tag can read its base branch's caches.
-          # So restore whatever `main` built and write nothing — which also
-          # stops release runs from evicting the entries CI depends on (see the
-          # cache-budget note in ci.yml).
-          save-if: false
-
-      - run: flutter pub get
-
-      - run: flutter build windows --release
-
+          workspaces: clients/mica_rust
+          key: mica-rust-win-release
+      - name: Build pure-Rust Windows desktop binary
+        run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --release --locked
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup -y --no-progress
-
-      - name: Build installer
+      - name: Build Windows installer
         shell: pwsh
-        run: >
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          /DAppVersion=${{ needs.draft.outputs.version }} installer\mica.iss
-
-      - name: Write installer checksum (independent of the CLI producer)
+        env:
+          APP_VERSION: ${{ needs.draft.outputs.version }}
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:APP_VERSION" "clients\mica_rust\installer\mica.iss"
+      - name: Write installer checksum
         shell: bash
-        working-directory: clients/mica_flutter/installer/Output
-        run: sha256sum "Mica-Setup-${{ needs.draft.outputs.version }}.exe" > sha256-windows-installer.txt
-
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v5
+        working-directory: clients/mica_rust/installer/Output
+        run: sha256sum Mica-Setup-*.exe > sha256-windows-installer.txt && cat sha256-windows-installer.txt
+      - uses: actions/upload-artifact@v5
         with:
           name: Mica-Setup-${{ needs.draft.outputs.version }}
           path: |
-            clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
-            clients/mica_flutter/installer/Output/sha256-windows-installer.txt
+            clients/mica_rust/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
+            clients/mica_rust/installer/Output/sha256-windows-installer.txt
           if-no-files-found: error
-
-      # Smoke-test the ACTUAL packaged installer before it can reach a release.
-      # The in-app updater ships this exact .exe to every user, yet nothing so far
-      # has run it: build success only proves it compiled and ISCC zipped it.
-      # Here we silently install it and launch the installed app — if it can't
-      # produce its first frame and survive another 10 s, the job fails.
-      #
-      # Placed AFTER the artifact upload (so a failed smoke still leaves the .exe
-      # downloadable for post-mortem) and BEFORE "Publish installer to release"
-      # (which, being a later step, is skipped once this one fails).
-      - name: Smoke-test the installer (install + launch)
-        shell: pwsh
-        working-directory: .
-        run: |
-          $ver = '${{ needs.draft.outputs.version }}'
-          ./scripts/smoke-installer.ps1 -Setup "clients\mica_flutter\installer\Output\Mica-Setup-$ver.exe" -ExpectedVersion $ver
-
-      - name: Publish installer to release
-        # Tag pushes always publish; manual runs only when publish=true (else
-        # it's a dry-run that just builds + uploads the artifact above).
+      - name: Publish installer to draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.draft.outputs.tag }}
-          # Stays a draft until the `publish` job flips it — otherwise this
-          # upload would publish a release that has no cli binaries yet, which is
-          # the exact window the old `needs: windows` ordering existed to close.
           draft: true
-          # Stable, not prerelease: the in-app updater checks GitHub's
-          # /releases/latest, which SKIPS prereleases — marking releases
-          # prerelease made new versions invisible to auto-update. `publish` is
-          # what sets --latest, once every asset is attached.
           prerelease: false
-          make_latest: true
           fail_on_unmatched_files: true
           files: |
-            clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
-            clients/mica_flutter/installer/Output/sha256-windows-installer.txt
+            clients/mica_rust/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
+            clients/mica_rust/installer/Output/sha256-windows-installer.txt
 
   cli:
-    # Build + publish the mica-cli binary for each desktop OS.
-    #
-    # `needs: draft`, NOT `needs: windows`. The ordering this used to enforce —
-    # installer on the release before anything else — is now guaranteed by the
-    # release being a draft until `publish` runs, so these legs no longer wait
-    # out an 11-minute Windows build to attach an 8 MB binary.
     needs: draft
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.draft.outputs['cli-matrix']) }}
+      matrix: ${{ fromJson(needs.draft.outputs.cli-matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.draft.outputs.sha }}
-
       - uses: ./.github/actions/setup-rust
-        with:
-          targets: ${{ matrix.target }}
-
-      # `targets:` above adds the std slice to the toolchain THIS ACTION
-      # installs (`stable`). Since 2026-08-27 the repo pins Rust in
-      # `rust-toolchain.toml`, and cargo honours that pin — so the musl leg ran
-      # on the pinned toolchain, which had no musl std, and died with
-      #   error[E0463]: can't find crate for `core`
-      # `rustup target add` reads the override file for this directory, so it
-      # adds the target to the toolchain that actually does the building.
-      #
-      # This broke in the SAME release that introduced the pin (v0.13.30) and 29
-      # green CI runs never saw it, because this job exists only in the release
-      # workflow. Release-only legs are unexercised until you release; the dry
-      # run for that is `gh workflow run Release -f version=X.Y.Z` (publish
-      # defaults to false — builds everything, publishes nothing).
-      - if: matrix.target != ''
-        run: rustup target add ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # One shared cache across the matrix would collide (different OSes);
-          # rust-cache already namespaces by runner OS. Key by the crate so the
-          # desktop job's Rust cache never mixes in.
-          key: mica-cli
-          # Read-only for the same reason as the windows job above: a cache
-          # written on a tag ref is readable only by that tag, so saving here
-          # costs upload time on every release and is never restored by the
-          # next one.
-          save-if: false
-
-      # musl needs its linker; the other legs have no target and skip this.
       - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        # Self-hosted runners rarely have passwordless sudo: install once on the
-        # machine (`sudo apt-get install -y musl-tools`) and this step is a no-op.
-        run: command -v musl-gcc >/dev/null || { sudo apt-get update && sudo apt-get install -y musl-tools; }
-
-      # Pure-Rust build: reqwest uses rustls-tls (no OpenSSL), so Linux/macOS
-      # need no system TLS libs. --locked pins to the committed Cargo.lock.
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
       - name: Build mica-cli
         shell: bash
         run: |
           if [ -n "${{ matrix.target }}" ]; then
             cargo build --locked -p mica-cli --release --target "${{ matrix.target }}"
+            mkdir -p out
+            cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "out/mica-cli-${{ needs.draft.outputs.version }}-${{ matrix.suffix }}"
           else
             cargo build --locked -p mica-cli --release
+            mkdir -p out
+            cp "target/release/${{ matrix.bin }}" "out/mica-cli-${{ needs.draft.outputs.version }}-${{ matrix.suffix }}"
           fi
-
-      - name: Stage binary
-        id: stage
+      - name: Write checksum manifest
         shell: bash
-        run: |
-          asset="mica-cli-${{ needs.draft.outputs.version }}-${{ matrix.suffix }}"
-          # A cross-target build lands under target/<triple>/release, not
-          # target/release. Copying the wrong one would silently ship the
-          # glibc binary again under a name that promises otherwise.
-          if [ -n "${{ matrix.target }}" ]; then
-            built="target/${{ matrix.target }}/release/${{ matrix.bin }}"
-          else
-            built="target/release/${{ matrix.bin }}"
-          fi
-          cp "$built" "$asset"
-          echo "asset=$asset" >> "$GITHUB_OUTPUT"
-
-      # Prove the Linux binary is actually static — the whole point of the musl
-      # leg, and the thing that silently regresses if a C dependency ever creeps
-      # in. Fails here rather than on someone's server, which is how the glibc
-      # build got shipped in the first place.
-      - name: Verify the Linux binary is static
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        shell: bash
-        run: |
-          out=$(file "${{ steps.stage.outputs.asset }}")
-          echo "$out"
-          # BOTH spellings. A musl release build is position-independent, so
-          # `file` says "static-pie linked", not "statically linked" — matching
-          # only the latter fails every good binary and takes the release with
-          # it. Caught by building one locally before trusting this check.
-          case "$out" in
-            *"statically linked"* | *"static-pie linked"*) ;;
-            *)
-              echo "::error::mica-cli is not statically linked — it will refuse to start on older distros"
-              exit 1
-              ;;
-          esac
-
-      - name: Verify the delivered CLI version
-        shell: bash
-        env:
-          EXPECTED_VERSION: ${{ needs.draft.outputs.version }}
-        run: |
-          got=$(./${{ steps.stage.outputs.asset }} --version)
-          printf '%s\n' "$got" | tr ' ' '\n' | grep -Fx "$EXPECTED_VERSION"
-
-      # `mica-cli update` refuses to install a binary it cannot verify against
-      # the release's sha256-<os>.txt (issue #38), so every release must carry
-      # the manifest for the assets it ships — the same `sha256sum` format
-      # scripts/release-artifacts.sh writes for locally-built releases.
-      # Written unconditionally (also on dry runs, where the artifact upload
-      # below is the only place to inspect it); only the ATTACH step is gated.
-      - name: Write the checksum manifest
-        shell: bash
-        run: |
-          sha256sum "${{ steps.stage.outputs.asset }}" > "sha256-${{ matrix.osname }}.txt"
-          cat "sha256-${{ matrix.osname }}.txt"
-
-      - name: Upload cli artifact
-        uses: actions/upload-artifact@v5
+        working-directory: out
+        run: sha256sum mica-cli-* > "sha256-${{ matrix.platform }}.txt"
+      - uses: actions/upload-artifact@v5
         with:
           name: mica-cli-${{ matrix.suffix }}
-          path: |
-            ${{ steps.stage.outputs.asset }}
-            sha256-${{ matrix.osname }}.txt
+          path: out/*
           if-no-files-found: error
-
-      - name: Attach cli binary + checksums to the draft release
-        # Same gate as the installer: tag pushes always publish; manual runs only
-        # when publish=true (else dry-run = build + artifact only). The draft
-        # release already exists (the `draft` job created it) — this only attaches
-        # files, and `draft: true` keeps it unpublished until `publish` runs.
+      - name: Attach CLI binary + checksums to draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
@@ -437,26 +186,9 @@ jobs:
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
-          files: |
-            ${{ steps.stage.outputs.asset }}
-            sha256-${{ matrix.osname }}.txt
+          files: out/*
 
   images:
-    # The three images compose runs in prod (api, web, and cli — the `backup`
-    # service). All three are keyed to ${MICA_VERSION}, so they must be pushed
-    # TOGETHER at the same tag or a release leaves `backup` unable to pull.
-    #
-    # Pushed to BOTH registries: Aliyun ACR is what prod pulls (first-party,
-    # fast in CN); Docker Hub is the off-site copy. Prod used to depend on a
-    # third-party pull-through mirror (docker.1ms.run), which caches tag->digest
-    # and could hand back a stale image for a rolling tag — hence ACR + the
-    # IMMUTABLE version tag (never `latest`): a tag that never existed before
-    # cannot be served stale.
-    #
-    # Attaches nothing to the release, but it is NOT independent of `draft`: the
-    # version it tags images with is the one `draft` validated against this tree.
-    # Without the dependency a refused version (tag says 0.13.69, tree says
-    # 0.13.68) still pushed 0.13.69 images under publish=true (#119).
     needs: draft
     runs-on: ubuntu-latest
     strategy:
@@ -464,118 +196,51 @@ jobs:
       matrix:
         include:
           - img: api
-            file: deploy/Dockerfile.api
+            web: false
           - img: web
-            file: deploy/Dockerfile.web
-            flutter: true
+            web: true
           - img: cli
-            file: deploy/Dockerfile.cli
+            web: false
     steps:
-      # Registry logins and buildx state go to this job's temp dir, not the
-      # runner user's ~/.docker: on a self-hosted machine login-action would
-      # overwrite their saved credentials and its post-step `docker logout`
-      # would sign them out. (Job-level `env:` cannot see `runner.temp`.)
-      - name: Keep docker credentials out of the runner user's home
-        run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.draft.outputs.sha }}
-
-      # Only the web image needs a Flutter bundle baked in.
-      - uses: ./.github/actions/setup-flutter
-        if: ${{ matrix.flutter }}
-
       - uses: ./.github/actions/setup-rust
-        if: ${{ matrix.flutter }}
-      - uses: Swatinem/rust-cache@v2
-        if: ${{ matrix.flutter }}
-        with:
-          key: md-wasm-release
-      - name: Install pinned wasm-bindgen CLI
-        if: ${{ matrix.flutter }}
-        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
-      - name: Build Markdown Web engine
-        if: ${{ matrix.flutter }}
-        run: bash scripts/build-md-wasm.sh
-      - name: Build Web document engine and editor previews
-        if: ${{ matrix.flutter }}
+        if: ${{ matrix.web }}
+      - name: Build pure-Rust WebAssembly bundle
+        if: ${{ matrix.web }}
         run: |
-          bash scripts/build-doc-wasm.sh
-          bash scripts/build-preview-wasm.sh
-          bash scripts/build-board-wasm.sh
-
-      - name: Build + stage the web bundle
-        if: ${{ matrix.flutter }}
-        run: |
-          rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
-          cd clients/mica_flutter
-          flutter pub get
-          flutter test test/web_engine_fresh_test.dart
-          # --no-web-resources-cdn: serve CanvasKit same-origin instead of from
-          # www.gstatic.com (CORP-header dependency + unreliable from CN).
-          flutter build web --release --no-web-resources-cdn
-          cd ../..
-          # Runtime font fallback is served same-origin from web/gfonts; make
-          # sure the committed mirror matches THIS Flutter's engine tables
-          # before baking the image (shard URLs are engine-version-pinned).
-          bash clients/mica_flutter/tool/gfonts/mirror.sh --check
-          rm -rf deploy/web && mkdir -p deploy/web
-          cp -r clients/mica_flutter/build/web/. deploy/web/
-
-      - uses: docker/setup-buildx-action@v4
-        with:
-          name: mica-buildx
-          keep-state: true
-
-      # Gated with the push below: a dry run has nothing to authenticate FOR, and
-      # a login that fails for want of a secret would turn the dry run red for a
-      # reason that has nothing to do with what it is checking.
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends brotli clang
+          rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
+          bash scripts/test-web-csp-hashes.sh
+          bash scripts/build-web-rust.sh
+      - uses: docker/setup-buildx-action@v3
       - name: Login to Aliyun ACR
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: docker/login-action@v4
+        uses: docker/login-action@v3
         with:
           registry: registry.cn-shenzhen.aliyuncs.com
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
-
       - name: Login to Docker Hub
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: docker/login-action@v4
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: Build + push mica-${{ matrix.img }}
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.file }}
-          # Was an unconditional `true`, and that was a real hole: the registry
-          # tags are IMMUTABLE by policy (`docs/ops/release.md`), but a dry run —
-          # `publish=false`, whose whole promise is "build everything, publish
-          # nothing" — pushed anyway, overwriting the images of whatever version
-          # the tree happened to say. Building still happens on a dry run; only
-          # the push is withheld, which is the half that matters.
-          push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-          # Buildx defaults attach an OCI attestation manifest, turning the
-          # image into a multi-manifest index that some registries / a plain
-          # `docker save | docker load` cannot resolve.
+          file: deploy/Dockerfile.${{ matrix.img }}
           provenance: false
           sbom: false
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
           tags: |
-            registry.cn-shenzhen.aliyuncs.com/willspace/mica-${{ matrix.img }}:v${{ needs.draft.outputs.version }}
-            willdockerhub/mica-${{ matrix.img }}:v${{ needs.draft.outputs.version }}
-          cache-from: type=gha,scope=${{ matrix.img }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.img }}
+            registry.cn-shenzhen.aliyuncs.com/willspace/mica-${{ matrix.img }}:${{ needs.draft.outputs.tag }}
+            willdockerhub/mica-${{ matrix.img }}:${{ needs.draft.outputs.tag }}
 
-  # Opt-in client packages (inputs build_linux_deb / build_android, or the
-  # repository variables MICA_BUILD_LINUX_DEB / MICA_BUILD_ANDROID = 'true').
-  # The same scripts a developer runs locally, forced onto the pinned Docker
-  # builder (deploy/Dockerfile.client-build), so CI and a Windows or Linux desk
-  # produce the same package. Each has its own checksum manifest
-  # (sha256-linux-desktop.txt / sha256-android.txt): sha256-linux.txt belongs
-  # to the cli job and the CLI updater.
   linux-deb:
     needs: draft
     if: ${{ inputs.build_linux_deb || vars.MICA_BUILD_LINUX_DEB == 'true' }}
@@ -584,13 +249,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.draft.outputs.sha }}
-      - name: Build the .deb in the pinned builder
-        env:
-          MICA_CLIENT_BUILD: docker
-        run: bash scripts/build-linux-deb.sh "${{ needs.draft.outputs.version }}" out
-      - name: Write the checksum manifest
+      - uses: ./.github/actions/setup-rust
+      - name: Build pure-Rust Linux .deb
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-dev dpkg-dev
+          bash scripts/build-linux-deb.sh "${{ needs.draft.outputs.version }}" out
+      - name: Write checksum manifest
         working-directory: out
-        run: sha256sum Mica-*.deb > sha256-linux-desktop.txt && cat sha256-linux-desktop.txt
+        run: sha256sum Mica-*.deb > sha256-linux-desktop.txt
       - uses: actions/upload-artifact@v5
         with:
           name: mica-linux-deb
@@ -598,7 +264,7 @@ jobs:
             out/Mica-*.deb
             out/sha256-linux-desktop.txt
           if-no-files-found: error
-      - name: Attach to the draft release
+      - name: Attach to draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
@@ -610,96 +276,15 @@ jobs:
             out/Mica-*.deb
             out/sha256-linux-desktop.txt
 
-  android:
-    needs: draft
-    if: ${{ inputs.build_android || vars.MICA_BUILD_ANDROID == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.draft.outputs.sha }}
-      - name: Materialize the stable Android signing key
-        shell: bash
-        env:
-          MICA_ANDROID_KEYSTORE_BASE64: ${{ secrets.MICA_ANDROID_KEYSTORE_BASE64 }}
-          MICA_ANDROID_KEY_ALIAS: ${{ secrets.MICA_ANDROID_KEY_ALIAS }}
-          MICA_ANDROID_STORE_PASSWORD: ${{ secrets.MICA_ANDROID_STORE_PASSWORD }}
-          MICA_ANDROID_KEY_PASSWORD: ${{ secrets.MICA_ANDROID_KEY_PASSWORD }}
-          MICA_ANDROID_STORE_TYPE: ${{ vars.MICA_ANDROID_STORE_TYPE || 'JKS' }}
-        run: |
-          set -euo pipefail
-          for name in MICA_ANDROID_KEYSTORE_BASE64 MICA_ANDROID_KEY_ALIAS MICA_ANDROID_STORE_PASSWORD MICA_ANDROID_KEY_PASSWORD; do
-            [ -n "${!name}" ] || { echo "::error::Missing stable APK signing secret $name"; exit 1; }
-          done
-          install -d -m 700 "$RUNNER_TEMP/android-signing"
-          printf '%s' "$MICA_ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/android-signing/release.keystore"
-          chmod 600 "$RUNNER_TEMP/android-signing/release.keystore"
-          keytool -list -keystore "$RUNNER_TEMP/android-signing/release.keystore" -storetype "$MICA_ANDROID_STORE_TYPE" \
-            -alias "$MICA_ANDROID_KEY_ALIAS" -storepass:env MICA_ANDROID_STORE_PASSWORD > /dev/null
-          echo "MICA_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/android-signing/release.keystore" >> "$GITHUB_ENV"
-      - name: Build the APKs in the pinned builder
-        env:
-          MICA_CLIENT_BUILD: docker
-          MICA_ANDROID_KEY_ALIAS: ${{ secrets.MICA_ANDROID_KEY_ALIAS }}
-          MICA_ANDROID_STORE_PASSWORD: ${{ secrets.MICA_ANDROID_STORE_PASSWORD }}
-          MICA_ANDROID_KEY_PASSWORD: ${{ secrets.MICA_ANDROID_KEY_PASSWORD }}
-          MICA_ANDROID_STORE_TYPE: ${{ vars.MICA_ANDROID_STORE_TYPE || 'JKS' }}
-        run: bash scripts/build-android-apk.sh "${{ needs.draft.outputs.version }}" out
-      - name: Write the checksum manifest
-        working-directory: out
-        run: sha256sum Mica-*.apk > sha256-android.txt && cat sha256-android.txt
-      - uses: actions/upload-artifact@v5
-        with:
-          name: mica-android-apk
-          path: |
-            out/Mica-*.apk
-            out/sha256-android.txt
-          if-no-files-found: error
-      - name: Attach to the draft release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.draft.outputs.tag }}
-          draft: true
-          prerelease: false
-          fail_on_unmatched_files: true
-          files: |
-            out/Mica-*.apk
-            out/sha256-android.txt
-      - name: Remove Android signing material
-        if: always()
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/android-signing"
-
-  # The browser-only Flutter suites are release acceptance (docs/ops/release.md)
-  # and used to run in no release path at all — only in CI's web-e2e job, which
-  # a release does not wait for, and never on a Windows release machine (#181).
-  # They gate `publish` here, and record the commit status `mica/browser-tests`
-  # that the local twin (scripts/release-publish.sh) requires as well.
-  browser:
-    needs: draft
-    permissions:
-      contents: read
-      statuses: write
-    uses: ./.github/workflows/browser-tests.yml
-    with:
-      ref: ${{ needs.draft.outputs.sha }}
-
   publish:
-    # The opt-in package jobs are waited for when they run and do not hold the
-    # release back when they are off: a skipped need is not a failure, so the
-    # condition is "nothing failed or was cancelled", not the default "every
-    # need succeeded" (which a skipped job never satisfies). `browser` is not
-    # optional: it always runs, so a failure there is a failure here.
-    # Only advertise the version after the artifacts and registry images are ready.
-    needs: [draft, windows, cli, images, linux-deb, android, browser]
+    needs: [draft, windows, cli, images, linux-deb]
     if: ${{ !failure() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
     runs-on: ubuntu-latest
     concurrency:
       group: mica-release-publish
       cancel-in-progress: false
     steps:
-      - name: Publish the release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
@@ -714,33 +299,3 @@ jobs:
           fi
           gh release edit "${{ needs.draft.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" --draft=false --latest
-
-          # `isLatest` is NOT a field `gh release view --json` accepts, and asking
-          # for it exits 1. On v0.12.9 the edit above had already published the
-          # release correctly — 4 assets, /releases/latest pointing at it — and
-          # only this line failed, turning a good release into a red run. Worse
-          # than cosmetic: a publish job that goes red while actually succeeding
-          # trains you to shrug at the one that genuinely fails.
-          #
-          # Read "is this the latest" from the endpoint the in-app updater itself
-          # reads, instead of from a field that does not exist.
-          gh release view "${{ needs.draft.outputs.tag }}" \
-            --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
-            --jq '"draft=\(.isDraft) assets=\(.assets | length)"'
-          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
-          echo "releases/latest -> $latest"
-          [ "$latest" = "${{ needs.draft.outputs.tag }}" ] \
-            || { echo "::error::/releases/latest is $latest, expected ${{ needs.draft.outputs.tag }} — the in-app updater will not see this release"; exit 1; }
-
-
-  canary:
-    needs: [draft, publish]
-    # Optional package jobs may be skipped. As with publish above, do not let
-    # GitHub's implicit success() turn a published release into a skipped
-    # artifact acceptance; a dry-run still has publish.result == 'skipped'.
-    if: ${{ !failure() && !cancelled() && needs.publish.result == 'success' }}
-    permissions:
-      contents: read
-    uses: ./.github/workflows/release-canary.yml
-    with:
-      version: ${{ needs.draft.outputs.version }}

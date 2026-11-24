@@ -195,6 +195,8 @@ fn plan_core(
       files.insert(e.name, e.bytes);
     }
   }
+  let file_paths: HashSet<String> = files.keys().cloned().collect();
+  let mut consumed_board_svgs: HashSet<String> = HashSet::new();
 
   let notion = notion_hint || looks_like_notion_export(mds.keys().map(String::as_str));
   // Our OWN archives now lead each page's text with `# <title>` (2026-08-27, see
@@ -510,6 +512,17 @@ fn plan_core(
     } else {
       None
     };
+    let body = if native.is_none() {
+      crate::board_svg::restore_embedded_boards_from_archive(
+        &body,
+        path,
+        &files,
+        &file_paths,
+        &mut consumed_board_svgs,
+      )
+    } else {
+      body
+    };
     pages.push(PagePlan {
       archive_path: Some(path.clone()),
       title,
@@ -533,6 +546,10 @@ fn plan_core(
     if let Some(idx) = idx {
       page_by_source_id.insert(id, idx);
     }
+  }
+
+  if !consumed_board_svgs.is_empty() {
+    files.retain(|path, _| !consumed_board_svgs.contains(path));
   }
 
   let mut plan = ImportPlan {

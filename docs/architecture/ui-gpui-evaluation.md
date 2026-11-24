@@ -1,10 +1,10 @@
 # 架构转型方向：UI 层从 Flutter 迁到 GPUI 生态，成为全平台全栈 Rust —— 调研、验证与决策记录
 
-> **状态：候选方向，未立项。当前决策：不迁，维持 Flutter UI + Rust 数据面。**
+> **状态（2026-11-22 更新）：架构路线已拍板——采用「三层全栈 Rust 分层（L1/L2/L3）+ 路线二-B（主权在我）」渐进重构；L3 纯 Rust UI 壳仍须过门禁后再切换，现阶段先推进 Phase 0 本机实证与 Phase 1–2 纯 Rust 无头内核（L2）建设。**
+> **权威设计与分阶段开发计划**：[fullstack-rust-architecture.md](fullstack-rust-architecture.md)（分支 `feat/fullstack-rust-architecture`）。
 > 跟踪 issue：[#172](https://github.com/weironz/mica/issues/172)。
 >
-> 本文合并了两次调研（2026-11-01 只看桌面 + Web；2026-11-10 把手机算进来）和一次部分验证（2026-11-10）。
-> 重新评估时从这里开始：先复核第 2 节的事实是否仍然成立，再看第 7 节的进入条件。
+> 本文保留 2026-11-01 / 11-10 / 11-11 的前期调研与 Linux 无头验证记录，作为决策历史依据。
 >
 > **一句话结论**：四道进入关卡没有一道完整通过。如果将来迁，有两条路线（第 3 节），
 > 其中"全平台都用 Native Shell 自带的富文本编辑器"比"手写 GPUI 编辑器"更现实，但它自己还没有稳定。
@@ -283,6 +283,52 @@ NativeShell当日RichEditor在同版Firefox于加载前报nsh:rt动态模块错�
 | 2026-11-01 | 第一次调研：gpui-kit、社区 Markdown 编辑器；只看桌面 + Web | 不迁；定了 Web / Windows / 性能三道关卡 |
 | 2026-11-10 | 第二次调研：加入 Native Shell、gpui-fast 和其他 Rust UI 方案；Linux 与 Android 已成为现役平台 | 不迁；新增移动关卡 |
 | 2026-11-10 | 部分验证（第 8 节）；读 Native Shell 源码，更正了"它没有自绘接口和富文本编辑器"的错误判断 | 不迁；方案 B 否定，路线二成为候选 |
+| 2026-11-11 | Firefox 复验（8.5）：`gpui-kit v0.9.1` 候选窗仍固定 `(0,0)`；NSH 官网 `nsh:rt` import map 加载失败 | 不迁；四关仍未完整通过 |
+| 2026-11-22 | 复核 `gpui-kit v0.10.0`、`nsh v0.6.1`（`#2276`/`#2768` 性能大幅提升、支持纯 Rust `rust_app!`、但 API 未冻结且 `#2376` 未虚拟化）与 `mica-board` 合并后现状 | **定稿全栈 Rust 标杆路线**：三层架构（L1/L2/L3）+ 路线二-B（自有 `mica-editor` + NSH 原生虚拟 `List`/`Canvas`，拒绝第二套文档表示），详见 [fullstack-rust-architecture.md](fullstack-rust-architecture.md) |
+| 2026-11-23 | L3 编辑器完成从 `nsh-base::RichEditor` 切回 `mica-editor + virtual_list`（`3f033c30`）后，在“桌面=Web 同等重要 + 移动端全功能偏阅读”前提下横向复审全部 Rust 全栈 UI 备选（GPUI / Dioxus / Blitz / Makepad / Slint / Xilem / Iced / Floem / egui） | **拍板方案 B：继续留在 `nsh`**（见第 10 节）；排除 GPUI（缺正式 Web 后端），保留 Dioxus 为长期架构备案，下一阶段集中补齐 `nsh` 下的 Web 云同步、WASM 体积优化与移动端阅读/触控适配 |
+
+## 10. 2026-11-23 复审：Rust 全栈 L3 UI 备选横向评估与留在 `nsh` 的决定
+
+在 `clients/mica_rust` 踩实并拔掉 `nsh-base::RichEditor`（非虚拟化导致 141 KB 长文档切页延迟、滚动白屏、引用双层嵌套与代码语言弹窗遮挡），将其彻底切换回自有 `crates/mica-editor` + NSH 原生 `virtual_list`（提交 `3f033c30`）后，团队重新审视了一个核心问题：**在已经建成纯 Rust L1/L2 内核的前提下，除了 `nsh`，Rust 全栈的 L3 UI 壳还有哪些可行选择？**
+
+### 10.1 明确的共同前提
+
+1. **平台优先级**：**桌面端（Windows / macOS / Linux）与 Web 端同等重要**，均为一等公民；**移动端（iOS / Android）要求全功能支持，但使用场景以阅读为主、编辑为辅**。
+2. **核心负载**：100 KB+ 长文档富文本块编辑（视口虚拟化、中文 IME 组合态与候选窗定位、跨块选区、HTML/Markdown 剪贴板）+ 2D 矢量无限白板（缩放平移、贝塞尔连线、自由手绘、中文节点排版）。
+3. **资产复用边界**：L1（`mica-core` / `md-core` / `mica-board` / `interchange` / `api-server`）与 L2（`mica-editor` / `mica-board::session` / `mica-sync` / `mica-client`）均已 100% 纯 Rust 且零 UI 依赖，L3 仅作为可替换的薄呈现壳。
+
+### 10.2 主流 Rust 全栈 UI 方案横向对比（截至 2026-11）
+
+| 方案 | 桌面端 | Web 端 | 移动端 | 富文本 / 中文 IME | 自绘白板 | 对 Mica 约束的核心取舍 |
+| --- | :---: | :---: | :---: | :---: | :---: | --- |
+| **`nsh`（当前）** | 原生渲染 | WASM | 原生支持 | 隐藏原生 `input` 代理 + 自有 `mica-editor` | `nsh::Canvas` 2D | 零 WebView、三端单套纯 Rust 且已成型；短板为 Web 产物偏大（当前未裁剪 ~22 MB raw）及长尾输入/触控交互需自行打磨 |
+| **GPUI（Zed）** | **顶级** | 暂未正式支持（远期规划） | 仅社区层 `gpui-mobile` | **桌面级最强** | GPU 自绘极强 | **不符合“桌面=Web 同等重要”前提**：缺正式 Web 后端会迫使维护两套 UI 代码，且移动端非官方主线 |
+| **Dioxus（WebView 模式）** | 系统 WebView（Wry） | **原生 DOM（轻快）** | 系统 WebView | **满分**（原生 DOM IME / 选区 / 剪贴板 / 移动端选词放大镜） | `<canvas>` 2D / WebGL | 纯 Rust `rsx!` 直调进程内 L1/L2，最贴合 Web 一等公民与移动端阅读；代价是桌面带系统 WebView 内存开销（~80–150 MB）且需重写整个 L3 视图层 |
+| **Dioxus Native（Blitz）** | WGPU 自绘 | 同 Dioxus Web | 推进中 | Beta 阶段（IME 组合态与复杂选区仍在完善） | Vello / Canvas | 尚在 0.3/Beta，做复杂富文本块编辑器当前风险高于 `nsh` |
+| **Makepad** | 自研 GPU | WASM / WebGL | 原生支持 | 需重度自研，中文 IME 与系统原生感弱 | **极强**（Shader 级） | 强绑定自家 `live_design!` DSL，生态小众，做 Notion 级精细排版与系统集成成本高 |
+| **Slint** | 原生 | WASM | 支持 | 偏标准表单控件，不适合块级富文本 | 较弱 | 强绑定 `.slint` DSL + GPL/商业双协议，定位偏向嵌入式/工控界面 |
+| **Xilem / Masonry（Vello）** | 早期 | 早期 | 早期 | 早期 | 未来潜力大 | Linebender 仍在架构演进期，未达生产交付成熟度 |
+
+> **刻意不采用的方案**：`Iced` / `Floem`（移动端与复杂中文 IME 富文本薄弱，偏向桌面）；`egui`（即时模式适合调试与工具面板，难以做出 Notion 级精细排版、无边框原生体验与移动端触控手感）。
+
+### 10.3 同类产品在相同约束下的实践对照
+
+- **Notion / AFFiNE / Linear / Obsidian / 飞书文档**：面对“桌面 = Web 同等体验 + 移动端重阅读 + 富文本/白板”，业内普遍采用 **DOM / WebView 作为多端 UI 壳 + Rust/WASM 承载核心引擎与存储**，刻意回避用纯自绘 GPU 引擎硬扛五端（以换取 Web 首屏、原生中文 IME、选区复制与移动端阅读手感）。
+- **Zed**：选择 **GPUI**，但明确将策略收敛在**桌面旗舰编辑器**，刻意不在 GPUI 主线里强行兼顾 Web 与移动端。
+
+### 10.4 最终决策：采纳方案 B（继续留在 `nsh`）
+
+在真正契合 Mica 前提的两条纯 Rust 路线——**方案 A（重写 L3 切 Dioxus WebView）** 与 **方案 B（留在 `nsh` 持续补齐）** 之间，**决定采纳方案 B：继续留在 `nsh`**。
+
+**决策理由**：
+1. **避免当下高昂的重写沉没成本**：`clients/mica_rust` 已完成桌面与 Web 的全功能 1:1 壳，且核心痛点（`nsh-base::RichEditor` 非虚拟化）已通过切回 `crates/mica-editor` + `virtual_list` 根治，产品应优先向稳定可用与上线推进，而非立即重写 ~2 万行 L3 视图层。
+2. **保留桌面/移动端零 WebView 与单一画布优势**：桌面低内存占用、三端渲染一致，`nsh::Canvas` 直接承载 `mica-board`，无需维护 DOM ↔ Canvas 跨边界桥接。
+3. **架构长期可逆**：由于业务、CRDT、编辑器状态机、白板交互与同步引擎均完全收敛在零 UI 依赖的 L1 + L2 crate 中，若未来 Web 首屏或移动端阅读体验达到 `nsh` 的硬天花板，仍可无损保留全部 L1 + L2 资产，单独替换 L3（如 Dioxus WebView 或成熟后的 Blitz）。
+
+**方案 B 下阶段需重点补齐的缺口**：
+1. **Web 端云同步与网络层**：补齐 `clients/mica_rust/src/net.rs` 在 `wasm32` 下的异步 HTTP/WebSocket 传输（替换当前阻塞 HTTP stub）。
+2. **Web 产物瘦身与冷启动优化**：结合 `wasm-opt`、Brotli 预压缩与按需裁剪，持续压缩 `deploy/web/mica_rust_bg.wasm` 体积，向 P0 实证基线（~1.4–2 MiB Brotli）靠拢。
+3. **移动端阅读与全功能适配**：在真机（Android / iOS）补齐响应式阅读布局（折叠侧栏/精简工具栏）、触屏选词把手、软键盘避让与中文 IME 实测。
 
 ## 参考
 

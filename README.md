@@ -38,21 +38,9 @@ server, syncs in real time, and can be shared. You switch between them
 explicitly, and the app shows one at a time, so where a page lives is always
 unambiguous.
 
-**The editor is drawn, not composed.** It's a single Flutter `RenderBox` that
-paints text, carets, selections and blocks itself, over a
-marks-over-plain-text model — not a widget tree, not a `WebView`, not a wrapped
-third-party editor. Caret and selection behave identically on every platform,
-IME composition (Chinese, Japanese, Korean) works natively, and long documents
-stay responsive because painting is clipped to the viewport.
+**100% Fullstack Rust (L1 Data & Engines + L2 Headless Client Cores + L3 Native Shell).** The server, CLI, MCP proxy, Markdown/math/Mermaid/board engines, CRDT sync engine, headless block editor (`mica-editor`), and cross-platform UI client (`clients/mica_rust`, built on NSH native primitives for desktop and WebAssembly) are all written in Rust — zero Dart/Flutter, zero FFI/JSON bridge overhead.
 
-**One CRDT engine everywhere.** Sync runs on `yrs`, the Rust port of Yjs, and it is
-the same Rust document core on every platform: natively on the server, over FFI on
-the desktop, and compiled to WebAssembly in the browser. Every edit rule has exactly
-one implementation, and every platform speaks one authoritative format.
-
-**A Rust data plane.** Everything that parses files, walks archives, hashes bytes
-or talks to storage runs in Rust. Dart owns painting, caret and selection,
-hit-testing, and the editor's latency-critical paths.
+**One CRDT engine everywhere.** Sync runs on `yrs` (`mica-core::MicaDoc`), shared directly in Rust across the API server, local SQLite vault (`mica-sync`), desktop client, and WebAssembly build. Every edit rule has exactly one implementation, and every platform speaks one authoritative format.
 
 ### Editing
 
@@ -97,15 +85,18 @@ export restores what GFM dropped.
 
 ## 📦 Install
 
-**Desktop** — download `Mica-Setup-*.exe` from
+**Desktop (Windows)** — download `Mica-Setup-*.exe` from
 [Releases](https://github.com/weironz/mica/releases/latest). The app updates
-itself from the same feed.
+itself from the same feed. Optional Linux `.deb` packages are also built on
+demand via the release workflow. *(Android and macOS desktop packages are no
+longer shipped in the pure-Rust client line; existing 0.14.x Android APKs
+remain usable without further updates.)*
 
 **CLI** — `mica-cli` binaries for Windows, Linux and macOS are attached to every
 release. It drives the same API and hosts the MCP server (`mica-cli mcp`). See
 [docs/dev/cli.md](docs/dev/cli.md).
 
-**Web** — self-hosted, see below.
+**Web** — self-hosted pure-Rust WebAssembly client (Chrome, Firefox, Safari), see below.
 
 ## 🏗 Self-hosting
 
@@ -184,47 +175,54 @@ Full notes: [Deployment](docs/ops/deploy.md) · [Backup](docs/ops/backup.md) · 
 
 ## 🧩 Repository layout
 
+Everything is Rust, separated by **runtime boundary** (frontend client process vs. backend server process vs. compile-time shared engines):
+
 ```
+clients/mica_rust/   [Frontend · L3 UI Shell] Pure-Rust desktop & WASM client
+                     (nsh-core / nsh-base, direct Rust calls to L1 + L2, zero FFI)
 crates/
-  api-server     Axum HTTP + WebSocket; migrations; the only thing that
-                 talks to Postgres and S3
-  api-types      the REST payload types, shared by api-server and cli
-  app-core       document operations, sync, snapshot/yrs bridging
-  mica-core      the CRDT document (yrs) — from_blocks / to_blocks
-  md-core        the Markdown engine (crate `mica-md`): parser, serializer,
-                 HTML — the ONLY implementation, shaped as an SDK
-  md-wasm        wasm-bindgen binding of md-core for the web client
-  markdown       thin facade over md-core used by the server-side crates
-  interchange    archive-level import/export planning — pure, no I/O
-  mcp-server     MCP tool surface over the REST API
-  cli            mica-cli
-  infra          shared plumbing
-clients/mica_flutter/
-  lib/editor     the hand-written editor (render.dart is the canvas)
-  lib/markdown   MarkdownCodec — the editor's only door to the engine
-                 (FFI on desktop, wasm on the web)
-  lib/local      the local-vault store (Rust via flutter_rust_bridge)
-  rust           the client-side Rust core (FFI)
+  # Frontend · L2 Headless Client Cores (zero UI dependencies)
+  mica-sync          local SQLite mirror + incremental sync state machine
+  mica-client        cloud API endpoints & account/session generation guards
+  mica-board         infinite whiteboard/mind-map session, layout, A* routing & 3-way merge
+  mica-editor        headless block editor state & command core
+
+  # Shared · L1 Data & Rendering Engines (used directly by both client & server)
+  mica-core          single CRDT document core (yrs `MicaDoc`), tree rules & SQLite store
+  md-core            single Markdown engine (crate `mica-md`): parse, serialize, HTML,
+                     syntax highlighting, RaTeX math & Merman Mermaid diagrams
+  markdown           thin facade over md-core for server crates
+  interchange        archive-level import/export (.mica.zip, Markdown ZIP, Notion)
+  api-types          shared REST payload DTOs (crate `mica-api-types`)
+
+  # Backend · Cloud Server Process
+  api-server         Axum HTTP + WebSocket; embedded migrations; talks to Postgres & S3
+  app-core           document/sync domain + in-process BodyIndex full-text search
+  infra              config, DB pool, errors, mailer
+
+  # Standalone Tools & External SDK
+  cli                mica-cli (backup/export/admin + hosts `mica-cli mcp`)
+  mcp-server         MCP tool surface over the REST API
+  md-wasm            wasm-bindgen binding of md-core for packages/mica-md-js
 packages/
-  mica-md-js     npm wrapper around the wasm engine (SDK, not yet published)
-docs/            design documents
-migrations/      Postgres schema, applied automatically at API startup
+  mica-md-js         npm wrapper around the wasm Markdown engine (SDK)
+docs/                architecture & design documents (start at docs/architecture/architecture.md)
+migrations/          Postgres schema, applied automatically at API startup
 ```
 
 ## 🛠 Development
 
-Requires Rust (stable, see `rust-toolchain.toml`), Flutter, and Docker.
+Requires Rust (stable, see `rust-toolchain.toml`) and Docker (only for the cloud backend).
 [`just`](https://github.com/casey/just) drives everything — `just --list` shows
 every recipe.
 
 ```sh
 cp .env.example .env
 just dev             # whole backend stack in Docker, seeded (first run compiles)
-just app             # Flutter desktop client
-just app chrome      # Flutter web client — talks to the stack on :8080
-just dev-down        # stop it all
-just test            # cargo test + flutter test
-just check           # fmt + clippy + analyze
+cargo run --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust
+                     # pure-Rust desktop client (works offline with zero backend)
+just dev-down        # stop backend stack
+just ci              # format, clippy, structure gate & tests
 ```
 
 With `S3_*` unset the file endpoints return `503` and everything else works. Same
@@ -238,14 +236,15 @@ when they were broken.
 Three rules that will otherwise bite you:
 
 1. **Markdown has exactly one implementation**, in Rust (`crates/md-core`). The
-   server, CLI and MCP call it natively, the desktop client over FFI, the web
-   client as wasm. Dart reaches it only through `MarkdownCodec`; do not add
-   Markdown grammar to Dart. Web builds need `wasm-bindgen-cli` at the version
+   server, desktop/WASM client, CLI, and MCP all link it directly in Rust; only
+   the external JS SDK (`crates/md-wasm`) uses `wasm-bindgen-cli` at the version
    `Cargo.lock` pins (`scripts/check-md-wasm-toolchain.sh` says which).
 2. **Every bug fix ships with a regression test**, and the commit message states
    the root cause rather than a changelog.
-3. **New render capabilities get a mechanism**, not an `if` branch in
-   `render.dart`. See [render architecture](docs/architecture/render-architecture.md).
+3. **New render capabilities get a mechanism**, registered via
+   `clients/mica_rust/src/atomic_blocks.rs` and `node_views.rs` rather than
+   piling branches into `editor_view.rs`. See
+   [render architecture](docs/architecture/render-architecture.md).
 
 ## 📚 Documentation
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The audit wrapper must inspect both graphs and propagate either failure.
+# The audit wrapper must inspect both Rust lockfiles and propagate either failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fixture=$(mktemp -d)
@@ -20,8 +20,8 @@ export AUDIT_TEST_CALLS="$fixture/calls"
 PATH="$fixture/bin:$PATH" bash scripts/check-rust-audit.sh > "$fixture/output"
 [ "$(wc -l < "$AUDIT_TEST_CALLS")" -eq 2 ]
 grep -Fq -- '--file Cargo.lock --deny warnings' "$AUDIT_TEST_CALLS"
-grep -Fq -- '--file clients/mica_flutter/rust/Cargo.lock --deny warnings' "$AUDIT_TEST_CALLS"
-for lock in Cargo.lock clients/mica_flutter/rust/Cargo.lock; do
+grep -Fq -- '--file clients/mica_rust/Cargo.lock --deny warnings' "$AUDIT_TEST_CALLS"
+for lock in Cargo.lock clients/mica_rust/Cargo.lock; do
   if PATH="$fixture/bin:$PATH" AUDIT_FAIL_LOCK="$lock" bash scripts/check-rust-audit.sh > "$fixture/output" 2>&1; then
     echo "FAIL: ignored audit failure in $lock" >&2
     exit 1

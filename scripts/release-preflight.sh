@@ -54,7 +54,7 @@ else
   ok "$tag exists locally — resuming, pre-tag checks skipped"
 fi
 
-# Disk: the gate's Rust + Flutter builds plus three images need room.
+# Disk: the gate's Rust builds plus three images need room.
 min_gb=${MICA_MIN_FREE_GB:-20}
 free_kb=$(df -Pk . | awk 'NR == 2 { print $4 }')
 if [ -n "$free_kb" ] && [ "$free_kb" -ge $((min_gb * 1024 * 1024)) ]; then
@@ -92,10 +92,6 @@ if [ "$docker_needed" = 1 ]; then
   else
     problem "Docker is not running — needed for the images and (on Windows) the Linux CLI. Start it, or IMAGES=0 and build images elsewhere."
   fi
-fi
-
-if [ "$os" = windows ]; then
-  note "the browser-only suites cannot run on Windows (#181): ship dispatches them to GitHub Actions after the push and waits for them before publishing"
 fi
 
 if [ ${#problems[@]} -gt 0 ]; then

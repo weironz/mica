@@ -5,10 +5,91 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
+use base64::Engine as _;
+
 use crate::model::{BoardEdge, BoardNode, BoardSnapshot, BoardSvgTheme, tech_icon_svg_inner};
 use crate::routing::route_edge;
 
 const PAD: f64 = 28.0;
+
+/// Element `id` on the `<metadata>` tag embedded inside self-contained Mica board SVGs.
+pub const MICA_BOARD_SVG_METADATA_ID: &str = "mica-board-v1";
+/// `data-format` attribute marking Base64-encoded compact `BoardSnapshot` JSON.
+pub const MICA_BOARD_SVG_METADATA_FORMAT: &str = "mica-board-json-v1";
+
+/// Render `snap` as a self-contained SVG that embeds its canonical
+/// `BoardSnapshot` JSON inside a standard `<metadata>` element so the single
+/// `.svg` file previews crisply in external Markdown/image tools AND re-imports
+/// losslessly back into Mica as an editable whiteboard.
+pub fn render_board_svg_with_source(snap: &BoardSnapshot, theme: Option<&BoardSvgTheme>) -> String {
+  let base_svg = render_board_svg(snap, theme);
+  let encoded = base64::engine::general_purpose::STANDARD.encode(snap.to_compact_json().as_bytes());
+  let meta = format!(
+    r#"<metadata id="{MICA_BOARD_SVG_METADATA_ID}" data-format="{MICA_BOARD_SVG_METADATA_FORMAT}">{encoded}</metadata>"#
+  );
+  if let Some(pos) = base_svg.rfind("</svg>") {
+    let mut out = String::with_capacity(base_svg.len() + meta.len());
+    out.push_str(&base_svg[..pos]);
+    out.push_str(&meta);
+    out.push_str(&base_svg[pos..]);
+    out
+  } else {
+    base_svg
+  }
+}
+
+/// Extract and validate an embedded [`BoardSnapshot`] from a self-contained Mica
+/// board SVG (returns `None` for ordinary SVGs or malformed payloads).
+pub fn extract_board_snapshot_from_svg(svg_bytes: &[u8]) -> Option<BoardSnapshot> {
+  let raw = std::str::from_utf8(svg_bytes).ok()?;
+  let text = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+  if !text.contains(MICA_BOARD_SVG_METADATA_ID) && !text.contains(MICA_BOARD_SVG_METADATA_FORMAT) {
+    return None;
+  }
+  let doc = roxmltree::Document::parse(text).ok()?;
+  for node in doc.descendants() {
+    if !node.is_element() || node.tag_name().name() != "metadata" {
+      continue;
+    }
+    let is_mica_meta = node.attribute("id") == Some(MICA_BOARD_SVG_METADATA_ID)
+      || node.attribute("data-format") == Some(MICA_BOARD_SVG_METADATA_FORMAT);
+    if !is_mica_meta {
+      continue;
+    }
+    let payload: String = node
+      .descendants()
+      .filter(|n| n.is_text())
+      .filter_map(|n| n.text())
+      .collect::<String>();
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    // Raw JSON fallback (forward compatibility with unencoded CDATA/text payloads).
+    if trimmed.starts_with('{')
+      && let Ok(snap) = BoardSnapshot::parse_json(trimmed)
+    {
+      return Some(snap);
+    }
+    // Strip ASCII whitespace in case an XML formatter wrapped the Base64 text.
+    let compact_b64: String = trimmed
+      .chars()
+      .filter(|c| !c.is_ascii_whitespace())
+      .collect();
+    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&compact_b64)
+      && let Ok(json_str) = std::str::from_utf8(&decoded)
+      && let Ok(snap) = BoardSnapshot::parse_json(json_str)
+    {
+      return Some(snap);
+    }
+  }
+  None
+}
+
+/// Extract canonical compact `mica-board` JSON from a self-contained Mica board SVG.
+pub fn extract_board_json_from_svg(svg_bytes: &[u8]) -> Option<String> {
+  extract_board_snapshot_from_svg(svg_bytes).map(|snap| snap.to_compact_json())
+}
 
 pub fn render_board_svg(snap: &BoardSnapshot, theme: Option<&BoardSvgTheme>) -> String {
   let default_theme = BoardSvgTheme::default();

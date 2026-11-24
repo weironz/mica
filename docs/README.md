@@ -3,6 +3,7 @@
 按用途分文件夹;每个文件夹里按主题列出。**先读哪几份**:
 
 - 想知道还要做什么 → [`plans/roadmap.md`](plans/roadmap.md)(权威待办,只放还要做的)
+- 查产品功能与交互验收基线（跨技术栈）→ [`capabilities/README.md`](capabilities/README.md)（16 份独立产品能力规格，含编辑器核心编辑验收清单）
 - 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 [`AGENTS.md`](../AGENTS.md)
 - 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/deploy.md`](ops/deploy.md)
 - 代码评审与修复记录 → [`reviews/`](#reviews--代码评审与修复)
@@ -10,6 +11,7 @@
 
 | 文件夹 | 放什么 |
 | --- | --- |
+| [`capabilities/`](#capabilities--产品功能与交互能力权威清单) | **技术栈无关的产品能力与交互验收规格**（总索引 + 16 份独立特性文档，覆盖编辑器 9 大核心模块及白板/外壳/搜索/同步/导入导出/移动端；每次新增特性、优化体验或跨栈重构同步落地） |
 | [`architecture/`](#architecture--架构与核心机制) | 整体架构、编辑器与渲染、同步、Markdown 引擎、local-first 系列 |
 | [`features/`](#features--功能设计) | 单个功能的设计与决策(评论、版本历史、分享、导入导出、快捷键……) |
 | [`plans/`](#plans--规划与路线图) | 路线图与存档、阶段计划、迁移评估、同类产品对标 |
@@ -27,11 +29,35 @@
 
 项目规则已统一到根 `AGENTS.md`；历史文档中的根 `CLAUDE.md` 及旧条款编号仅作追溯，当前规则以上述入口为准。设计目录内的独立 `CLAUDE.md` 不属于此次合并范围。
 
+## capabilities — 产品功能与交互能力权威清单
+
+与技术栈解耦的产品行为契约与验收清单，入口见 [`capabilities/README.md`](capabilities/README.md)。每次新增特性、交互优化、关键边界修复或未来切换 UI 技术栈时，均以本目录为验收基线并持续更新。
+
+| 文档 | 内容 |
+| --- | --- |
+| [README.md](capabilities/README.md) | **能力库总索引**：维护纪律、编号规则（`CAP-XX-YY`）、优先级、三端状态总表 |
+| [01-editor-caret-ime-typing.md](capabilities/01-editor-caret-ime-typing.md) | 编辑器：光标闪烁与命中、CJK IME、连续打字、Markdown 输入规则、首行回退标题、底部新建行 |
+| [02-editor-selection-marquee.md](capabilities/02-editor-selection-marquee.md) | 编辑器：文本选区、跨块自由拖选、页边距与正文内空白框选（Marquee）、点击外区释放选区 |
+| [03-editor-clipboard-paste.md](capabilities/03-editor-clipboard-paste.md) | 编辑器：双通道无损复制粘贴、Windows `CF_HTML` 与 v0.14.11 互操作、截图/文件图片粘贴 |
+| [04-editor-blocks-and-marks.md](capabilities/04-editor-blocks-and-marks.md) | 编辑器：全量块类型与 5 种 Callout、行内 marks、22 项斜杠菜单、贴近选区的浮动气泡栏、`Ctrl+F` 查找 |
+| [05-editor-tables.md](capabilities/05-editor-tables.md) | 编辑器：GFM 表格自适应列宽、上下左右多单元格拖选与批量复制/清空、单格编辑与导航 |
+| [06-editor-code-blocks.md](capabilities/06-editor-code-blocks.md) | 编辑器：无框暖灰代码块、顶层 `overlay()` 语言选择器、`min_rows(1)`、`(0,0)` 按 Backspace 删除代码块 |
+| [07-editor-media-math-mermaid.md](capabilities/07-editor-media-math-mermaid.md) | 编辑器：图片自然比例与灯箱、RaTeX 公式与原子选区保护、Mermaid 主题渲染与全屏缩放 |
+| [08-editor-scroll-layout-virtualization.md](capabilities/08-editor-scroll-layout-virtualization.md) | 编辑器：长文档虚拟化与信号隔离、`Jump`/`KeepVisible` 零跳滚、窗口右缘自适应滚动条、11 档页宽 |
+| [09-editor-undo-crdt-collab.md](capabilities/09-editor-undo-crdt-collab.md) | 编辑器：单栈 CRDT 撤销/重做、远端合并本地脏块保护与 `SelectionReconcile`、离线容错 |
+| [10-whiteboard-and-embedded-board.md](capabilities/10-whiteboard-and-embedded-board.md) | 无限白板（飞书式工具坞/图形与架构图标库/检查器/导图）与内嵌单层画板三路合并 |
+| [11-sidebar-tree-tabs-shell.md](capabilities/11-sidebar-tree-tabs-shell.md) | 无边框顶栏、应用菜单、多标签历史、目录树 `folder` 唯一容器与 30/40/30 拖拽、多选、收藏、Emoji、子树回收站 |
+| [12-page-chrome-outline-properties-backlinks.md](capabilities/12-page-chrome-outline-properties-backlinks.md) | 面包屑与路径复制、标题联动、Front-Matter 属性面板、右侧大纲/评论、反链、双栏块级 Diff 版本历史 |
+| [13-search-graph-and-ai.md](capabilities/13-search-graph-and-ai.md) | 全局搜索（工作区/文件夹/页面 + 高亮）、力导向知识关系图谱、多入口 AI 助手与服务商配置 |
+| [14-workspace-cloud-sync-sharing.md](capabilities/14-workspace-cloud-sync-sharing.md) | 本地离线 Vault 与多云端世界切换、工作区管理与成员邀请、公开分享 `/s/{token}`、API 令牌 |
+| [15-import-export-and-vault.md](capabilities/15-import-export-and-vault.md) | `.mica.zip` 备份、Markdown ZIP、Notion/文件夹导入、HTML/PDF 导出、CommonMark/GFM Round-Trip |
+| [16-settings-shortcuts-accessibility-mobile.md](capabilities/16-settings-shortcuts-accessibility-mobile.md) | 8 标签设置中心与外观预览、快捷键体系、主题色板、移动端阅读优先与触摸选区适配 |
+
 ## architecture — 架构与核心机制
 
 | 文档 | 内容 |
 | --- | --- |
-| [architecture.md](architecture/architecture.md) | 系统现状架构:crate 地图、存储/同步/搜索、本地优先与部署 |
+| [architecture.md](architecture/architecture.md) | **系统现状架构（100% 全栈纯 Rust）**：前后端进程边界、L1/L2/L3 crate 地图、存储/同步/搜索与部署 |
 | [editor.md](architecture/editor.md) | 编辑器设计原则 |
 | [editor-engine.md](architecture/editor-engine.md) | 编辑器引擎设计(自绘画布、marks 模型) |
 | [render-architecture.md](architecture/render-architecture.md) | 块渲染架构(`AtomicBlockRenderer` 注册表,渲染红线) |
@@ -42,7 +68,8 @@
 | [phase2-offline-crdt.md](architecture/phase2-offline-crdt.md) | Phase 2:离线优先 + CRDT 实施方案 |
 | [local-first-p2-design.md](architecture/local-first-p2-design.md) | P2:云文档离线编辑 |
 | [local-first-p3-design.md](architecture/local-first-p3-design.md) | P3:溶解双模式(本地 / 已连云共存) |
-| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | 转型方向(候选,不迁):UI 层迁到 GPUI 生态(gpui-kit / Native Shell)、成为全平台全栈 Rust——调研对象、两条路线、其他方案、进入关卡与 2026-11-10 的部分验证 |
+| [fullstack-rust-architecture.md](architecture/fullstack-rust-architecture.md) | **全栈 Rust 三层标杆架构与分阶段开发计划**（L1/L2/L3、路线二-B 主权在我、Phase 0–3 路线图，分支 `feat/fullstack-rust-architecture`，跟踪 #172） |
+| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | Rust UI 壳选型调研与复审记录：前期 GPUI / gpui-kit / Native Shell 四关实测，及 2026-11-23 在“桌面=Web+移动端偏阅读”约束下对 GPUI / Dioxus / Makepad / Slint / Xilem 的横向评估与留在 `nsh` 的拍板结论 |
 
 ## features — 功能设计
 
@@ -72,6 +99,7 @@
 | --- | --- |
 | [roadmap.md](plans/roadmap.md) | **路线图:剩余功能与优化点(权威)** |
 | [roadmap-done.md](plans/roadmap-done.md) | 已完成条目存档(只进不出) |
+| [rust-parity-checklist.md](plans/rust-parity-checklist.md) | 纯 Rust 客户端（`clients/mica_rust`）1:1 功能对齐与验收清单 |
 | [notion-gap-analysis.md](plans/notion-gap-analysis.md) | Notion 对标分析 |
 | [ui-visual-refresh.md](plans/ui-visual-refresh.md) | 界面与字体观感改造施工说明(Windows 桌面优先,待实施) |
 | [desktop-plan.md](plans/desktop-plan.md) | 桌面端技术方案与开发计划 |
@@ -86,6 +114,7 @@
 | [release-0.14.3-validation.md](ops/release-0.14.3-validation.md) | 0.14.3 发行物、生产与隔离栈验收;入口 404 缺口及修复边界 |
 | [traefik-working-set.md](ops/traefik-working-set.md) | 共享入口最终配置、缺页 I/O 根因、部署保留方式与空闲 TLS / 目录验收 |
 | [deploy.md](ops/deploy.md) | 部署、凭据、管理员、删账号 |
+| [metrics.md](ops/metrics.md) | **Prometheus `/metrics` 指标字典、网络隔离边界、PromQL 配方与告警参考** |
 | [backup.md](ops/backup.md) | 备份与恢复 |
 | [dr-plan.md](ops/dr-plan.md) | 容灾方案 |
 | [dr-drill.md](ops/dr-drill.md) | 容灾恢复演练工作表 |
@@ -102,6 +131,7 @@
 | --- | --- |
 | [lessons.md](dev/lessons.md) | **踩过的坑**(和根 `AGENTS.md` 一起读) |
 | [async-review-checklist.md](dev/async-review-checklist.md) | 异步结果归属与资源释放的评审清单 |
+| [nsh-dependency-governance.md](dev/nsh-dependency-governance.md) | `nsh` 0.x 依赖精确锁版本、升级检查表与上游已知问题登记（P2-2） |
 | [bootstrap.md](dev/bootstrap.md) | 新开发机从零搭建(Windows) |
 | [dev-environment.md](dev/dev-environment.md) | 开发环境与辅助工具 |
 | [api.md](dev/api.md) | HTTP API |
@@ -127,6 +157,9 @@
 | 文档 | 内容 |
 | --- | --- |
 | [fullstack-rust-branch-review-2026-11-24.md](reviews/fullstack-rust-branch-review-2026-11-24.md) | `feat/fullstack-rust-architecture` 分支评审与后续实施计划：已定方向（全栈 Rust、界面层留在 `nsh`、Flutter 冻结维护）、拆分合入与预览渠道里程碑、P0/P1/P2 任务（缓存键 #111、Web 异步与离线、自动更新等）、Web 首屏实测与 W1–W6 优化、切换闸门；复现脚本在 `reviews/assets/fullstack-rust-2026-11-24/` |
+| [fullstack-rust-p0-p2-verification-2026-11-24.md](reviews/fullstack-rust-p0-p2-verification-2026-11-24.md) | **全栈 Rust 架构评审（P0–P2）落地与验证总台账**（含全部 commit 映射、完整 CI 与 Release dry-run 实测回执及合并前真人签收项） |
+| [fullstack-rust-ime-browser-verification-2026-11-24.md](reviews/fullstack-rust-ime-browser-verification-2026-11-24.md) | 全栈 Rust 分支输入法与多浏览器验证记录与真人签收矩阵（P1-2） |
+| [fullstack-rust-p0-spike-2026-11-22.md](reviews/fullstack-rust-p0-spike-2026-11-22.md) | 全栈 Rust Phase 0 全景实证与 L2 代码边界摸底（NSH 纯 Rust 瘦身 Web 1.39 MiB Brotli、路线二-B 2,000 块/500 节点基准、Board/Sync/Editor 抽离蓝图） |
 | [wasm-size-budget-2026-11-17.md](reviews/wasm-size-budget-2026-11-17.md) | Markdown 引擎 wasm 体积预算：为什么设、业界做法、高亮器入引擎（gh#178）后的实测与调到 288 KiB 的决定、以后怎么调 |
 | [redundancy-and-home-review-2026-11-10.md](reviews/redundancy-and-home-review-2026-11-10.md) | 双实现盘点、首页与三轮实施评估;前三项(Mermaid、公式、兼容层)已实施并审核;第二轮评估与用户决定;交给他人实施的待办清单 |
 | [crdt-web-wasm-spike-2026-11-01.md](reviews/crdt-web-wasm-spike-2026-11-01.md) | Web 端 CRDT 换成 mica-core wasm 的可行性验证:可行,净增约 194 KB gzip,待用户决定 |

@@ -479,6 +479,14 @@ impl<'a> TreeExport<'a> {
       img_map.insert(file_id, format!("{rel}assets/{a}"));
     }
 
+    if !self.sidecars {
+      entries.extend(crate::board_svg::materialize_portable_boards(
+        &mut payload,
+        &rel,
+        &mut self.used_assets,
+      ));
+    }
+
     let body = export_markdown_with_assets(&payload, &img_map).unwrap_or_default();
     let Some(path) = self.path_by_view.get(&node.id).cloned() else {
       return entries;

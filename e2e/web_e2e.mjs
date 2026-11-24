@@ -1,267 +1,483 @@
-// Web end-to-end: the assertions only a real browser against a real stack can make.
-//
-// Why this exists: the 14 integration tests in CI run on Windows against native
-// FFI. Every one imports `frb_generated.dart` or `LocalOffline`, neither of which
-// exists on web — so none can be pointed at Chrome, and the web half of the
-// product had zero end-to-end coverage. That is not a thoroughness gap: the web
-// build is a categorically different binary: the Rust CRDT core compiled to
-// wasm instead of linked over FFI, a different storage backend (IndexedDB, not
-// SQLite) and a different renderer path.
-//
-// It deliberately does NOT drive the UI. Flutter web paints to a canvas and this
-// app wires almost no `Semantics`, so there is essentially no DOM to select —
-// clicking through it would be building on sand. Instead it drives the
-// `window.micaDocEngineInfo` / `micaWebSyncTest` hooks the app registers
-// (`lib/web/web_probe_web.dart`,
-// registered unconditionally so they exist in the release bundle), plus the HTTP
-// layer, which is where the bugs that have actually shipped twice live.
-//
-//   node web_e2e.mjs --base http://127.0.0.1:8090 \
-//                    --email e2e@mica.test --password e2epassword123
-//
-// Exits non-zero on any failed assertion, and prints what it saw.
-
+#!/usr/bin/env node
+/**
+ * End-to-end Playwright suite for Mica's pure-Rust WebAssembly client (P1-3B).
+ *
+ * Verifies:
+ *   1. Cold start: strict CSP (zero /api/csp-report, zero console/page errors),
+ *      `mica_rust_bg.wasm` fetched ONCE, zero `/mica_preview/*` requests on
+ *      ordinary pages, zero synchronous XHR requests (`100%` async `fetch`).
+ *   2. Sign-in (`HttpOnly` cookie, zero JWT secrets in `localStorage`) + live
+ *      WebSocket CRDT sync (`已实时同步`) + `#111` account-scoped IndexedDB
+ *      mirror persistence (`mica_sync_v1` / `docs` object store).
+ *   3. New page creation, typing, persistence across reload without re-login.
+ *   4. Two-browser real-time CRDT collaboration over `/ws/` (Peer B edits appear
+ *      live in Peer A without reloading Peer A).
+ *   5. Offline edit recovery via IndexedDB (`mica_sync_v1` outbox survives
+ *      reload and reconciles once back online — P0-2).
+ *   6. Lazy `mica_preview/math` WASM fetch & render on `/math` block (P0-3 W4),
+ *      plus clean logout (`POST /api/auth/logout` -> 204 -> Sign-In gate on reload).
+ *   7. Flutter Web (<= 0.14.x) unsynced edits left in the legacy `mica-localfirst`
+ *      IndexedDB are migrated on doc open, pushed to the server, and the legacy
+ *      record is deleted.
+ *
+ * Usage:
+ *   node web_e2e.mjs --base http://127.0.0.1:8090 --email demo@mica.dev --password password123
+ */
+import assert from 'node:assert/strict';
 import { launchBrowser } from './browser.mjs';
-import { evaluatePage, waitForPage } from './cdp_eval.mjs';
 
-const arg = (name, fallback) => {
-  const i = process.argv.indexOf(`--${name}`);
-  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
-};
-
-const BASE = arg('base', 'http://127.0.0.1:8090');
-const EMAIL = arg('email', 'e2e@mica.test');
-const PASSWORD = arg('password', 'e2epassword123');
-
-const failures = [];
-const check = (name, ok, detail) => {
-  console.log(`${ok ? 'ok  ' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
-  if (!ok) failures.push(name);
-};
-
-// A stack that is not up must FAIL, never skip. `cloud_sync_test.dart` skips-as-pass
-// when it cannot reach a server, and justfile:128 records the four days of false
-// green that cost. Same trap, same answer: assert the stack before anything else.
-const health = await fetch(`${BASE}/api/health`).catch(() => null);
-if (!health || !health.ok) {
-  console.error(`the stack is not up at ${BASE} — refusing to report a pass`);
-  process.exit(1);
-}
-
-// Playwright's bundled Chromium, or the system browser if it was never downloaded.
-//
-// Not a convenience: from CN, `playwright install chromium` cannot reach
-// playwright.azureedge.net and the npmmirror mirror fails on the headless shell
-// too — the same class of problem CLAUDE.md records for Flutter and pub. Without
-// this fallback the harness is unrunnable on the machine it was written on, which
-// is how a test ends up trusted-but-never-run. CI (ubuntu-latest, outside CN) gets
-// the bundled build and never reaches the fallback.
-const browser = await launchBrowser();
-// Pin the locale and timezone. An e2e should not inherit whatever the machine
-// happens to report — but this one is also load-bearing: headless Chromium on the
-// CI runner reports locale information that makes the Flutter engine throw
-// `ArgumentError: Incorrect locale information provided` before `main()` gets far
-// enough to register anything, so the app never starts at all. Pinning makes the
-// harness deterministic; the app's own fragility there is a separate finding, filed
-// in docs/plans/roadmap.md rather than papered over here.
-const context = await browser.newContext({
-  locale: 'en-US',
-  timezoneId: 'UTC',
-});
-const page = await context.newPage();
-const ownHost = new URL(BASE).host;
-
-const consoleErrors = [];
-page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
-const badResponses = [];
-const requestedHosts = new Set();
-page.on('response', (r) => {
-  let url;
-  try {
-    url = new URL(r.url());
-  } catch {
-    return;
+function parseArgs(argv) {
+  const out = { base: 'http://127.0.0.1:8090', email: '', password: '', register: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--base') out.base = argv[++i];
+    else if (a === '--email') out.email = argv[++i];
+    else if (a === '--password') out.password = argv[++i];
+    else if (a === '--register') out.register = true;
   }
-  requestedHosts.add(url.host);
-  // Only our own origin counts: the app's UI probes its build-time default API
-  // base on load, and in this harness that is a different port whose failure is
-  // the harness's, not the app's.
-  if (r.status() >= 400 && url.host === ownHost) {
-    badResponses.push(`${r.status()} ${r.url()}`);
-  }
-});
-
-// Uncaught exceptions are NOT console messages; without this a Dart error during
-// startup is invisible and the only symptom is the probe never appearing.
-const pageErrors = [];
-page.on('pageerror', (e) => pageErrors.push(String(e)));
-
-await page.goto(BASE, { waitUntil: 'load' });
-try {
-  await waitForPage(page, () => typeof window.micaWebSyncTest === 'function', 60_000);
-} catch (timeout) {
-  // A harness that times out without saying what it saw makes the next attempt a
-  // guess. Everything known about the page goes to the log before giving up.
-  console.error('the app never registered its probes — what the page reported:');
-  console.error(`  url        : ${page.url()}`);
-  console.error(`  title      : ${await page.title().catch(() => '(unavailable)')}`);
-  const present = await evaluatePage(page, () => ({
-      engineInfo: typeof window.micaDocEngineInfo,
-      webSync: typeof window.micaWebSyncTest,
-      flutterReady: typeof window._flutter,
-      bodyChildren: document.body ? document.body.children.length : -1,
-    }))
-    .catch((e) => ({ evaluateFailed: String(e) }));
-  console.error(`  window     : ${JSON.stringify(present)}`);
-  console.error(`  pageerrors : ${pageErrors.length ? pageErrors.join(' | ') : '(none)'}`);
-  console.error(`  console    : ${consoleErrors.length ? consoleErrors.join(' | ') : '(none)'}`);
-  console.error(`  bad reqs   : ${badResponses.length ? badResponses.join(' | ') : '(none)'}`);
-  console.error(`  hosts      : ${[...requestedHosts].join(', ')}`);
-  await browser.close();
-  throw timeout;
-}
-
-// Snapshot the load-time observations BEFORE anything below deliberately asks for
-// a 400 or a 404. The first version of this asserted console cleanliness at the
-// end and failed on the very errors its own routing probes had just requested —
-// a test complaining about the thing it did on purpose.
-const loadConsoleErrors = [...consoleErrors];
-const loadBadResponses = [...badResponses];
-
-// ── 1. The bundle is self-contained ───────────────────────────────────────────
-// `--no-web-resources-cdn` is asserted nowhere at runtime. If it regressed the app
-// would silently fetch CanvasKit from www.gstatic.com — unreachable from CN, and
-// dependent on gstatic continuing to serve COOP/COEP. Only a real browser's
-// network log can prove the load stayed same-origin.
-const cdn = [...requestedHosts].filter((h) => h.includes('gstatic') || h.includes('googleapis'));
-check('no CDN fetch for engine resources', cdn.length === 0, cdn.join(', ') || 'same-origin only');
-
-// ── 2. Release-mode load is clean ─────────────────────────────────────────────
-// Both halves of "it loaded without complaining": no failed request from our own
-// origin, and nothing on the console. Release is the only mode the web build has,
-// so an assert that debug would have caught never runs here.
-check(
-  'no 4xx/5xx from our own origin on load',
-  loadBadResponses.length === 0,
-  loadBadResponses.join('; '),
-);
-const ownLoadErrors = loadConsoleErrors.filter((t) => t.includes(ownHost) || !t.includes('http'));
-check(
-  'no console errors on load',
-  ownLoadErrors.length === 0,
-  ownLoadErrors.slice(0, 3).join(' | '),
-);
-
-// ── 3. The browser's CRDT replica is live and converges with the server ───────
-// The web runs the server's own Rust document core as wasm (mica_doc). First:
-// the engine actually loaded (a broken wasm fetch would otherwise only show up
-// as documents that never sync). Then the heart of it: two live sessions over a
-// real WebSocket, folded by the real server into real Postgres.
-const engine = JSON.parse(await evaluatePage(page, () => window.micaDocEngineInfo()));
-check(
-  'the document engine (wasm) loaded',
-  typeof engine.source_fingerprint === 'string' && !engine.error,
-  JSON.stringify(engine),
-);
-const sync = JSON.parse(
-  await evaluatePage(page, ([b, e, p]) => window.micaWebSyncTest(b, e, p), [BASE, EMAIL, PASSWORD]),
-);
-check('two web sessions converge through the real server', sync.ok === true, JSON.stringify(sync));
-check(
-  'the edit made in session A arrived in session B',
-  Array.isArray(sync.bBlocks) && sync.bBlocks.includes('wp1'),
-  JSON.stringify(sync.bBlocks),
-);
-
-// ── 4. Server-rendered routes beat the SPA fallback ───────────────────────────
-// Pure HTTP, invisible to every Dart test, and a bug class that has shipped twice.
-// A route that falls through to index.html looks like "the app loaded" — the user
-// never learns their confirmation link or share link did nothing. (This assertion
-// found `/s/` missing from the dev nginx config the first time it ran.)
-const serverRendered = ['/verify-email?token=bogus', '/reset-password?token=bogus', '/s/not-a-real-token'];
-const routed = await evaluatePage(page, async (paths) => {
-  const out = {};
-  for (const p of paths) {
-    const r = await fetch(p);
-    const body = await r.text();
-    out[p] = { status: r.status, isSpa: body.includes('flutter_bootstrap.js') };
+  out.base = out.base.replace(/\/+$/, '');
+  if (!out.email || !out.password) {
+    throw new Error('usage: node web_e2e.mjs --base <url> --email <email> --password <password> [--register]');
   }
   return out;
-}, [...serverRendered, '/deep/app/route']);
-
-for (const p of serverRendered) {
-  check(`${p} is server-rendered, not the SPA`, routed[p].isSpa === false, JSON.stringify(routed[p]));
-}
-check(
-  'an unknown app route still falls back to the SPA',
-  routed['/deep/app/route'].isSpa === true,
-  JSON.stringify(routed['/deep/app/route']),
-);
-
-// ── 5. The entry files are not cacheable ──────────────────────────────────────
-// v0.5.2 "looked not deployed" because a fixed-name entry file came from cache.
-// These names never change, so they must never be reused; everything else is
-// content-hashed and may be. The Markdown and document engines are loaded by
-// index.html before Flutter (the Markdown one was missing from production's
-// list in 0.14.0).
-const cache = await evaluatePage(page, async (files) => {
-  const out = {};
-  for (const f of files) out[f] = (await fetch(f, { method: 'HEAD' })).headers.get('cache-control');
-  return out;
-}, [
-  '/',
-  '/main.dart.js',
-  '/flutter_bootstrap.js',
-  '/flutter_service_worker.js',
-  '/mica_md/mica_md.js',
-  '/mica_md/mica_md_bg.wasm',
-  '/mica_doc/mica_doc.js',
-  '/mica_doc/mica_doc_bg.wasm',
-  '/mica_preview_worker.js',
-  '/mica_preview/math.js',
-  '/mica_preview/math_bg.wasm',
-  '/mica_preview/mermaid.js',
-  '/mica_preview/mermaid_bg.wasm',
-]);
-for (const [f, value] of Object.entries(cache)) {
-  // The dev nginx says `no-store`, production says `no-cache`. Either is a refusal
-  // to reuse a stale copy; what must never appear is a max-age letting one linger.
-  check(`${f} refuses stale caching`, /no-store|no-cache/.test(value ?? ''), value ?? '(none)');
 }
 
-// ── 7. A POSIX locale does not stop the app from starting ─────────────────────
-// The engine throws `RangeError: Incorrect locale information provided` from
-// `new Locale` when the browser reports "C" — inside its own startup, before
-// `main()`, so `runZonedGuarded` never sees it and the console stays clean. The
-// only symptom is a blank page. `web/index.html` sanitises the value before
-// flutter_bootstrap.js runs; this assertion is what keeps that guard honest.
-//
-// Its own context, because a context's locale is fixed at creation. Runs last so a
-// failure here cannot be confused with the assertions above.
-{
-  const odd = await browser.newContext({ locale: 'C', timezoneId: 'UTC' });
-  const oddPage = await odd.newPage();
-  const oddErrors = [];
-  oddPage.on('pageerror', (e) => oddErrors.push(String(e)));
-  await oddPage.goto(BASE, { waitUntil: 'load' });
-  let booted = true;
-  try {
-    await waitForPage(oddPage, () => typeof window.micaWebSyncTest === 'function', 30_000);
-  } catch {
-    booted = false;
+async function ensureUserRegistered(base, email, password) {
+  const resp = await fetch(`${base}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, display_name: 'E2E User' }),
+  });
+  // 200/201 created, 409 already exists — both are fine.
+  if (![200, 201, 409].includes(resp.status)) {
+    const txt = await resp.text().catch(() => '');
+    throw new Error(`seed register failed: HTTP ${resp.status} ${txt}`);
   }
-  check(
-    'the app still starts when the browser reports a POSIX locale ("C")',
-    booted,
-    oddErrors[0] ?? (booted ? 'booted' : 'no pageerror captured'),
-  );
-  await odd.close();
+  if (resp.status === 200) {
+    const data = await resp.json().catch(() => null);
+    if (data && data.verified === false) {
+      throw new Error(
+        `seed register returned verified=false (instance must be fresh with MICA_REGISTRATION_ENABLED unset so first operator auto-verifies)`
+      );
+    }
+  }
+
+  // Ensure the test user has at least one workspace and one page on a fresh DB
+  // so the browser client opens directly into a live `/ws/` synced page.
+  const loginResp = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!loginResp.ok) {
+    const txt = await loginResp.text().catch(() => '');
+    throw new Error(`seed login failed: HTTP ${loginResp.status} ${txt}`);
+  }
+  const loginData = await loginResp.json();
+  const token = loginData.access_token;
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+
+  const wsListResp = await fetch(`${base}/api/workspaces`, { headers: authHeaders });
+  if (!wsListResp.ok) {
+    throw new Error(`seed list workspaces failed: HTTP ${wsListResp.status}`);
+  }
+  const wsListData = await wsListResp.json();
+  const workspaces = Array.isArray(wsListData) ? wsListData : (wsListData.workspaces || []);
+  let wsId = workspaces[0]?.id;
+  if (!wsId) {
+    const createWs = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ name: 'E2E Workspace' }),
+    });
+    if (!createWs.ok) {
+      const txt = await createWs.text().catch(() => '');
+      throw new Error(`seed create workspace failed: HTTP ${createWs.status} ${txt}`);
+    }
+    const created = await createWs.json();
+    wsId = created.workspace?.id || created.id;
+  }
+
+  const viewsResp = await fetch(`${base}/api/workspaces/${wsId}/views`, { headers: authHeaders });
+  const viewsData = viewsResp.ok ? await viewsResp.json() : { views: [] };
+  const views = Array.isArray(viewsData) ? viewsData : (viewsData.views || []);
+  if (!views.some((v) => v.view_type === 'page' && !v.deleted_at)) {
+    const createDoc = await fetch(`${base}/api/workspaces/${wsId}/documents`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ name: 'E2E Welcome' }),
+    });
+    if (!createDoc.ok) {
+      const txt = await createDoc.text().catch(() => '');
+      throw new Error(`seed create document failed: HTTP ${createDoc.status} ${txt}`);
+    }
+  }
 }
 
-await browser.close();
+async function readIdbDocs(page) {
+  return page.evaluate(async () => {
+    const dbs = indexedDB.databases ? await indexedDB.databases() : null;
+    return new Promise((resolve) => {
+      const req = indexedDB.open('mica_sync_v1', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('docs')) {
+          db.createObjectStore('docs');
+        }
+      };
+      req.onerror = () => resolve({ error: String(req.error), dbs, entries: [] });
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('docs')) {
+          db.close();
+          resolve({ dbs, entries: [] });
+          return;
+        }
+        const tx = db.transaction('docs', 'readonly');
+        const store = tx.objectStore('docs');
+        const keysReq = store.getAllKeys();
+        const valsReq = store.getAll();
+        tx.oncomplete = () => {
+          const keys = keysReq.result || [];
+          const vals = valsReq.result || [];
+          const entries = keys.map((k, i) => ({ key: String(k), value: String(vals[i] ?? '') }));
+          db.close();
+          resolve({ dbs, entries });
+        };
+        tx.onerror = () => {
+          db.close();
+          resolve({ error: String(tx.error), dbs, entries: [] });
+        };
+      };
+    });
+  });
+}
 
-if (failures.length) {
-  console.error(`\n${failures.length} failed: ${failures.join(', ')}`);
+async function waitForSyncBadge(page, timeoutMs = 20000) {
+  await page.getByText('已实时同步').waitFor({ state: 'visible', timeout: timeoutMs });
+}
+
+async function fillTestInput(page, testId, value) {
+  const host = page.locator(`[data-testid="${testId}"]`);
+  await host.waitFor({ state: 'visible', timeout: 30000 });
+  const nested = host.locator('input, textarea').first();
+  if ((await nested.count()) > 0) {
+    await nested.fill(value);
+  } else {
+    await host.click();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type(value);
+  }
+}
+
+async function signInOnPage(page, base, email, password) {
+  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+  await fillTestInput(page, 'world-auth-email', email);
+  await fillTestInput(page, 'world-auth-password', password);
+  await page.locator('[data-testid="world-auth-submit"]').click();
+  await waitForSyncBadge(page, 25000);
+}
+
+async function focusEditorAndType(page, text) {
+  const row0 = page.locator('[data-testid="block-row-0"]');
+  if (await row0.isVisible().catch(() => false)) {
+    await row0.click();
+  } else {
+    const appendZone = page.locator('[data-testid="editor-bottom-append-zone"]');
+    await appendZone.waitFor({ state: 'visible', timeout: 15000 });
+    await appendZone.click();
+  }
+  await page.waitForTimeout(250);
+  await page.keyboard.type(text, { delay: 15 });
+}
+
+// Move a doc's unsynced outbox from the new store (`mica_sync_v1`) into a
+// legacy Flutter Web database (`mica-localfirst`, same record shapes as main's
+// WebIdbDocStore), so the edit exists ONLY where a 0.14.x Flutter Web client
+// would have left it.
+async function plantLegacyFlutterOutbox(page) {
+  return page.evaluate(async () => {
+    const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const fresh = await req(indexedDB.open('mica_sync_v1', 1));
+    const tx = fresh.transaction('docs', 'readwrite');
+    const store = tx.objectStore('docs');
+    const keys = await req(store.getAllKeys());
+    const vals = await req(store.getAll());
+    let planted = null;
+    for (let i = 0; i < keys.length; i += 1) {
+      const snap = JSON.parse(String(vals[i]));
+      const pending = (snap.outbox || []).filter((e) => e.clock > (snap.cursor?.pushed_clock ?? 0));
+      if (pending.length === 0) continue;
+      const [origin, docId] = String(keys[i]).split('\u0000');
+      planted = { origin, docId, legacyKey: `${origin}|${docId}`, rows: pending.length };
+      await req(store.delete(keys[i]));
+      fresh.close();
+      const open = indexedDB.open('mica-localfirst', 1);
+      open.onupgradeneeded = () => {
+        for (const s of ['base', 'outbox', 'remote', 'cursor']) open.result.createObjectStore(s);
+      };
+      const legacy = await req(open);
+      const ltx = legacy.transaction(['outbox', 'cursor'], 'readwrite');
+      ltx.objectStore('outbox').put(
+        { rows: pending.map((e) => ({ clock: e.clock, bytes: new Uint8Array(e.bytes) })) },
+        planted.legacyKey,
+      );
+      ltx.objectStore('cursor').put({ lastSyncedRid: 0, pushedClock: 0 }, planted.legacyKey);
+      await new Promise((res, rej) => { ltx.oncomplete = res; ltx.onerror = () => rej(ltx.error); });
+      legacy.close();
+      return planted;
+    }
+    fresh.close();
+    return planted;
+  });
+}
+
+async function legacyRecordExists(page, legacyKey) {
+  return page.evaluate(async (key) => {
+    const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const db = await req(indexedDB.open('mica-localfirst', 1));
+    const v = await req(db.transaction('outbox').objectStore('outbox').get(key));
+    db.close();
+    return v !== undefined;
+  }, legacyKey);
+}
+
+async function legacyFlutterWebMigration(browser, opts) {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  try {
+    const page = await ctx.newPage();
+    await signInOnPage(page, opts.base, opts.email, opts.password);
+    const marker = ` LEGACY-FLUTTER-${Date.now()}`;
+    await ctx.setOffline(true);
+    await page.waitForTimeout(400);
+    await focusEditorAndType(page, marker);
+    await page.waitForTimeout(1200);
+    const planted = await plantLegacyFlutterOutbox(page);
+    assert(planted, 'expected an unsynced outbox to plant into mica-localfirst');
+    // Leave while still offline: the edit now exists only in the legacy DB.
+    await page.close();
+    await ctx.setOffline(false);
+
+    const page2 = await ctx.newPage();
+    await page2.goto(`${opts.base}/`, { waitUntil: 'domcontentloaded' });
+    await waitForSyncBadge(page2, 25000);
+    await page2.getByText(marker.trim()).waitFor({ state: 'visible', timeout: 15000 });
+    await page2.waitForTimeout(1500);
+    assert.equal(await legacyRecordExists(page2, planted.legacyKey), false, 'legacy record must be deleted after migration');
+
+    // The server has it: a fresh profile (no IndexedDB) sees the edit.
+    const ctxB = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    try {
+      const pageB = await ctxB.newPage();
+      await signInOnPage(pageB, opts.base, opts.email, opts.password);
+      await pageB.getByText(marker.trim()).waitFor({ state: 'visible', timeout: 15000 });
+    } finally {
+      await ctxB.close();
+    }
+    console.log(`    Migrated ${planted.rows} legacy Flutter Web edit(s); server has them; legacy record deleted.`);
+  } finally {
+    await ctx.close();
+  }
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.register) {
+    await ensureUserRegistered(opts.base, opts.email, opts.password);
+  }
+
+  const browser = await launchBrowser();
+  const contextA = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  const pageA = await contextA.newPage();
+
+  const consoleErrors = [];
+  const pageErrors = [];
+  const requests = [];
+  const responses = [];
+
+  pageA.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    // Expected cold-boot cookie probe (`POST /api/auth/refresh` returns 401 before login).
+    if (text.includes('401 (Unauthorized)')) return;
+    consoleErrors.push(text);
+  });
+  pageA.on('pageerror', (err) => pageErrors.push(String(err)));
+  pageA.on('request', (req) => {
+    requests.push({ url: req.url(), type: req.resourceType(), method: req.method() });
+  });
+  pageA.on('response', (res) => {
+    responses.push({ url: res.url(), status: res.status(), method: res.request().method() });
+  });
+
+  try {
+    // ── 1. Cold start: single WASM load, strict CSP, zero preview, zero XHR ──
+    console.log('==> [1/7] Cold start, CSP, single WASM download & zero XHR...');
+    await signInOnPage(pageA, opts.base, opts.email, opts.password);
+    await pageA.waitForTimeout(800);
+
+    const wasmReqs = requests.filter((r) => r.url.includes('mica_rust_bg.wasm'));
+    assert.equal(wasmReqs.length, 1, `expected mica_rust_bg.wasm fetched ONCE, got ${wasmReqs.length}`);
+
+    const cspReports = requests.filter((r) => r.url.includes('/api/csp-report'));
+    assert.equal(cspReports.length, 0, `unexpected CSP reports: ${JSON.stringify(cspReports)}`);
+
+    const xhrReqs = requests.filter((r) => r.type === 'xhr');
+    assert.equal(xhrReqs.length, 0, `unexpected synchronous/legacy XHR requests: ${JSON.stringify(xhrReqs)}`);
+
+    const earlyPreview = requests.filter((r) => r.url.includes('/mica_preview/'));
+    assert.equal(earlyPreview.length, 0, `ordinary page must not fetch mica_preview: ${JSON.stringify(earlyPreview)}`);
+
+    const splashCount = await pageA.locator('#mica-splash').count();
+    assert.equal(splashCount, 0, '#mica-splash should be removed after mount');
+
+    const localStorageSecrets = await pageA.evaluate(() => {
+      const vals = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        vals.push([k, localStorage.getItem(k) || '']);
+      }
+      return vals.filter(([, v]) => /access_token|refresh_token|eyJ[A-Za-z0-9_-]{10,}/.test(v));
+    });
+    assert.equal(localStorageSecrets.length, 0, `JWT secret leaked to localStorage: ${JSON.stringify(localStorageSecrets)}`);
+
+    // ── 2. Verify #111-scoped IndexedDB persistence (`mica_sync_v1`) ─────────
+    console.log('==> [2/7] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
+    const idb1 = await readIdbDocs(pageA);
+    assert(!idb1.error, `IDB read error: ${idb1.error}`);
+    assert(idb1.entries.length >= 1, `expected >=1 entry in mica_sync_v1/docs, got ${idb1.entries.length}`);
+    const originPrefix = `["${opts.base}","`;
+    assert(
+      idb1.entries.some((e) => e.key.startsWith(originPrefix)),
+      `expected #111 account-scoped key starting with ${originPrefix}, got ${JSON.stringify(idb1.entries.map((e) => e.key))}`,
+    );
+    console.log(`    IDB mica_sync_v1/docs: ${idb1.entries.length} doc(s), sample key=${idb1.entries[0].key.slice(0, 64)}…`);
+
+    // ── 3. Create new page, edit & verify reload persistence via HttpOnly cookie ─
+    console.log('==> [3/7] Create page, edit, reload persistence (HttpOnly cookie)...');
+    const tag = `E2E-${Date.now()}`;
+    await pageA.locator('[data-testid="new-page-btn"]').click();
+    await waitForSyncBadge(pageA, 15000);
+    await pageA.waitForTimeout(400);
+
+    const titleHost = pageA.locator('[data-testid="page-title-input"]');
+    if (await titleHost.isVisible().catch(() => false)) {
+      await fillTestInput(pageA, 'page-title-input', tag);
+      await pageA.keyboard.press('Enter');
+      await pageA.waitForTimeout(300);
+    }
+    const markerA = `${tag}-BODY-A`;
+    await focusEditorAndType(pageA, markerA);
+    await pageA.waitForTimeout(1500);
+    await pageA.getByText(markerA).waitFor({ state: 'visible', timeout: 10000 });
+
+    await pageA.reload({ waitUntil: 'domcontentloaded' });
+    await waitForSyncBadge(pageA, 25000);
+    // Click the created page in sidebar if another page opened first.
+    const pageRowA = pageA.getByText(tag, { exact: false }).first();
+    if (await pageRowA.isVisible().catch(() => false)) {
+      await pageRowA.click();
+      await waitForSyncBadge(pageA, 15000);
+    }
+    await pageA.getByText(markerA).waitFor({ state: 'visible', timeout: 15000 });
+
+    // ── 4. Two-browser real-time CRDT collaboration over /ws/ ────────────────
+    console.log('==> [4/7] Two-browser real-time CRDT collaboration over /ws/...');
+    const contextB = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    const pageB = await contextB.newPage();
+    try {
+      await signInOnPage(pageB, opts.base, opts.email, opts.password);
+      await pageB.getByText(tag, { exact: false }).first().click();
+      await waitForSyncBadge(pageB, 15000);
+      await pageB.getByText(markerA).waitFor({ state: 'visible', timeout: 15000 });
+
+      const markerB = ` PEER-B-${Date.now()}`;
+      await pageB.getByText(markerA).click();
+      await pageB.keyboard.press('End');
+      await pageB.keyboard.type(markerB, { delay: 15 });
+
+      // Must appear live in Page A via /ws/ CRDT sync WITHOUT reloading Page A!
+      await pageA.getByText(markerB.trim()).waitFor({ state: 'visible', timeout: 15000 });
+      console.log('    Two-browser live /ws/ CRDT sync converged without reload!');
+    } finally {
+      await contextB.close();
+    }
+
+    // ── 5. Offline edit recovery via IndexedDB (P0-2) ────────────────────────
+    console.log('==> [5/7] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
+    const offlineMarker = ` OFFLINE-IDB-${Date.now()}`;
+    await contextA.setOffline(true);
+    await pageA.waitForTimeout(400);
+    await pageA.getByText(markerA).click();
+    await pageA.keyboard.press('End');
+    await pageA.keyboard.type(offlineMarker, { delay: 15 });
+    await pageA.waitForTimeout(1000);
+
+    const idbOffline = await readIdbDocs(pageA);
+    const hasOutbox = idbOffline.entries.some((e) => {
+      try {
+        const parsed = JSON.parse(e.value);
+        return Array.isArray(parsed.outbox) && parsed.outbox.length > 0;
+      } catch {
+        return false;
+      }
+    });
+    assert(hasOutbox, `expected non-empty IDB outbox after offline edit, got ${JSON.stringify(idbOffline.entries.map((e) => e.key))}`);
+
+    await contextA.setOffline(false);
+    await pageA.reload({ waitUntil: 'domcontentloaded' });
+    await waitForSyncBadge(pageA, 25000);
+    const rowAfterOffline = pageA.getByText(tag, { exact: false }).first();
+    if (await rowAfterOffline.isVisible().catch(() => false)) {
+      await rowAfterOffline.click();
+      await waitForSyncBadge(pageA, 15000);
+    }
+    await pageA.getByText(offlineMarker.trim()).waitFor({ state: 'visible', timeout: 15000 });
+    console.log('    Offline edit persisted in mica_sync_v1 outbox and survived reload!');
+
+    // ── 6. Lazy mica_preview/math load & clean logout (204 -> Sign-In gate) ──
+    console.log('==> [6/7] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
+    await pageA.locator('[data-testid="new-page-btn"]').click();
+    await waitForSyncBadge(pageA, 15000);
+    await pageA.waitForTimeout(300);
+    await focusEditorAndType(pageA, '/math');
+    await pageA.waitForTimeout(300);
+    await pageA.keyboard.press('Enter');
+    await pageA.waitForTimeout(2000);
+
+    const mathPreviewReqs = responses.filter(
+      (r) => r.url.includes('/mica_preview/math_bg.wasm') && r.status === 200,
+    );
+    assert(
+      mathPreviewReqs.length >= 1,
+      `expected lazy /mica_preview/math_bg.wasm 200 after inserting /math, got ${JSON.stringify(mathPreviewReqs)}`,
+    );
+
+    // Logout -> 204 -> reload returns to Sign-In gate cleanly.
+    await pageA.locator('[data-testid="account-menu-btn"]').click();
+    await pageA.locator('[data-testid="account-menu-signout-btn"]').click();
+    await pageA.locator('[data-testid="world-auth-email"]').waitFor({ state: 'visible', timeout: 15000 });
+    const logoutOk = responses.some((r) => r.url.includes('/api/auth/logout') && r.status === 204);
+    assert(logoutOk, 'expected POST /api/auth/logout -> 204');
+
+    assert.equal(consoleErrors.length, 0, `console errors: ${JSON.stringify(consoleErrors)}`);
+    assert.equal(pageErrors.length, 0, `page errors: ${JSON.stringify(pageErrors)}`);
+    console.log('PASS: scenarios 1-6 passed (0 console errors, 0 CSP reports, 0 XHR)');
+
+    // ── 7. Legacy Flutter Web IndexedDB (`mica-localfirst`) migration ────────
+    console.log('==> [7/7] Flutter Web mica-localfirst unsynced edit -> migrated & pushed...');
+    await legacyFlutterWebMigration(browser, opts);
+    console.log('PASS: all 7 pure-Rust Web E2E scenarios passed');
+  } finally {
+    await contextA.close();
+    await browser.close();
+  }
+}
+
+main().catch((err) => {
+  console.error('FAIL:', err);
   process.exit(1);
-}
-console.log('\nweb e2e: all assertions passed');
+});

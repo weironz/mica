@@ -145,6 +145,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - 同机先后登录 A、B 两个账号，互相看不到对方页面；
 - 本地库里存在“只按服务器地址”的旧行时，新客户端不读取它们。
 
+> **已完成（2026-11-24）**：`0804738f`（下沉至 `crates/mica-client/src/cache_origin.rs`，`f8a91686` 同步整理）。`normalize_server_url` + `cloud_cache_origin(server_url, account_id)` 逐字节对齐 `main` Dart 实现并配单测对拍；登录强制拉取 `/api/auth/me` 绑定 `account_id`；`storage::tests::cloud_cache_origin_isolates_accounts_quarantines_legacy_rows_and_replays_flutter_outbox` 与 Playwright E2E `[2/6]`（`mica_sync_v1` IndexedDB 账号隔离键）全部通过（[CI 45377675471](https://github.com/weironz/mica/actions/runs/45377675471)）。
+
 ---
 
 ### P0-2 Web：主线程同步网络请求，且没有离线持久化
@@ -176,6 +178,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - 断网编辑 → 刷新页面 → 编辑仍在 → 恢复网络后自动推送成功；
 - 两个标签页同时编辑同一文档，不丢编辑；
 - 有对应的浏览器端到端测试（见 P1-3）。
+
+> **已完成（2026-11-24）**：`03981b66`（模块于 `f8a91686` 下沉至 `crates/mica-client/src/{net,web_runtime,web_idb}.rs`）。全面删除同步 XHR，改用 `web_sys` 异步 `fetch` + `AbortController` 超时 + `RequestCredentials::SameOrigin`；接通 IndexedDB `mica_sync_v1/docs` 与 Web Locks 顺序写回队列；Playwright E2E `[1/6]` 实测 **0 XHR**、`[4/6]` 双浏览器实时协同、`[5/6]` 断网编辑 → IDB `outbox` → 刷新恢复全部通过（[CI 45377675471](https://github.com/weironz/mica/actions/runs/45377675471)）。
 
 ---
 
@@ -217,6 +221,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - 在装有 0.14.11 的机器上安装正式版：安装目录不再有 `mica_flutter.exe`，开始菜单和桌面快捷方式指向新程序；
 - 回滚：卸载后重装 0.14.11 能打开原本地库（本地库只加列未升版本，分支已经做对，需保持）。
 
+> **已完成（2026-11-24）**：`86fa49fc`、`dcd985a6`。实现 `clients/mica_rust/src/updater.rs`（GitHub Releases + SHA-256 强制校验 + `/MICAWAITPID` 静默升级，5 条单测覆盖版本比较、清单解析、校验失败拒绝安装）、`single_instance.rs`（`#179` 同目录互斥锁）与 `installer/mica.iss` `[InstallDelete]`（补清 `native_assets.json`）。已在真实 Windows 物理机完成 `v0.14.11`（Flutter）→ 纯 Rust `Mica-Setup-0.14.11.exe` 静默覆盖升级（退出码 0、旧文件清零）→ 单实例二次启动 `113 ms` 退出 → 卸载 → 重装官方 Flutter `v0.14.11` → `store.db`（124 MB，2,153 条快照）`PRAGMA quick_check = ok` 全链路演练（注：线上真实 X → X+1 双版本自动更新在首个纯 Rust 正式版发布后补验）。
+
 ---
 
 ### P1-1 平台范围（已决定：不提供 Android 和 macOS 桌面）
@@ -229,6 +235,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   4. 安装页、README 等对外介绍里的平台列表同步修改。
 - **验收**：上述文档与发布说明已更新。
 
+> **已完成（2026-11-24）**：`eb605e76`。已更新 `docs/architecture/fullstack-rust-architecture.md`（红线 3）、`README.md`、`README.zh-CN.md` 与 `docs/ops/release.md`，明确正式交付 Windows 桌面、Web、可选 Linux `.deb` 与跨平台 CLI，不交付 Android / macOS 桌面包并写明 Android 止步 `0.14.x`。
+
 ---
 
 ### P1-2 Windows 输入法与浏览器验证并留档
@@ -238,6 +246,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   - 测试项：拼音连续组字、候选窗跟随光标、Esc 取消不留残字、退格删拼音不误删正文、中英快速混打不重复上屏、跨块选区、富文本与纯文本复制粘贴；
   - 平台：Windows 桌面（微软拼音、搜狗）、Web（Windows 上的 Chrome / Firefox，macOS 上的 Safari 用系统拼音）。
 - **验收**：每项附截图或录屏；不能用 CDP 或合成事件替代真人输入。
+
+> **已完成（2026-11-24，用户确认放行）**：`f497d4d9`、`d293c17e`。已归档 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)。用户已于 2026-11-24 在 Windows 物理机完成桌面端 + Web（Chrome）真人中文输入与基础编辑实测确认通过，并顺带发现修复 3 项真实体验问题（云端首次打开白屏 `dcd985a6`、首行/标题回车与退格对称 `6eea6f54`/`84cb0ef1`、列表嵌套代码块 `48c5d219`）。用户明确决定 Windows Firefox / 搜狗拼音 / macOS Safari 无需补测，将在正式切换发版说明中如实标注实测范围。
 
 ---
 
@@ -259,6 +269,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 
 **验收**：`mica-editor` ≥200 条测试（含属性测试）；Web 端到端进 CI；回执下限已上调。
 
+> **已完成（按用户 2026-11-24 务实调整，重质量不凑 200 条水测试）**：`3bdb9a9a`、`6daa44f7`、`23bfecfa`、`48c5d219`。`crates/mica-editor` 由 26 条增至 **73 条**高价值行为回归 + `proptest`（顺带修复 3 个真实编辑器 bug + 首行/标题 + 列表嵌套代码块回归）；新增 `e2e/web_e2e.mjs` 6 大核心浏览器场景并接入 CI 全过（0 console error / 0 CSP / 0 XHR）；CI `cargo_receipt` 下限上调至 `--workspace ≥ 550`（实测 1,581+）、`mica-editor ≥ 70`、`mica-client ≥ 30`、`clients/mica_rust ≥ 110`。
+
 ---
 
 ### P1-4 分支跑通完整 CI 与发版彩排
@@ -267,6 +279,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - **怎么做**：在分支上手动触发完整 `CI`（scope=full）和 `Release` 彩排，修到全绿；需要的话补 `libgtk-4-dev` 等依赖。
 - **验收**：Actions 页面上两次运行全绿，链接贴到本文对应条目下。
 
+> **已完成（2026-11-24）**：`6daa44f7`、`d71011a1`、`23bfecfa`。修复 GTK4/GStreamer 依赖、RustSec、MCP inspector（39 tools）与容器 E2E 种子页后：完整 CI [Run 45377675471](https://github.com/weironz/mica/actions/runs/45377675471)（**7/7 全绿**）与 Release dry-run [Run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409)（**9/9 全绿**，`publish=false`）。（后续 4 笔体验修复 `dcd985a6..48c5d219` 将在合入 `main` 前补跑一轮终版全量 CI。）
+
 ---
 
 ### P1-5 Web CSP 恢复按哈希放行
@@ -274,6 +288,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - **问题**：`deploy/nginx.conf:16` 的 `script-src` 从 `main` 的按内容哈希放行改为 `'unsafe-inline'`；`scripts/test-web-csp-hashes.sh` 被删除。
 - **怎么做**：W1 改完 `index.html` 后，为其中的内联模块脚本计算 `sha256` 哈希，写回 `deploy/nginx.conf` 和 `deploy/nginx.dev.conf`；恢复 `scripts/test-web-csp-hashes.sh` 并接回 CI。
 - **验收**：浏览器控制台无 CSP 报告；测试脚本在哈希不一致时失败。
+
+> **已完成（2026-11-24）**：`8c100db7`。`deploy/nginx.conf` 与 `deploy/nginx.dev.conf` 恢复精确 `'sha256-RBDgFD9prAEUa1zzW08ImyUTCJYoF2SOC6nga7ZjqJ0='` 放行（零 `'unsafe-inline'`），恢复 `scripts/test-web-csp-hashes.sh` 并接回 CI，Playwright E2E 实测 0 CSP 报告（[CI 45377675471](https://github.com/weironz/mica/actions/runs/45377675471)）。
 
 ---
 
@@ -293,6 +309,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - **怎么做**：把存储（`VaultStore`）、HTTP / WS 传输、云端同步编排、导入导出的非界面部分移入 `crates/mica-client`；`clients/mica_rust` 只保留视图、平台胶水和信号绑定。
 - **验收**：迁出的模块不依赖任何 `nsh-*` crate；`mica-client` 有对应单测；`clients/mica_rust` 行数明显下降。
 
+> **已完成（2026-11-24，按用户建议在 P0 验收后下沉）**：`f8a91686`。将零 UI 依赖的 `storage.rs`、`net.rs`、`ws_transport.rs`、`web_runtime.rs`、`web_idb.rs`（约 6,000 行、0 `nsh-*` 依赖）整体下沉至 `crates/mica-client/src/`，`clients/mica_rust` 保留薄重导出；`mica-client` 34/34 单测通过且 native/`wasm32` 双目标 0 告警。
+
 ---
 
 ### P2-2 `nsh` 依赖治理
@@ -302,6 +320,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   1. `clients/mica_rust/Cargo.toml` 中所有 `nsh-*` 用精确版本（`=0.6.1`），避免 `cargo update` 意外升级；
   2. 在仓库写一份 `nsh` 升级检查表：升级前读 release notes；升级后跑 P1-2 的输入法清单、P1-3 的端到端、W5 的体积门禁；
   3. 对 `nsh` 上游的已知问题（如 RichEditor 虚拟化 #2376、Firefox import map 问题）在文档里登记，便于跟进。
+
+> **已完成（2026-11-24）**：`eb605e76`、`d71011a1`。`clients/mica_rust/Cargo.toml` 全部 `nsh-*` 精确锁定 `=0.6.1`；新增 [nsh-dependency-governance.md](../dev/nsh-dependency-governance.md) 登记升级检查表与 8 项上游 `nsh 0.6.1` 已知问题/绕过方案。
 
 ---
 
@@ -387,6 +407,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   5. 改完 `index.html` 后同步更新 CSP 哈希（P1-5）。
 - **验收**：限速 300 ms / 10 Mbps 下，HTML 到达后约 300 ms 出现标志；DevTools Network 中 wasm 只下载一次。
 
+> **已完成（2026-11-24）**：`8c100db7`。`clients/mica_rust/web/index.html` 内联 Mica SVG 启动画面（300 ms 淡入），加入 `modulepreload` 与 `<link rel="preload" as="fetch" crossorigin>` 带哈希 URL；Playwright E2E `[1/6]` 实测 `mica_rust_bg.wasm` 仅下载 1 次。
+
 #### W2 `wasm-opt -Oz`（约 0.5 天）
 
 - **怎么做**：
@@ -395,6 +417,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   3. CI 和 Docker 构建固定 binaryen 版本（从 GitHub release 下载并校验 sha256）。
 - **验收**：记录前后的未压缩和 Brotli 体积；Web 功能回归（登录、编辑、同步、公式、Mermaid、画板）正常。
 - **注意**：本次评审试过用系统 apt 源里的 binaryen 108，测量中途被打断，没有结果；不要用这个旧版本。
+
+> **已完成（2026-11-24）**：`8c100db7`。CI 与 `Dockerfile.web` 固定新版 binaryen，`scripts/build-web-rust.sh` 在 `wasm-bindgen` 后运行 `wasm-opt -Oz`（`mica_rust_bg.wasm` 未压缩由 `16.06 MB` 压至 `13.93 MB`），全套 Web E2E 回归通过。
 
 #### W3 关掉 `nsh` 和依赖里用不到的部分（1–2 天）
 
@@ -405,6 +429,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   2. 能通过关闭特性去掉的就关掉。例如 `naga` 由 `nsh-core` 的 `shader` 特性引入，而 `nsh-core` 自身没有默认特性，说明是别的 `nsh` crate（如 `nsh-base` 或 `nsh-platform-web` 的某个特性）把它打开的；用上面的 `cargo tree -e features` 找到是谁打开，再在 `clients/mica_rust/Cargo.toml` 里对那个依赖关闭默认特性、只打开需要的；
   3. 去不掉但确实没用的，向 `nsh` 上游提 issue 或 PR，并登记到 P2-2 的文档。
 - **验收**：用 `size-breakdown.py`（§8）确认对应 crate 从 wasm 中消失；Web 和桌面功能回归正常。
+
+> **已完成（2026-11-24）**：`8c100db7`。收紧 `nsh-base` 默认特性与 Web 依赖特性集，结合 W2/W4 将首包压至 `3,926,345 B`（3.74 MiB），低于 4.0 MiB 切换门禁；Web 与桌面回归全绿。
 
 #### W4 Mermaid 与公式改为按需加载（3–5 天）
 
@@ -420,6 +446,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
   - 含公式和 Mermaid 的页面能正确渲染，失败时安全降级显示源码；
   - 按需包体积不超过 `main` 原有门禁。
 
+> **已完成（2026-11-24）**：`8c100db7`。Web 目标下 `mica-md` 仅启用 `render-board`（剔除 `merman` / `ratex`）；恢复 `scripts/build-preview-wasm.sh` 输出 `mica_preview/{math,mermaid}.{js,wasm}`（实测 gzip-9：`math` `1,003,574 B` ≤ 1 MiB、`mermaid` `2,010,015 B` ≤ 2 MiB）；`atomic_blocks.rs` 经根 `Owner` + `nsh_core::prelude::spawn` 异步按需懒加载并缓存，Playwright E2E `[6/6]` 验证普通页面零请求、公式页按需拉取渲染通过。
+
 #### W5 体积门禁（约 0.5 天，建议最先做）
 
 - **怎么做**：
@@ -430,6 +458,8 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
      - 达不到 4.0 MiB 不能切换（§5.1），需要继续裁剪（例如把画板、导入导出也改为按需加载）；
   3. 调高预算须附实测数据和理由，做法同 [wasm 体积预算记录](wasm-size-budget-2026-11-17.md)。
 - **验收**：CI 中门禁生效；人为加一个大依赖时构建失败。
+
+> **已完成（2026-11-24）**：`8c100db7`。`scripts/build-web-rust.sh` 已启用 Brotli-11 硬门禁 `≤ 4,194,304 B`（4.0 MiB），[CI 45377675471](https://github.com/weironz/mica/actions/runs/45377675471) 实测 **`3,926,345 B`（3.74 MiB）**通过。
 
 #### W6 发版后的重复下载（说明，不单独开发）
 
@@ -454,16 +484,23 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 
 ### 5.1 闸门（全部满足才进入 C1）
 
-- [ ] P0-1 ～ P0-4 全部完成并按验收标准验证
-- [ ] P1-1 文档、发布说明、对外平台列表已按“不提供 Android 和 macOS 桌面”更新
-- [ ] P1-2 Windows 输入法与三种浏览器的验证报告已归档，全部通过
-- [ ] P1-3 `mica-editor` ≥200 条测试；Web 浏览器端到端进 CI；回执下限已上调
-- [ ] P1-4 完整 CI 与 Release 彩排全绿
-- [ ] P1-5 CSP 恢复按哈希放行
-- [ ] W5 体积门禁 ≤ 4,194,304 B（Brotli）在 CI 中生效并通过
-- [ ] A1b 已通过评审和完整 CI，待切换时合入
-- [ ] M4 切换前冒烟全部通过
-- [ ] 回滚预案已演练（见 C1、C2）
+- [x] P0-1 ～ P0-4 全部完成并按验收标准验证（`0804738f`、`03981b66`、`8c100db7`、`86fa49fc`、`dcd985a6`；注：P0-4 线上真实 X → X+1 双版本自动更新在首个切换版发布后补验，本地校验/覆盖安装/单实例/回滚已在 Windows 物理机全链路通过）
+- [x] P1-1 文档、发布说明、对外平台列表已按“不提供 Android 和 macOS 桌面”更新（`eb605e76`）
+- [x] P1-2 Windows 输入法与三种浏览器的验证报告已归档，全部通过（报告已归档于 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)；用户 Windows 桌面 + Chrome 真人实测通过，2026-11-24 用户拍板 Firefox / 搜狗 / Safari 无需补测，发版说明如实标注范围）
+- [x] P1-3 测试补齐：按用户 2026-11-24 务实调整（重高价值回归与核心 E2E，不凑 200 条水测试），`mica-editor` 已扩至 73 条行为回归 + `proptest`，Web 6 场景 Playwright E2E 已进 CI，回执下限已全部上调（`3bdb9a9a`、`6daa44f7`、`23bfecfa`、`48c5d219`）
+- [x] P1-4 完整 CI 与 Release 彩排全绿（终版全量 CI [Run 45454096995](https://github.com/weironz/mica/actions/runs/45454096995) 7/7 全绿 @ `52ceac8c`：workspace 1,589、`mica-editor` 74、`mica-client` 37、`clients/mica_rust` 131、Playwright E2E **7/7** 含旧 `mica-localfirst` 迁移实测通过、MCP 39 tools、RustSec 0 告警；终版 Release dry-run [Run 45450328047](https://github.com/weironz/mica/actions/runs/45450328047) 9/9 全绿 @ `a76fdb22`）
+- [x] P1-5 CSP 恢复按哈希放行（`8c100db7`，`test-web-csp-hashes.sh` + Playwright E2E 0 违规）
+- [x] W5 体积门禁 ≤ 4,194,304 B（Brotli）在 CI 中生效并通过（`8c100db7`，终版 CI `45454096995` 实测 **`3,929,256 B` / 3.75 MiB**）
+- [x] A1b 已通过评审和完整 CI，待切换时合入（`fbd91002` 完成针对 `migrations/0040_usage_stats.sql`、`routes/stats.rs`、`metrics.rs`、`app-core/{sync,store}.rs` 的口径/隐私/迁移安全/写入热路径评审并修复 3 项发现：`metrics.rs` `orphan_pages` O(N²) → O(N+E) CTE、`sync.rs` 消除 `push_update_checked` 冗余 `word_count` 查询、`transfer.rs` 计数移至 `tx.commit()` 后；终版 CI [45454096995](https://github.com/weironz/mica/actions/runs/45454096995) 含真实 Postgres 全绿）
+- [x] M4 切换前冒烟全部通过（桌面/Web 核心编辑、实时同步、离线恢复、旧 Flutter Web `mica-localfirst` 迁移、覆盖升级、单实例、回滚 `v0.14.11` 与终版全量 CI [45454096995](https://github.com/weironz/mica/actions/runs/45454096995) 7/7 + Release dry-run [45450328047](https://github.com/weironz/mica/actions/runs/45450328047) 9/9 全部通过）
+- [x] 回滚预案已演练（见 C1、C2：C1 桌面卸载 + 重装官方 Flutter `v0.14.11` + 124 MB `store.db` `PRAGMA quick_check = ok` 已于 2026-11-24 物理机演练通过；C2 Web 切换部署前保留最后一个 Flutter Web 镜像 tag）
+
+### 5.1 补充：合入前复核发现并修复的 Web 旧数据迁移缺口（2026-11-24）
+
+- **问题**：Flutter 网页版（≤ 0.14.x）把未同步的离线编辑存在浏览器 IndexedDB 数据库 `mica-localfirst`（`base` / `outbox` / `remote` / `cursor`，键为 `缓存键|文档id`），新网页版使用 `mica_sync_v1`，从不读取旧库。切换后，用户在 Flutter 网页版里离线编辑、尚未同步的内容会被搁置。
+- **修复**：`crates/mica-client/src/web_idb.rs` 新增 `migrate_legacy_flutter_doc`，在 `clients/mica_rust/src/doc_sync_session.rs` 打开云端文档、读取本地快照之前调用：读出旧库中服务端未确认的编辑（`clock > pushedClock`），并入新库的待发送队列并落盘，然后删除旧记录（先写新、后删旧，中断后重跑会去重，不会丢）；旧库不存在时不会创建空库，本页之后不再探测。与桌面端一致，迁移在该页面下次打开时发生。
+- **验证**：`mica-client` 新增 3 条单测（键格式与 main 一致、只迁未确认且去重、迁移后经同步引擎回放）；`e2e/web_e2e.mjs` 新增第 7 个场景（离线编辑 → 转写成 Flutter 旧库格式 → 重开页面 → 迁移并推送到服务端 → 新浏览器配置可见 → 旧记录已删除），本地真实服务栈连续 5 次 7/7 通过；Web 首包 3,931,005 B，仍低于 4.0 MiB 门禁。
+- **测试注意**：E2E 每次完整运行约用 6 次登录（服务端按 IP 限流：突发 10 次，每分钟补 5 次），本地反复连跑会触发 429，属预期；CI 每次是新环境，不受影响。
 
 ### 5.2 切换步骤
 

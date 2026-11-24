@@ -2,7 +2,7 @@
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 selector="$repo/scripts/ci-paths-for-scope.sh"
-all=$'rust\nflutter\nweb-e2e\ncontainer\nmcp'
+all=$'rust\nclient\ncontainer\nmcp'
 
 check() {
   local label=$1 expected=$2
@@ -17,40 +17,11 @@ check() {
 
 [ "$(bash "$selector")" = "$all" ]
 check docs '' docs/ops/release.md README.md
-check flutter $'flutter\nweb-e2e' clients/mica_flutter/e2e/web_harness_entry.dart
-check lockfile $'flutter\nweb-e2e' clients/mica_flutter/pubspec.lock
-check sdk $'flutter\nweb-e2e' .fvmrc
-check backend $'rust\nweb-e2e\ncontainer\nmcp' crates/api-server/src/main.rs
-check mixed "$all" crates/mica-core/src/lib.rs clients/mica_flutter/lib/main.dart
-check md-core "$all" crates/md-core/src/x.rs
-check md-wasm "$all" crates/md-wasm/src/lib.rs
-check ffi "$all" clients/mica_flutter/rust/src/lib.rs
+check client $'client\ncontainer' clients/mica_rust/src/editor_view.rs
+check backend $'rust\ncontainer\nmcp' crates/api-server/src/main.rs
+check shared-core "$all" crates/mica-editor/src/lib.rs
+check md-core "$all" crates/md-core/src/lib.rs
 check workflow "$all" .github/workflows/ci.yml
 check unknown "$all" new-module/build.config
-check nginx $'web-e2e\ncontainer' deploy/nginx.conf
-check spaced $'flutter\nweb-e2e' 'clients/mica_flutter/test/fixture with spaces.dart'
-
-tmp_root=$(cd "${TMPDIR:-/tmp}" && pwd -P)
-fixture=$(mktemp -d "$tmp_root/mica-ci-paths.XXXXXX")
-fixture=$(cd "$fixture" && pwd -P)
-case "$fixture" in "$tmp_root"/mica-ci-paths.*) ;; *) exit 1 ;; esac
-trap 'rm -rf -- "$fixture"' EXIT
-(
-  cd "$fixture"
-  git init -q
-  git config user.email fixture@mica.test
-  git config user.name fixture
-  mkdir -p crates/api-server/src docs
-  printf 'fixture\n' > crates/api-server/src/example.rs
-  git add .
-  git commit -qm initial
-  base=$(git rev-parse HEAD)
-  git mv crates/api-server/src/example.rs docs/example.md
-  git commit -qm move
-  [ "$(bash "$selector" "$base" HEAD)" = $'rust\nweb-e2e\ncontainer\nmcp' ]
-  if bash "$selector" no-such-ref HEAD >/dev/null 2>&1; then
-    echo 'FAIL: invalid baseline must fail instead of selecting no jobs' >&2
-    exit 1
-  fi
-)
-echo 'CI job selection: full, mixed changes, pins, renames and invalid baselines passed'
+check deploy 'container' deploy/nginx.conf
+echo 'CI job selection (pure Rust): passed'

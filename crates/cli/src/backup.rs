@@ -19,7 +19,9 @@
 use anyhow::{Context, Result, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command as Proc, ExitStatus, Stdio};
+#[cfg(any(windows, test))]
+use std::process::Stdio;
+use std::process::{Command as Proc, ExitStatus};
 use std::time::{Duration, Instant};
 
 /// Everything a backup export run reads from the environment.

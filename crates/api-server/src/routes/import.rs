@@ -1431,6 +1431,7 @@ async fn insert_page(
       name: title,
       icon,
       seed: payload.clone(),
+      source: mica_core::ActivitySource::Import,
     },
   )
   .await?;

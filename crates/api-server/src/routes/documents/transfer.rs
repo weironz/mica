@@ -1086,6 +1086,9 @@ async fn transfer_roots(
   }
 
   tx.commit().await?;
+  for _ in 0..documents {
+    crate::metrics::METRICS.record_page_created(mica_core::ActivitySource::Transfer);
+  }
 
   Ok(TransferResponse {
     new_root_view_id: new_root_view_ids.first().copied(),
@@ -1408,6 +1411,9 @@ pub async fn clone_view(
     .await?;
   }
   tx.commit().await?;
+  for _ in 0..documents {
+    crate::metrics::METRICS.record_page_created(mica_core::ActivitySource::Transfer);
+  }
 
   Ok(Json(CloneResponse {
     new_root_view_id: Some(view_map[&view_id]),
@@ -1496,7 +1502,22 @@ async fn insert_subtree_tx(
     .bind(node.user_id)
     .fetch_one(&mut **tx)
     .await?;
+    let initial_words = mica_core::word_count::count_blocks(&payload.blocks)
+      .words
+      .min(i32::MAX as u64) as i32;
     mica_app_core::sync::seed_base_tx(&mut *tx, document.id, payload).await?;
+    mica_app_core::sync::record_writing_activity_tx(
+      &mut *tx,
+      node.user_id,
+      node.workspace_id,
+      document.id,
+      mica_core::ActivitySource::Transfer,
+      true,
+      0,
+      initial_words,
+      0,
+    )
+    .await?;
     sqlx::query(
       r#"
         INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, icon, position, created_by)

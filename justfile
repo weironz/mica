@@ -1,41 +1,16 @@
-# Mica build / release orchestration.   `just --list` shows everything.
-# Full flow, prerequisites and rationale: docs/ops/release.md
-#
-# Recipes are POSIX and run under bash. On Windows that MUST be Git Bash —
-# the `bash` on PATH is C:\WINDOWS\system32\bash.exe (the WSL launcher), and
-# WSL has none of the Windows toolchain (docker / flutter / cargo) and a
-# different filesystem view (/mnt/d/...). `windows-shell` pins the right one.
+# Mica build / release orchestration (100% Fullstack Rust).
+# `just --list` shows everything. Full flow: docs/ops/release.md
 set shell := ["bash", "-uc"]
 set windows-shell := ["C:/Program Files/Git/bin/bash.exe", "-uc"]
 
-flutter := env_var_or_default("FLUTTER", "flutter")
-hub     := "willdockerhub"
-
-# Production node. Prod pulls its images from Aliyun ACR (first-party, fast in
-# CN); CI pushes there on every `v*` tag. `deploy-prod` is the ONLY recipe that
-# touches prod — CI never does (docs/ops/release.md explains why).
+hub      := "willdockerhub"
 node     := "root@mica.cloudcele.com"
 node_dir := "/data/mica"
 site     := "https://mica.cloudcele.com"
-
-# Registry for LOCAL image builds (a CI outage fallback).
-# Prod's own registry lives in {{node_dir}}/.env as MICA_REGISTRY.
 hub_acr  := "registry.cn-shenzhen.aliyuncs.com/willspace"
 
 # ---------------------------------------------------------------- dev loop
 
-# One command in, one command out. The API is the `api` container (bind-mounted
-# source, cargo cache in volumes), so `dev-down` really does stop everything.
-#
-# There used to be a second way — `dev-up` (infra only) plus `dev-api`
-# (cargo run on the host) — kept around as an escape hatch. It earned nothing:
-# the container rebuilds a one-line change in ~5 s, so the host had no speed
-# left to offer, while `dev-down` silently failed to stop it and left :8080 held
-# by a process nothing in the stack accounted for. Two ways to start the backend,
-# one of them booby-trapped, is worse than one way.
-#
-# First run compiles the workspace into the volume (~5.5 min here); after that a
-# one-line change rebuilds and restarts in ~5 s.
 [doc("Start the whole dev stack (infra + API + web) and seed it")]
 dev:
     docker compose up -d
@@ -49,7 +24,7 @@ dev:
     just seed-dev
     @echo "api http://127.0.0.1:8080  web http://127.0.0.1:8090  (demo@mica.dev / password123)"
 
-[doc("Tail the dev API log (it runs in a container now, not your terminal)")]
+[doc("Tail the dev API log")]
 dev-logs:
     docker compose logs -f api
 
@@ -57,209 +32,92 @@ dev-logs:
 dev-down:
     docker compose down
 
-# Run AFTER the API has started once, so sqlx::migrate! has created the tables.
-# Idempotent — safe to re-run after `docker compose down -v`.
 [doc("Seed a local demo account (demo@mica.dev / password123) + workspace")]
 seed-dev:
     docker exec -i mica-postgres psql -U mica -d mica < seeds/dev_seed.sql
 
-# The compose `web` (nginx) serves the bind-mounted build dir live; just
-# refresh the browser afterwards. The chmod matters: flutter recreates
-# build/web with 750 and the nginx container (different uid) 403s on it.
-#
-# SAME FLAGS AS `build-web`, deliberately. This used to pass
-# --no-tree-shake-icons while the shipped bundle (build-web) tree-shakes, so the
-# thing you eyeballed at :8090 was not the thing you released: icon glyphs that
-# get stripped in production were all present here. The whole point of this
-# target is to look at the real artifact, so any flag that diverges from
-# build-web defeats it — keep the two lines identical.
-[doc("Rebuild the dev web bundle served by compose nginx")]
+[doc("Rebuild the pure-Rust WebAssembly bundle into deploy/web")]
 dev-web:
-    bash scripts/build-md-wasm.sh
-    bash scripts/build-doc-wasm.sh
-    bash scripts/build-preview-wasm.sh
-    bash scripts/build-board-wasm.sh
-    rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
-    cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
-    chmod -R a+rX clients/mica_flutter/build/web
+    bash scripts/build-web-rust.sh
 
-# Hot reload: press r; quit: q. Desktop opens the offline local world —
-# create folders/pages with no backend. MICA_DEV_AUTOLOGIN=false because this
-# recipe runs no backend: leaving it on makes startup try (and fail) to sign in
-# a demo account against 127.0.0.1:8080, dumping a raw connection error banner.
-#   just app          # desktop (windows)
-#   just app chrome   # web
-# Any running Mica — the installed one included — is closed first. The
-# single-instance mutex in windows/runner/main.cpp makes a second instance exit
-# immediately, and flutter reports that as "Error waiting for a debug
-# connection: The log reader stopped unexpectedly", which names neither the
-# guard nor the app that is holding it. Worse, that app may only be minimised to
-# the tray, so there is nothing on screen to close.
-#
-# The trailing `exit 0` is load-bearing. `Get-Process -ErrorAction
-# SilentlyContinue` with nothing to match suppresses the error OUTPUT but still
-# leaves `$?` false, and `powershell -Command` turns that into exit 1 — so the
-# common case (no Mica running) failed the recipe with a completely blank
-# terminal: no message, no hint, just "failed on line N".
-#
-# ASKED to close before being killed, in that order and on purpose: WM_CLOSE
-# runs the app's own exit path, which flushes the editor's 400 ms debounce. A
-# straight `Stop-Process -Force` skips it and eats the last words typed into a
-# real workspace. The force kill is still there as the fallback, because closing
-# the window may just send Mica to the tray rather than exit it.
-[doc("Launch the app to eyeball a change (target: windows | chrome)")]
-app target="windows":
-    @if [ "{{target}}" = "chrome" ] || [ "{{target}}" = "web-server" ]; then bash scripts/build-md-wasm.sh && bash scripts/build-doc-wasm.sh && bash scripts/build-preview-wasm.sh && bash scripts/build-board-wasm.sh; fi
-    @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { Write-Host "==> closing the running Mica (PID $($p.Id)) $($p.Path)"; $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Write-Host "    it did not exit (it may have gone to the tray) - forcing"; Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(3000) } }; exit 0'; fi
-    cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
+[doc("Launch the pure-Rust native desktop client (clients/mica_rust)")]
+app:
+    cargo run --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust
 
-# Container-only bugs (a loopback bind, a broken Dockerfile) used to be caught
-# here by `just parity-check`. They are now caught by the `container` job in
-# ci.yml, on every push — that check was manual and optional, so it was rarely
-# run, and a check nobody runs catches nothing.
-# The tail of this recipe prints what it does NOT run.
-#
-# 2026-08-05: a sync regression turned `integration_test/` red and STAYED red for
-# six commits, because every local check was green and nobody looked at CI.
-# `just test` reporting "All tests passed" is what made that comfortable. The
-# integration suite needs a Windows desktop device (and one file a live server),
-# so it cannot run here — but a gate that is silent about its own edges reads as
-# a gate over everything.
-[doc("Run all tests (Rust workspace + Flutter)")]
+[doc("Prune old Cargo build artifacts across this repo, keeping only the newest builds (needs cargo-sweep)")]
+sweep maxsize="6GB":
+    @command -v cargo-sweep >/dev/null 2>&1 || (echo "cargo-sweep not installed: run 'cargo install cargo-sweep'" && exit 1)
+    cargo sweep --maxsize {{maxsize}} -r .
+
+# ---------------------------------------------------------------- tests & gates
+
+[doc("Run all Rust tests (root workspace + gated SQLite store + clients/mica_rust)")]
 test:
-    # The Postgres-backed tests (`pool()` in documents.rs / password_reset.rs)
-    # SKIP when DATABASE_URL is unset — and a skipped test reports as PASSED.
-    # That is exactly how two broken tests reached main on 07-27: locally
-    # "108 passed", in CI "106 passed; 2 failed" for four days. So run them for
-    # real against a reachable database when one exists, and say so out loud
-    # when it is not, instead of quietly testing less than CI does.
-    # Same resolver as `just ci` (lib-local) — which REFUSES where this warns,
-    # deliberately: `just test` is the dev loop, `just ci` is the CI twin.
     db=$(source scripts/lib-local.sh && resolve_database_url); \
     if [ -n "$db" ]; then \
         echo "==> Postgres-backed tests: ON ($db)"; \
         DATABASE_URL=$db cargo test --workspace; \
     else \
-        echo "==> WARNING: no reachable Postgres, so the Postgres-backed tests will SKIP"; \
-        echo "    (a skipped test still reports as passed). Run 'just dev' to include them."; \
+        echo "==> WARNING: no reachable Postgres, so Postgres-backed tests will SKIP"; \
         cargo test --workspace; \
     fi
-    # `store` is a non-default feature and features do not apply across a
-    # multi-package `-p` list, so `--workspace` never compiles mica-core's
-    # gated SQLite migration tests. Mirror ci.yml's separate step (the 24
-    # local store tests only run under this invocation).
     cargo test -p mica-core --features store
-    cd clients/mica_flutter && {{flutter}} test
-    @echo ""
-    @echo "==> NOT covered by this recipe: clients/mica_flutter/integration_test/"
-    @echo "    (real Windows app + FFI, and one file needs a live server)."
-    @echo "    Those run ONLY in the 'Flutter Integration Tests' workflow."
-    @echo "    Before merging anything under lib/cloud, lib/editor or crates/mica-core:"
-    @echo "      gh run list --workflow='Flutter Integration Tests' --limit 3"
+    cargo test --manifest-path clients/mica_rust/Cargo.toml
 
-[doc("The integration suite `just test` cannot reach: real Windows app + FFI. Needs a Windows desktop.")]
-test-integration:
-    FLUTTER='{{flutter}}' bash scripts/test-integration.sh
-# The CI workflow on this machine — for when GitHub Actions cannot run (out of
-# minutes, outage). Same gates, same flags; REFUSES without a database rather
-# than letting the DB-backed tests skip. Prints what it does not cover.
-[doc("Run the CI gates locally: structure, clippy, Rust + DB tests, flutter analyze/test/web + browser e2e (part: all | rust | flutter | e2e)")]
+[doc("Run the CI gates locally (part: all | rust | client)")]
 ci part="all":
     bash scripts/local-ci.sh {{part}}
 
-[doc("Static analysis on both sides")]
+[doc("Static analysis across root workspace and pure-Rust client")]
 check:
-    # Was `clippy 2>/dev/null || cargo build`: a clippy failure got swallowed
-    # and a plain build that passed made the recipe green. Same flags as CI now.
     cargo clippy --workspace --all-targets -- -D warnings
-    cd clients/mica_flutter && {{flutter}} analyze lib
+    cargo clippy --manifest-path clients/mica_rust/Cargo.toml --all-targets -- -D warnings
 
-# 单元行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
-# 与 CI 的 structure job 同一条命令，三层防线，计量单位（#87）：
-#   Dart 按 library（root + 全部 part 合计，拆 part 绕不过门禁）；Rust 按单文件，
-#   FFI crate（clients/mica_flutter/rust/src）同在扫描范围。
-#   绝对限 8,000 硬失败 / 4,000 警告；棘轮（file-size-budget.txt 登记单元
-#   只许减不许增）；增量（--diff <base> 时 >2,000 行存量单元净增 >300 失败，
-#   按单元聚合）。
-[doc("Per-unit line-count gate (Dart library = root + parts; absolute + ratchet + delta; same as CI)")]
+[doc("Per-file Rust line-count gate (absolute + ratchet + delta; same as CI)")]
 check-structure:
     bash scripts/check-file-size.sh
 
-# Rust line coverage, printed as a per-file summary. NOT wired into CI — it's a
-# heavy instrumented rebuild and too flaky to gate on; run it by hand when you
-# want to see where coverage stands. Needs the tool once:
-#   cargo install cargo-llvm-cov
-# Narrow it to one crate with:  just coverage mica-cli
-[doc("Rust line-coverage summary (cargo-llvm-cov; run `cargo install cargo-llvm-cov` first)")]
+[doc("Rust line-coverage summary (cargo-llvm-cov)")]
 coverage package="":
     cargo llvm-cov {{ if package == "" { "--workspace" } else { "-p " + package } }} --summary-only
 
-# mica-md SDK readiness (single-source S5): packaging list, denied-warnings
-# docs, the pinned API/schema/robustness gates, the four shipped examples, and
-# the npm package's build + tests + pack dry-run. The publish actions
-# themselves are NOT here — they need user approval (S5 T5.12).
-[doc("SDK readiness: package list, docs, examples, npm pack (no publish)")]
+[doc("SDK readiness: mica-md crate + npm package (no publish)")]
 sdk-check:
     bash scripts/sdk-check.sh
 
 # ------------------------------------------------------- local artifacts
-# The four things a release ships. 1+2 are also built by GitHub Actions on a
-# `v*` tag (docs/ops/release.md); these recipes are for building them by hand.
 
 [doc("1/4  mica-cli binary for this host -> target/release/")]
 build-cli:
     cargo build --locked -p mica-cli --release
     @echo "-> target/release/mica-cli"
 
-# Needs Inno Setup:  choco install innosetup -y
-# Windows only (ISCC.exe); CI does this on windows-latest.
-[doc("2/4  Windows desktop installer -> installer/Output/ (needs Inno Setup)")]
+[doc("2/4  Pure-Rust Windows desktop installer -> clients/mica_rust/installer/Output/ (needs Inno Setup)")]
 build-installer version:
-    cd clients/mica_flutter && {{flutter}} build windows --release
-    "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DAppVersion={{version}} 'clients\mica_flutter\installer\mica.iss'
-    @echo "-> clients/mica_flutter/installer/Output/Mica-Setup-{{version}}.exe"
+    cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --release
+    "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DAppVersion={{version}} 'clients\mica_rust\installer\mica.iss'
+    @echo "-> clients/mica_rust/installer/Output/Mica-Setup-{{version}}.exe"
 
-# `cp -r`, not rsync: Windows has no rsync (the old recipe just failed).
-# --no-web-resources-cdn: without it flutter_bootstrap.js loads CanvasKit from
-# www.gstatic.com at runtime and the canvaskit/ we ship is dead weight — the
-# app then depends on gstatic serving CORP headers (COOP/COEP) and on gstatic
-# being reachable from CN at all. Same-origin is strictly better; keep the
-# flag on every `flutter build web` (dev-web, here, ci.yml, release.yml).
-[doc("3/4  Flutter web bundle -> deploy/web (staged for the web image)")]
+[doc("3/4  Pure-Rust WebAssembly bundle -> deploy/web (staged for the web image)")]
 build-web:
-    bash scripts/build-md-wasm.sh
-    bash scripts/build-doc-wasm.sh
-    bash scripts/build-preview-wasm.sh
-    bash scripts/build-board-wasm.sh
-    rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
-    cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
-    rm -rf deploy/web && mkdir -p deploy/web
-    cp -r clients/mica_flutter/build/web/. deploy/web/
-    @echo "-> deploy/web (main.dart.js $(md5sum deploy/web/main.dart.js | cut -c1-12)…)"
+    bash scripts/build-web-rust.sh
 
-# The DEPLOYED api is the docker image below; this binary is for local
-# runs / profiling.
 [doc("4/4  api-server binary for this host -> target/release/")]
 build-api:
     cargo build --release -p mica-api-server
     @echo "-> target/release/mica-api-server"
 
-[doc("Build cli + web + api (everything without a Windows-only toolchain)")]
+[doc("Build cli + web + api")]
 build-all: build-cli build-web build-api
 
 # ---------------------------------------------------------------- docker
 
-# Release images come from CI; this is the fallback for when CI is down
-# if CI is down. --provenance/--sbom off: buildx defaults attach an OCI
-# attestation manifest, turning the image into a multi-manifest index that
-# some registries / `docker save | docker load` cannot resolve.
 [doc("Build the prod images locally (CI-outage fallback)")]
 docker-build tag: build-web
     docker build --provenance=false --sbom=false -f deploy/Dockerfile.api -t {{hub_acr}}/mica-api:{{tag}} .
     docker build --provenance=false --sbom=false -f deploy/Dockerfile.web -t {{hub_acr}}/mica-web:{{tag}} .
     docker build --provenance=false --sbom=false -f deploy/Dockerfile.cli -t {{hub_acr}}/mica-cli:{{tag}} .
 
-# Normally CI does this. Needs `docker login registry.cn-shenzhen.aliyuncs.com`.
 [doc("Push locally built images to ACR (CI-outage fallback)")]
 docker-push tag:
     docker push {{hub_acr}}/mica-api:{{tag}}
@@ -268,127 +126,53 @@ docker-push tag:
 
 # ---------------------------------------------------------------- deploy
 
-# Prod pulls the CI-built images from ACR and restarts. The steps live in
-# ansible/deploy.yml, not here: they used to be ~80 lines of nested
-# `ssh "cd … && sed -i … && docker compose …"` whose quoting had to survive
-# bash -> just -> ssh -> bash, and every layer got it wrong at least once.
-#
-# What the playbook guarantees, which the ssh version did not:
-#   - the node's docker-compose.yaml is SHIPPED from the tag every run, so a
-#     compose change can no longer make the next deploy refuse (see below);
-#   - postgres + rustfs come up and are waited for BEFORE api/web, so a
-#     migration never races a database that is still starting;
-#   - the backup sidecar (mica-cli, keyed to the same MICA_VERSION) rolls too,
-#     but only where it is already present — it sat on the old
-#     willdockerhub/mica-cli:v0.3 for many releases because deploy skipped it;
-#   - MICA_VERSION in the node's .env is restored if any step fails, so a
-#     half-applied deploy does not decide what a later reboot comes back on.
-#
-# `just deploy-prod 0.13.27 --check --diff` rehearses the whole thing against
-# the real node and changes nothing. The docker steps are community.docker
-# modules, so the rehearsal runs the same code rather than skipping it — which
-# is how the release-format bug in the first draft was caught before it ran.
-#
-# RETIRED 2026-08-25: `sync-deploy-script`, which installed
-# deploy/node-deploy-policy.sh as /usr/local/sbin/mica-deploy — the pinned
-# command that limited what the CI key could do. Ansible executes modules it
-# pushes to the host, so it cannot run behind a pinned command. What that costs
-# and why it was accepted anyway is in docs/ops/cd-plan.md §4.
-[doc("Roll prod to a published version, e.g. `just deploy-prod 0.5.1` (+ --check --diff to rehearse)")]
+[doc("Roll prod to a published version, e.g. `just deploy-prod 0.14.12` (+ --check --diff to rehearse)")]
 deploy-prod version *flags:
     bash scripts/deploy-prod.sh "{{version}}" {{flags}}
-# The api must report the version we just rolled to, and the live bundle must
-# not be a cached/stale artifact. Checking only for HTTP 200 would miss both.
-[doc("Prove prod really serves <version>, e.g. `just verify-prod 0.5.1`")]
+
+[doc("Prove prod really serves <version>")]
 verify-prod version:
     SITE='{{site}}' bash scripts/verify-prod.sh "{{version}}"
-# `gzip -t` proves an archive is not truncated; it proves nothing about whether
-# `psql < dump` yields a working database. S5 (migration 0016) made that gap
-# load-bearing — it dropped three tables, so for anything predating it the dump is
-# the only way back. Restores into a throwaway database beside the live one and
-# drops it again; `mica` is never touched.
-# Takes the BASENAME, not a path: on the Windows dev box Git Bash rewrites a
-# leading-slash argument into a Windows path before just ever sees it
-# (`/data/mica/x.sql.gz` → `C:/Program Files/Git/data/mica/x.sql.gz`), and that
-# happens on the command line, too early for the recipe to undo. Naming the
-# directory here sidesteps it and shortens the call.
-[doc("Prove a restore point really restores, e.g. `just restore-drill pre-0.13.4-….sql.gz`")]
+
+[doc("Prove a restore point really restores")]
 restore-drill dump:
     NODE='{{node}}' bash scripts/restore-drill.sh "{{dump}}"
+
 [doc("List the restore points on the node, newest last")]
 restore-points:
     ssh {{node}} "ls -lah {{node_dir}}/*.sql.gz 2>/dev/null | tail -20 || echo '(none)'"
 
-# The web half had zero end-to-end coverage: all 14 integration tests import native
-# FFI and structurally cannot be pointed at a browser. This asserts what only a
-# browser against a real stack can — same-origin engine load, web↔server CRDT convergence
-# over a real WebSocket, server-rendered routes beating the SPA fallback, and
-# entry-file caching.
-#
-# Needs the dev stack up (`just dev`) with the api started against a seeded
-# account: MICA_SEED_TEST_USER=e2e@mica.test:e2epassword123. Registration cannot
-# be used to make one — it is closed by default and answers 204 pending email
-# confirmation, and a browser harness has no inbox.
-[doc("Run the web end-to-end assertions against the dev stack (needs `just dev`)")]
-web-e2e email="e2e@mica.test" password="e2epassword123":
-     bash scripts/web-e2e.sh "{{email}}" "{{password}}"
-# ── Release gate ──────────────────────────────────────────────────────────────
-#
-# Everything docs/ops/release.md says to check, as a command that REFUSES instead of
-# a list somebody has to remember. The rule that forced this: the Postgres-backed
-# tests SKIP when DATABASE_URL is unset, and a skipped test reports as passed —
-# so "I ran the tests" and "the tests ran" were different facts, and only a human
-# remembering the difference stood between them. A gate nobody can forget beats a
-# note in a document every time.
-# The one to use: bump -> gate -> commit -> tag, in that order, as one step.
-# Not four commands you run in the right order — that ordering was itself wrong
-# in the doc string this replaces (it said to run release-check BEFORE the bump,
-# which cannot pass: release-check asserts the three version numbers agree, and
-# they only agree afterwards). Pushing stays separate and explicit.
-[doc("Bump + gate + commit + tag, e.g. `just release 0.13.28`. Does not push.")]
+# ── Release gate & train ─────────────────────────────────────────────────────
+
+[doc("Bump + gate + commit + tag, e.g. `just release 0.14.12`. Does not push.")]
 release version:
     bash scripts/release.sh "{{version}}"
+
 [doc("Everything that must be true before tagging. Refuses; does not warn.")]
 release-check:
     bash scripts/release-check.sh
+
 [doc("Just the version numbers + Cargo.lock. `just release` is the one you want.")]
 release-bump version:
     bash scripts/release-bump.sh "{{version}}"
-
-# ── Local release train (fallback: GitHub Actions unavailable) ───────────────
-#
-# release.yml's jobs, on your machines. Each host builds what it can into
-# dist/vX.Y.Z/ and attaches it to a DRAFT release; publishing is a separate
-# step that refuses until every required asset is there (the in-app updater
-# reads /releases/latest, so it must never see a release without its
-# installer). docs/ops/release.md「本地发布」has the full walk-through.
 
 [doc("Everything on this machine: preflight → release → push → artifacts → images → upload → publish")]
 ship version:
     bash scripts/ship.sh "{{version}}"
 
-[doc("What the local release train needs (gh API, Inno, Docker + logins, disk, DB), all reported at once")]
+[doc("What the local release train needs, all reported at once")]
 release-preflight version:
     bash scripts/release-preflight.sh "{{version}}"
 
-[doc("On a Linux/macOS checkout of vX.Y.Z: run the browser-only suites and record the release-acceptance status")]
-browser-tests-report version:
-    bash -c 'source scripts/lib-local.sh && require_tagged_tree "$1"' _ "{{version}}"
-    bash scripts/browser-tests.sh --report-status
-
-[doc("Build the release assets THIS host can build into dist/vX.Y.Z/ (Windows: installer + cli [+ linux cli via Docker])")]
+[doc("Build the release assets THIS host can build into dist/vX.Y.Z/")]
 release-artifacts version *flags:
     bash scripts/release-artifacts.sh "{{version}}" {{flags}}
 
-[doc("Linux .deb into dist/vX.Y.Z/ (Docker builder if running, else native; MICA_CLIENT_BUILD=docker|native)")]
+[doc("Linux .deb into dist/vX.Y.Z/")]
 build-deb version:
     bash scripts/build-linux-deb.sh "{{version}}" "dist/v{{version}}"
 
-[doc("Android APKs (arm64 + armv7) into dist/vX.Y.Z/ (Docker builder if running, else native with ANDROID_HOME)")]
-build-apk version:
-    bash scripts/build-android-apk.sh "{{version}}" "dist/v{{version}}"
-
-[doc("Attach dist/vX.Y.Z/* to the (draft) GitHub release vX.Y.Z, creating it if needed")]
+[doc("Attach dist/vX.Y.Z/* to the (draft) GitHub release vX.Y.Z")]
 release-upload version:
     bash scripts/release-upload.sh "{{version}}"
 

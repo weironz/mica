@@ -9,6 +9,13 @@
 >
 > 2026-08-03 建档,当时搬进 68 条。
 
+## 0.15.0
+
+- 🚀 **全栈 Rust 三层标杆架构重构与 Flutter 彻底退役** [#172](https://github.com/weironz/mica/issues/172)（2026-11-24 全部 P0–P2 闸门验收完成）。
+  完整建成 L1 数据引擎 + L2 四个无头纯 Rust 客户端内核（`crates/mica-board::session`、`crates/mica-sync`、`crates/mica-editor`、`crates/mica-client`）+ L3 纯 Rust 原生客户端（`clients/mica_rust`，桌面与 WebAssembly 双目标）；完成 `#111` 账号隔离云端缓存键、Web 异步 `fetch` + IndexedDB 持久化与旧 Flutter Web `mica-localfirst` 未同步编辑迁移、Web 首包 Brotli-11 压至 `3.75 MiB`（≤ 4.0 MiB 硬门禁）+ 按需加载 `mica_preview/{math,mermaid}` + 严格 `sha256` CSP、Windows 自动更新与单实例（`#179`）及覆盖升级/回滚物理机演练。
+  彻底删除 `clients/mica_flutter/`、`crates/doc-wasm/`、`crates/board-wasm/`、`.fvmrc`、`flutter_rust_bridge`、Cargokit 与全部 Dart/Flutter 债务；详见 [设计方案](../architecture/fullstack-rust-architecture.md) 与 [分支评审与验收记录](../reviews/fullstack-rust-branch-review-2026-11-24.md)。
+- 📊 **使用统计与 Prometheus 可观测性扩展** [#191](https://github.com/weironz/mica/issues/191)（2026-11-24 随 `v0.15.0` 合入发布）：新增迁移 `0040_usage_stats.sql`（`document_yrs_base` 字数/字符数投影与 `writing_activity_doc_hourly` 活跃度分桶）、`/api/stats/{overview,activity}` 接口及客户端统计页、`/metrics` 指标扩展（含 A1b 评审优化 O(N+E) 孤儿页 CTE 与热路径单次查询复用）。
+
 ## 0.14.7
 
 - 编辑器从页面空白处、左侧把手栏和标题旁拖出框选，选中整块（`b31e5eb2` 等）；长代码块默认完整显示（#174）；分割线上下间距收紧。

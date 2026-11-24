@@ -81,4 +81,4 @@ mica_workspace_bytes_used * on(workspace_id) group_left(name) mica_workspace_inf
 有意的。告警规则得先有人接、有人值、有下班时间的约定,否则只是把噪音写进配置文件。指标先攒着,
 等真需要时按当时的痛点写规则,比现在凭空猜阈值准。
 
-指标清单见 `crates/api-server/src/metrics.rs`。
+完整指标字典、暴露边界、PromQL 配方与推荐告警规则见 [docs/ops/metrics.md](../../docs/ops/metrics.md)，源码实现位于 `crates/api-server/src/metrics.rs`。

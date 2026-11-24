@@ -36,14 +36,6 @@ done
 [ ${#missing[@]} -eq 0 ] || fail "not attached yet: ${missing[*]}
   Build it on the right machine (just release-artifacts $version) and upload (just release-upload $version)."
 
-# The browser-only Flutter suites are release acceptance too, and nothing
-# before this point has run them on a Windows release machine (#181). The
-# status lives on the commit, so it holds whichever machine built what.
-sha=$(git rev-parse -q --verify "$tag^{commit}" 2>/dev/null \
-  || gh api "repos/$GH_REPO/commits/$tag" --jq .sha) \
-  || fail "cannot resolve $tag to a commit"
-require_browser_status "$sha" "$version"
-
 # An asset's checksum manifest is not enough: the manifest must actually cover
 # the asset, and its hash must be the digest of the asset GitHub holds. A
 # manifest that merely exists could be stale or hand-edited, and the updater
@@ -92,16 +84,12 @@ verify_asset() { # $1 = asset name
 for a in "${required[@]}"; do
   verify_asset "$a"
 done
-# An attached macOS CLI was never required, but once it IS attached it becomes
-# downloadable and must be verifiable like every other asset.
 if grep -qxF "mica-cli-$version-macos-arm64" <<<"$assets"; then
   verify_asset "mica-cli-$version-macos-arm64"
 else
   note "note: no macOS CLI attached (not required; REQUIRE_MACOS=1 to insist)"
 fi
-# Same rule for the opt-in client packages: never required, verified once attached.
-for a in "Mica-$version-linux-amd64.deb" "Mica-$version-android-arm64.apk" \
-         "Mica-$version-android-armv7.apk"; do
+for a in "Mica-$version-linux-amd64.deb"; do
   if grep -qxF "$a" <<<"$assets"; then verify_asset "$a"; fi
 done
 

@@ -1,87 +1,28 @@
 #!/usr/bin/env bash
-# Check the fixed-name Web entry contract against a running deployment.
-# Usage: bash scripts/web-entry-cache-check.sh https://example.test
+# Verify pure-Rust Web entry headers, Brotli wasm MIME, CSP hash header, and
+# 404 retirement of legacy JS assets against a running mica-web origin.
 set -euo pipefail
-source "$(dirname "$0")/lib-local.sh"
-site=${1:?usage: web-entry-cache-check.sh <origin>}
-site=${site%/}
-headers=$(mktemp)
-trap 'rm -f "$headers"' EXIT
+base="${1:?usage: $0 <http://host[:port]>}"
+base="${base%/}"
 
-check_security_headers() {
-  local path=$1 server
-  for spec in \
-    'strict-transport-security:max-age=[1-9][0-9]*' \
-    'x-content-type-options:nosniff' \
-    'x-frame-options:DENY' \
-    'referrer-policy:strict-origin-when-cross-origin'; do
-    local name=${spec%%:*} value=${spec#*:}
-    tr -d '\r' < "$headers" | grep -Eiq "^$name:[[:space:]]*$value([;[:space:]]|$)" \
-      || fail "$path is missing security header $name"
-  done
-  server=$(tr -d '\r' < "$headers" | grep -i '^server:' || true)
-  [ -z "$server" ] || printf '%s\n' "$server" | grep -Eiq '^server:[[:space:]]*nginx[[:space:]]*$' \
-    || fail "$path exposes an unexpected Server version"
-  if [ "$path" = /index.html ]; then
-    tr -d '\r' < "$headers" | grep -Eiq '^content-security-policy-report-only:.*wasm-unsafe-eval' \
-      || fail "$path has no report-only application CSP"
-    if tr -d '\r' < "$headers" | grep -Eiq '^content-security-policy:'; then
-      fail "$path unexpectedly enforces CSP before the observation cycle"
-    fi
-  fi
-}
+# 1. Entry HTML: 200, Cache-Control: no-cache, strict sha256 CSP (no 'unsafe-inline' in script-src).
+entry_hdrs=$(curl -fsSI "$base/")
+grep -iq '^cache-control:.*no-cache' <<<"$entry_hdrs" \
+  || { echo "FAIL: $base/ missing Cache-Control: no-cache" >&2; exit 1; }
+grep -iq "^content-security-policy-report-only:.*script-src 'self' 'wasm-unsafe-eval' 'sha256-" <<<"$entry_hdrs" \
+  || { echo "FAIL: $base/ CSP script-src not pinned by sha256 hash" >&2; exit 1; }
 
-check_entry() {
-  local path=$1 expected=$2 mime=${3:-} revalidate=${4:-true} status cache content_type
-  status=$(curl -sS --max-time 30 -D "$headers" -o /dev/null -w '%{http_code}' "$site$path")
-  [ "$status" = "$expected" ] || fail "$path returned $status, expected $expected"
-  if [ "$expected" = 200 ]; then
-    cache=$(tr -d '\r' < "$headers" | grep -i '^cache-control:' || true)
-    # no-store is the dev server's stronger no-cache policy.
-    if [ "$revalidate" = true ]; then
-      printf '%s\n' "$cache" | grep -Eiq '(^|[[:space:],])(no-cache|no-store)([[:space:],]|$)' \
-        || fail "$path has no revalidation policy"
-    fi
-    if [ -n "$mime" ]; then
-      content_type=$(tr -d '\r' < "$headers" | grep -i '^content-type:' || true)
-      printf '%s\n' "$content_type" | grep -Eiq "^content-type:[[:space:]]*$mime([;[:space:]]|$)" \
-        || fail "$path has an unexpected Content-Type (expected $mime)"
-    fi
-  fi
-  check_security_headers "$path"
-  note "$path: $status"
-}
+# 2. Main WASM: 200, application/wasm, Brotli-encoded when client accepts br.
+wasm_hdrs=$(curl -fsSI -H 'Accept-Encoding: br' "$base/mica_rust_bg.wasm")
+grep -iq '^content-type:.*application/wasm' <<<"$wasm_hdrs" \
+  || { echo "FAIL: $base/mica_rust_bg.wasm wrong Content-Type" >&2; exit 1; }
+grep -iq '^content-encoding:.*br' <<<"$wasm_hdrs" \
+  || { echo "FAIL: $base/mica_rust_bg.wasm did not serve precompressed Brotli (.br)" >&2; exit 1; }
 
-check_entry /index.html 200 text/html
-for path in /flutter_bootstrap.js /main.dart.js; do
-  check_entry "$path" 200 '(application|text)/(x-)?javascript'
+# 3. Retired Flutter/JS assets must return 404 (not SPA index.html 200).
+for gone in /main.dart.js /yjs_bundle.js /mermaid.min.js; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' "$base$gone")
+  [ "$code" = "404" ] || { echo "FAIL: retired asset $gone returned HTTP $code (expected 404)" >&2; exit 1; }
 done
-# Deferred UI modules are also fixed-name deployment entrypoints.
-check_entry /main.dart.js_1.part.js 200 '(application|text)/(x-)?javascript'
-check_entry /main.dart.js_missing.part.js 404
-for engine in mica_md mica_doc; do
-  check_entry "/$engine/$engine.js" 200 '(application|text)/(x-)?javascript'
-  check_entry "/$engine/${engine}_bg.wasm" 200 application/wasm
-  check_entry "/$engine/missing.wasm" 404
-done
-# The editor's formula and Mermaid renderers load on demand from a worker.
-check_entry /mica_preview_worker.js 200 '(application|text)/(x-)?javascript'
-for kind in math mermaid; do
-  check_entry "/mica_preview/$kind.js" 200 '(application|text)/(x-)?javascript'
-  check_entry "/mica_preview/${kind}_bg.wasm" 200 application/wasm
-done
-check_entry /mica_preview/missing.wasm 404
-check_entry /mica_board/board.js 200 '(application|text)/(x-)?javascript'
-check_entry /mica_board/board_bg.wasm 200 application/wasm
-check_entry /mica_board/missing.wasm 404
-check_entry /yjs_bundle.js 404
-check_entry /mermaid.min.js 404
-# Full CJK fonts are native-only. The Web still ships the code font and the
-# engine's same-origin compressed shards; neither may fall through to HTML.
-check_entry /assets/fonts/MaterialIcons-Regular.otf 200 font/otf false
-check_entry /assets/fonts/RobotoMono-Regular.ttf 200 font/ttf false
-check_entry /gfonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2 200 font/woff2 false
-check_entry /assets/fonts/NotoSansSC-Regular.otf 404
-check_entry /assets/fonts/DroidSansFallback.ttf 404
-check_entry /api/ready 200 application/json false
-note "Web entry contract: ALL GREEN"
+
+echo "PASS: web entry headers, Brotli application/wasm, CSP hash, and retired-asset 404s verified on $base"

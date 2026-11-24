@@ -58,8 +58,7 @@ case "$(host_os)" in
       assert_version "$(dpkg-deb -f "$work/$deb" Version)"
       mkdir -p "$work/install" "$work/profile"
       dpkg-deb -x "$work/$deb" "$work/install"
-      app="$work/install/opt/mica/mica_flutter"
-      # Flutter includes the numeric build number set by client-package-inner.sh.
+      app="$work/install/usr/bin/mica"
       desktop_version=$(XDG_CONFIG_HOME="$work/profile" timeout 15 "$app" --version)
       desktop_suffix=${desktop_version#"Mica $version"}
       [[ "$desktop_version" != "$desktop_suffix" && ( -z "$desktop_suffix" || "$desktop_suffix" =~ ^\+[0-9]+$ ) ]] \

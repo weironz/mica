@@ -177,6 +177,8 @@ pub(crate) struct InsertPage<'a> {
   /// The page's opening content; its `root_block_id` becomes the document's.
   /// A blank page seeds with `mica_app_core::sync::empty_payload`.
   pub seed: mica_md::DocumentSnapshotPayload,
+  /// Origin of creation (`manual`, `import`, `transfer`) for usage statistics.
+  pub source: mica_core::ActivitySource,
 }
 
 /// Insert a whole new page in ONE transaction: the `documents` row, its yrs
@@ -195,6 +197,11 @@ pub(crate) async fn insert_page(
   user_id: Uuid,
   page: InsertPage<'_>,
 ) -> ApiResult<(DocumentRecord, View)> {
+  let initial_words = mica_core::word_count::count_blocks(&page.seed.blocks)
+    .words
+    .min(i32::MAX as u64) as i32;
+  let source = page.source;
+
   let mut tx = db.begin().await?;
   let document = sqlx::query_as::<_, DocumentRecord>(
     r#"
@@ -210,6 +217,18 @@ pub(crate) async fn insert_page(
   .await?;
 
   mica_app_core::sync::seed_base_tx(&mut tx, document.id, page.seed).await?;
+  mica_app_core::sync::record_writing_activity_tx(
+    &mut tx,
+    user_id,
+    workspace_id,
+    document.id,
+    source,
+    true,
+    0,
+    initial_words,
+    0,
+  )
+  .await?;
 
   let view = sqlx::query_as::<_, View>(concat!(
     r#"
@@ -234,6 +253,7 @@ pub(crate) async fn insert_page(
   .await?;
 
   tx.commit().await?;
+  crate::metrics::METRICS.record_page_created(source);
   Ok((document, view))
 }
 
