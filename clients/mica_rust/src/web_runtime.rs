@@ -105,6 +105,241 @@ pub fn xhr_request(
   }
 }
 
+/// Trigger a real browser file download (`Blob` + `<a download>` + `URL.revokeObjectURL`)
+/// on `wasm32`. Returns an error on native desktop (which uses OS Save-As dialogs).
+pub fn web_download_bytes(filename: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {
+  #[cfg(target_arch = "wasm32")]
+  {
+    use wasm_bindgen::JsCast;
+    use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
+
+    let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
+    let document = window.document().ok_or_else(|| "document unavailable".to_string())?;
+    let body = document.body().ok_or_else(|| "document.body unavailable".to_string())?;
+
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&array.buffer());
+    let opts = BlobPropertyBag::new();
+    opts.set_type(mime);
+    let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
+      .map_err(|e| format!("failed to create Blob: {e:?}"))?;
+    let url = Url::create_object_url_with_blob(&blob)
+      .map_err(|e| format!("failed to create object URL: {e:?}"))?;
+
+    let el = document
+      .create_element("a")
+      .map_err(|e| format!("failed to create anchor element: {e:?}"))?;
+    let anchor: HtmlAnchorElement = el
+      .dyn_into()
+      .map_err(|_| "created element was not HtmlAnchorElement".to_string())?;
+    anchor.set_href(&url);
+    anchor.set_download(filename);
+    let _ = anchor.set_attribute("style", "display:none");
+    let _ = body.append_child(&anchor);
+    anchor.click();
+    let _ = body.remove_child(&anchor);
+    let _ = Url::revoke_object_url(&url);
+    Ok(())
+  }
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    let _ = (filename, mime, bytes);
+    Err("browser file download is only available on wasm32".to_string())
+  }
+}
+
+/// Open a hidden `<input type="file">` picker in the browser and read all
+/// selected files into `(filename, bytes)` pairs via `FileReader`.
+/// Returns `Ok(Vec::new())` if the user cancels.
+#[cfg(target_arch = "wasm32")]
+pub async fn web_pick_files(accept: &str, multiple: bool) -> Result<Vec<(String, Vec<u8>)>, String> {
+  use std::cell::RefCell;
+  use std::future::Future;
+  use std::pin::Pin;
+  use std::rc::Rc;
+  use std::task::{Context, Poll, Waker};
+
+  use wasm_bindgen::JsCast;
+  use wasm_bindgen::closure::Closure;
+  use web_sys::{Event, File, FileReader, HtmlInputElement};
+
+  struct PickState {
+    result: Option<Result<Vec<(String, Vec<u8>)>, String>>,
+    waker: Option<Waker>,
+    input: Option<HtmlInputElement>,
+    _on_change: Option<Closure<dyn FnMut(Event)>>,
+    _on_cancel: Option<Closure<dyn FnMut(Event)>>,
+    _readers: Vec<(FileReader, Closure<dyn FnMut(Event)>, Closure<dyn FnMut(Event)>)>,
+  }
+
+  impl PickState {
+    fn finish(&mut self, res: Result<Vec<(String, Vec<u8>)>, String>) {
+      if self.result.is_some() {
+        return;
+      }
+      if let Some(input) = self.input.take() {
+        input.set_onchange(None);
+        input.set_oncancel(None);
+        input.remove();
+      }
+      self._on_change = None;
+      self._on_cancel = None;
+      self._readers.clear();
+      self.result = Some(res);
+      if let Some(w) = self.waker.take() {
+        w.wake();
+      }
+    }
+  }
+
+  struct PickFuture {
+    state: Rc<RefCell<PickState>>,
+  }
+
+  impl Future for PickFuture {
+    type Output = Result<Vec<(String, Vec<u8>)>, String>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+      let mut st = self.state.borrow_mut();
+      if let Some(res) = st.result.take() {
+        Poll::Ready(res)
+      } else {
+        st.waker = Some(cx.waker().clone());
+        Poll::Pending
+      }
+    }
+  }
+
+  let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
+  let document = window.document().ok_or_else(|| "document unavailable".to_string())?;
+  let body = document.body().ok_or_else(|| "document.body unavailable".to_string())?;
+
+  let el = document
+    .create_element("input")
+    .map_err(|e| format!("failed to create input element: {e:?}"))?;
+  let input: HtmlInputElement = el
+    .dyn_into()
+    .map_err(|_| "created element was not HtmlInputElement".to_string())?;
+  input.set_type("file");
+  if !accept.trim().is_empty() {
+    input.set_accept(accept);
+  }
+  input.set_multiple(multiple);
+  let _ = input.set_attribute("style", "display:none");
+  let _ = body.append_child(&input);
+
+  let state = Rc::new(RefCell::new(PickState {
+    result: None,
+    waker: None,
+    input: Some(input.clone()),
+    _on_change: None,
+    _on_cancel: None,
+    _readers: Vec::new(),
+  }));
+
+  let st_cancel = Rc::clone(&state);
+  let on_cancel = Closure::<dyn FnMut(Event)>::new(move |_ev: Event| {
+    st_cancel.borrow_mut().finish(Ok(Vec::new()));
+  });
+  input.set_oncancel(Some(on_cancel.as_ref().unchecked_ref()));
+
+  let st_change = Rc::clone(&state);
+  let input_ref = input.clone();
+  let on_change = Closure::<dyn FnMut(Event)>::new(move |_ev: Event| {
+    let Some(file_list) = input_ref.files() else {
+      st_change.borrow_mut().finish(Ok(Vec::new()));
+      return;
+    };
+    let count = file_list.length() as usize;
+    if count == 0 {
+      st_change.borrow_mut().finish(Ok(Vec::new()));
+      return;
+    }
+
+    let collected: Rc<RefCell<Vec<Option<(String, Vec<u8>)>>>> =
+      Rc::new(RefCell::new(vec![None; count]));
+    let remaining = Rc::new(RefCell::new(count));
+    let mut readers = Vec::with_capacity(count);
+
+    for idx in 0..count {
+      let Some(file): Option<File> = file_list.get(idx as u32) else {
+        let mut rem = remaining.borrow_mut();
+        *rem = rem.saturating_sub(1);
+        continue;
+      };
+      let name = file.name();
+      let Ok(reader) = FileReader::new() else {
+        st_change
+          .borrow_mut()
+          .finish(Err("failed to create FileReader".to_string()));
+        return;
+      };
+
+      let r_ok = reader.clone();
+      let col_ok = Rc::clone(&collected);
+      let rem_ok = Rc::clone(&remaining);
+      let st_ok = Rc::clone(&st_change);
+      let name_ok = name.clone();
+      let onload = Closure::<dyn FnMut(Event)>::new(move |_e: Event| {
+        match r_ok.result() {
+          Ok(buf) => {
+            let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+            col_ok.borrow_mut()[idx] = Some((name_ok.clone(), bytes));
+            let done = {
+              let mut rem = rem_ok.borrow_mut();
+              *rem = rem.saturating_sub(1);
+              *rem == 0
+            };
+            if done {
+              let out: Vec<(String, Vec<u8>)> = col_ok
+                .borrow_mut()
+                .drain(..)
+                .flatten()
+                .collect();
+              st_ok.borrow_mut().finish(Ok(out));
+            }
+          }
+          Err(err) => {
+            st_ok
+              .borrow_mut()
+              .finish(Err(format!("failed to read selected file {name_ok}: {err:?}")));
+          }
+        }
+      });
+
+      let st_err = Rc::clone(&st_change);
+      let name_err = name.clone();
+      let onerror = Closure::<dyn FnMut(Event)>::new(move |_e: Event| {
+        st_err
+          .borrow_mut()
+          .finish(Err(format!("failed to read selected file {name_err}")));
+      });
+
+      reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+      reader.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+      if let Err(err) = reader.read_as_array_buffer(&file) {
+        st_change
+          .borrow_mut()
+          .finish(Err(format!("read_as_array_buffer failed for {name}: {err:?}")));
+        return;
+      }
+      readers.push((reader, onload, onerror));
+    }
+
+    st_change.borrow_mut()._readers = readers;
+  });
+  input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
+
+  {
+    let mut st = state.borrow_mut();
+    st._on_change = Some(on_change);
+    st._on_cancel = Some(on_cancel);
+  }
+  input.click();
+
+  PickFuture { state }.await
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn extract_server_error_message(raw_body: &str) -> String {
   let trimmed = raw_body.trim();

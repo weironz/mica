@@ -24,11 +24,12 @@ use mica_board::{
   tech_icon_svg_inner,
 };
 use nsh_base::{button, input};
+#[cfg(not(target_arch = "wasm32"))]
+use nsh_core::file_dialog::{FileFilter, SaveDialog};
 use nsh_core::{
   canvas::{CanvasTextAlign, CanvasTextBaseline, LineCap, LineJoin},
   color::Rgba,
   element::{ImageSrc, KeyOptions, Svg, on_key_with, set_clipboard, svg},
-  file_dialog::{FileFilter, OpenDialog, SaveDialog},
   geometry::{point, px, radians, size},
   keymap::When,
   prelude::*,
@@ -562,21 +563,33 @@ impl BoardCtx {
   ) {
     let ctx = self.clone();
     spawn(async move {
-      let answer = pick_save_path(
-        SaveDialog::new().file_name(file_name).filter(FileFilter::new(filter_name, [ext])).title(dialog_title),
-      ).await;
-      match answer {
-        Ok(Some(path)) => {
-          #[cfg(not(target_arch = "wasm32"))]
-          match std::fs::write(&path, content.as_bytes()) {
-            Ok(()) => ctx.show_toast(format!("已导出 {label}：{}", path.display())),
-            Err(e) => { set_clipboard(content); ctx.show_toast(format!("写入失败 ({e})，已复制 {label} 到剪贴板")); }
+      #[cfg(target_arch = "wasm32")]
+      {
+        let _ = (filter_name, dialog_title);
+        let mime = crate::transfer::infer_mime_type(&file_name, &[ext]);
+        match crate::web_runtime::web_download_bytes(&file_name, mime, content.as_bytes()) {
+          Ok(()) => ctx.show_toast(format!("已下载 {label}：{file_name}")),
+          Err(_) => {
+            set_clipboard(content);
+            ctx.show_toast(format!("已复制 {label} 到剪贴板"));
           }
-          #[cfg(target_arch = "wasm32")]
-          { let _ = path; set_clipboard(content); ctx.show_toast(format!("已复制 {label} 到剪贴板")); }
         }
-        Ok(None) => {}
-        Err(_) => { set_clipboard(content); ctx.show_toast(format!("已复制 {label} 到剪贴板")); }
+      }
+      #[cfg(not(target_arch = "wasm32"))]
+      {
+        let answer = pick_save_path(
+          SaveDialog::new().file_name(file_name).filter(FileFilter::new(filter_name, [ext])).title(dialog_title),
+        ).await;
+        match answer {
+          Ok(Some(path)) => {
+            match std::fs::write(&path, content.as_bytes()) {
+              Ok(()) => ctx.show_toast(format!("已导出 {label}：{}", path.display())),
+              Err(e) => { set_clipboard(content); ctx.show_toast(format!("写入失败 ({e})，已复制 {label} 到剪贴板")); }
+            }
+          }
+          Ok(None) => {}
+          Err(_) => { set_clipboard(content); ctx.show_toast(format!("已复制 {label} 到剪贴板")); }
+        }
       }
     });
   }
@@ -620,37 +633,43 @@ impl BoardCtx {
     self.close_popups();
     let ctx = self.clone();
     spawn(async move {
-      let answer = pick_paths(
-        OpenDialog::files()
-          .filter(FileFilter::new("draw.io / Mica Board", ["drawio", "xml", "svg", "png", "json"]))
-          .title("导入 draw.io 或 Mica 画板"),
-      ).await;
-      let Ok(Some(paths)) = answer else { return; };
-      let Some(path) = paths.into_iter().next() else { return; };
-      #[cfg(not(target_arch = "wasm32"))]
+      let picked = match crate::transfer::pick_import_file_bytes(
+        "draw.io / Mica Board",
+        &["drawio", "xml", "svg", "png", "json"],
+        false,
+      )
+      .await
       {
-        let Ok(bytes) = std::fs::read(&path) else { ctx.show_toast("无法读取所选文件"); return; };
-        let is_json = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("json"));
-        let imported = if is_json {
-          String::from_utf8(bytes).ok().and_then(|s| BoardSnapshot::parse_json(&s).ok())
-            .ok_or_else(|| "JSON 格式无法识别为 Mica 画板".to_string())
-        } else if let Some(snap) = mica_board::extract_board_snapshot_from_svg(&bytes) {
-          Ok(snap)
-        } else {
-          mica_board::import_drawio_bytes(&bytes).map_err(|e| format!("导入 draw.io 失败：{e}"))
-        };
-        match imported {
-          Ok(snap) => {
-            let (n, e) = (snap.nodes.len(), snap.edges.len());
-            ctx.dispatch_and_handle(BoardCommand::ReplaceSnapshot { snapshot: snap, record_undo: true });
-            ctx.fit_to_content();
-            ctx.show_toast(format!("已导入画板（{n} 个图形，{e} 条连线）"));
-          }
-          Err(msg) => ctx.show_toast(msg),
+        Ok(files) => files,
+        Err(err) => {
+          ctx.show_toast(err);
+          return;
         }
+      };
+      let Some(file) = picked.into_iter().next() else { return; };
+      let is_json = file
+        .name
+        .rsplit('.')
+        .next()
+        .filter(|_| file.name.contains('.'))
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+      let imported = if is_json {
+        String::from_utf8(file.bytes).ok().and_then(|s| BoardSnapshot::parse_json(&s).ok())
+          .ok_or_else(|| "JSON 格式无法识别为 Mica 画板".to_string())
+      } else if let Some(snap) = mica_board::extract_board_snapshot_from_svg(&file.bytes) {
+        Ok(snap)
+      } else {
+        mica_board::import_drawio_bytes(&file.bytes).map_err(|e| format!("导入 draw.io 失败：{e}"))
+      };
+      match imported {
+        Ok(snap) => {
+          let (n, e) = (snap.nodes.len(), snap.edges.len());
+          ctx.dispatch_and_handle(BoardCommand::ReplaceSnapshot { snapshot: snap, record_undo: true });
+          ctx.fit_to_content();
+          ctx.show_toast(format!("已导入画板（{n} 个图形，{e} 条连线）"));
+        }
+        Err(msg) => ctx.show_toast(msg),
       }
-      #[cfg(target_arch = "wasm32")]
-      { let _ = path; ctx.show_toast("Web 端暂不支持本地文件路径读取"); }
     });
   }
 

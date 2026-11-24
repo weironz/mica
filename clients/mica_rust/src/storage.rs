@@ -75,6 +75,14 @@ struct PrefsState {
   persist_web: bool,
 }
 
+/// Remove any sensitive auth credential keys from a prefs map before writing to
+/// browser `window.localStorage` (Web uses server `HttpOnly` session cookies
+/// exclusively; tokens must never persist in `localStorage`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn strip_web_secret_prefs(entries: &mut BTreeMap<String, String>) -> bool {
+  entries.remove(PREF_SERVER_CREDENTIALS).is_some()
+}
+
 impl PrefsState {
   fn in_memory() -> Self {
     Self::default()
@@ -82,10 +90,15 @@ impl PrefsState {
 
   #[cfg(target_arch = "wasm32")]
   fn load_web() -> Self {
-    let entries = crate::web_runtime::local_storage_get(WEB_PREFS_STORAGE_KEY)
+    let mut entries = crate::web_runtime::local_storage_get(WEB_PREFS_STORAGE_KEY)
       .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
       .unwrap_or_default();
-    Self { entries, persist_web: true }
+    let had_secrets = strip_web_secret_prefs(&mut entries);
+    let state = Self { entries, persist_web: true };
+    if had_secrets {
+      let _ = state.flush();
+    }
+    state
   }
 
   #[cfg(not(target_arch = "wasm32"))]
@@ -126,7 +139,9 @@ impl PrefsState {
     }
     #[cfg(target_arch = "wasm32")]
     if self.persist_web {
-      let body = serde_json::to_string(&self.entries)
+      let mut safe = self.entries.clone();
+      strip_web_secret_prefs(&mut safe);
+      let body = serde_json::to_string(&safe)
         .map_err(|e| format!("failed to serialize web prefs: {e}"))?;
       crate::web_runtime::local_storage_set(WEB_PREFS_STORAGE_KEY, &body)?;
     }
@@ -2471,5 +2486,22 @@ mod tests {
     assert!(!seeded.contains_key("refreshToken"));
 
     let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn strip_web_secret_prefs_removes_credentials_while_keeping_ui_prefs() {
+    let mut entries = BTreeMap::new();
+    entries.insert("darkMode".to_string(), "true".to_string());
+    entries.insert(PREF_PAGE_WIDTH.to_string(), "880".to_string());
+    entries.insert(
+      PREF_SERVER_CREDENTIALS.to_string(),
+      r#"[{"origin":"https://mica.example.com","email":"a@b.c","token":"jwt","refresh_token":"rt"}]"#.to_string(),
+    );
+
+    assert!(strip_web_secret_prefs(&mut entries));
+    assert!(!entries.contains_key(PREF_SERVER_CREDENTIALS));
+    assert_eq!(entries.get("darkMode").map(String::as_str), Some("true"));
+    assert_eq!(entries.get(PREF_PAGE_WIDTH).map(String::as_str), Some("880"));
+    assert!(!strip_web_secret_prefs(&mut entries));
   }
 }

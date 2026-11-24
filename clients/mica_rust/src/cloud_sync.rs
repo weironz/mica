@@ -91,7 +91,10 @@ pub fn with_auto_refresh<T>(
 ) -> Result<(T, Option<(String, String)>), String> {
   match op(conn) {
     Ok(val) => Ok((val, None)),
-    Err(err) if CloudConnector::is_unauthorized_error(&err) && conn.refresh_token().is_some() => {
+    Err(err)
+      if CloudConnector::is_unauthorized_error(&err)
+        && (conn.refresh_token().is_some() || cfg!(target_arch = "wasm32")) =>
+    {
       conn.refresh_session()?;
       let rotated = (
         conn.access_token().unwrap_or_default().to_string(),
@@ -574,9 +577,13 @@ impl CloudSessionHandles {
     let refresh_tok = conn.refresh_token().unwrap_or_default().to_string();
     *self.cloud_connector.borrow_mut() = conn;
 
-    let _ = self
-      .vault
-      .save_server_credential_with_refresh(&origin, &email, &access_tok, &refresh_tok);
+    // Web (`!self.allow_local`) relies strictly on server `HttpOnly` cookies
+    // and never stores tokens in `window.localStorage`.
+    if self.allow_local {
+      let _ = self
+        .vault
+        .save_server_credential_with_refresh(&origin, &email, &access_tok, &refresh_tok);
+    }
     let _ = self.vault.set_active_origin(&origin);
 
     let mut servers = self.known_servers_sig.get_untracked();
@@ -899,6 +906,10 @@ impl CloudSessionHandles {
     self.world_busy.set(false);
 
     if !self.allow_local {
+      let logout_conn = self.cloud_connector.borrow().clone();
+      spawn(async move {
+        let _ = net::run_blocking(move || logout_conn.logout_server()).await;
+      });
       let web_origin = {
         let cur = self.selected_cloud_origin.get_untracked();
         if cur.is_empty() { self.server_url.get_untracked() } else { cur }
@@ -1119,22 +1130,184 @@ impl CloudSessionHandles {
     });
   }
 
+  /// Import a batch of parsed pages (and any nested folder paths) directly into
+  /// the active cloud workspace via the server API, then refresh the tree.
+  pub(crate) fn import_cloud_pages(
+    &self,
+    origin: String,
+    ws_id: Uuid,
+    base_parent: Option<Uuid>,
+    specs: Vec<crate::transfer::ImportedPageSpec>,
+  ) {
+    if specs.is_empty() || !is_cloud_origin(&origin) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
+      return;
+    }
+    let total = specs.len();
+    self.cloud_status.set(format!("正在导入 {total} 篇页面到云端…"));
+    let email = self.account_email.get_untracked();
+    let mut conn = self.cloud_connector.borrow().clone();
+    let h = self.clone();
+    spawn(async move {
+      let res = net::run_blocking(move || {
+        let mut folder_cache: HashMap<(Option<Uuid>, String), Uuid> = HashMap::new();
+        let mut created_views: Vec<View> = Vec::new();
+        let mut created_docs: Vec<(Uuid, String, String)> = Vec::new();
+        let mut rot: Option<(String, String)> = None;
+
+        for spec in specs {
+          let mut parent = base_parent;
+          for seg in spec.folder_path {
+            let seg_trim = seg.trim().to_string();
+            if seg_trim.is_empty() {
+              continue;
+            }
+            let key = (parent, seg_trim.clone());
+            let fid = if let Some(&existing) = folder_cache.get(&key) {
+              existing
+            } else {
+              let (mut fview, r) =
+                with_auto_refresh(&mut conn, |c| c.create_folder(ws_id, &seg_trim, parent))?;
+              if r.is_some() {
+                rot = r;
+              }
+              if fview.workspace_id.is_nil() {
+                fview.workspace_id = ws_id;
+              }
+              let fid = fview.id;
+              created_views.push(fview);
+              folder_cache.insert(key, fid);
+              fid
+            };
+            parent = Some(fid);
+          }
+
+          let (mut pview, r1) =
+            with_auto_refresh(&mut conn, |c| c.create_document(ws_id, &spec.title, parent))?;
+          if r1.is_some() {
+            rot = r1;
+          }
+          if pview.workspace_id.is_nil() {
+            pview.workspace_id = ws_id;
+          }
+          if !spec.markdown.trim().is_empty() {
+            let (_, r2) = with_auto_refresh(&mut conn, |c| {
+              c.save_document_markdown(ws_id, pview.object_id, &spec.markdown)
+            })?;
+            if r2.is_some() {
+              rot = r2;
+            }
+          }
+          created_docs.push((pview.object_id, pview.name.clone(), spec.markdown));
+          created_views.push(pview);
+        }
+        Ok::<_, String>((conn, created_views, created_docs, rot))
+      })
+      .await;
+      if h.active_origin.get_untracked() != origin
+        || h.active_workspace_id.get_untracked() != ws_id
+      {
+        return;
+      }
+      match res {
+        Ok((conn, created_views, created_docs, rot)) => {
+          *h.cloud_connector.borrow_mut() = conn;
+          if h.allow_local {
+            persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+          }
+          let count = created_docs.len();
+          {
+            let mut t = h.tree.borrow_mut();
+            for v in created_views {
+              let is_folder = v.object_type == "folder";
+              let vid = v.id;
+              let pid = v.parent_view_id;
+              let _ = h.vault.save_view(&origin, &v);
+              t.upsert_view(v);
+              if is_folder {
+                t.set_expanded(vid, true);
+              }
+              if let Some(p) = pid {
+                t.set_expanded(p, true);
+              }
+            }
+          }
+          let mut last_doc = None;
+          {
+            let mut ds = h.docs_store.borrow_mut();
+            for (did, title, md) in created_docs {
+              ds.insert(did, md);
+              last_doc = Some((did, title));
+            }
+          }
+          (h.sync_tree_snapshots)();
+          if let Some((did, title)) = last_doc {
+            (h.open_doc_internal)(did, title, true, false);
+          }
+          h.cloud_status.set(format!("已导入 {count} 篇页面到云端"));
+          h.bridge.set_status_flash(format!("已导入 {count} 篇页面"));
+        }
+        Err(err) => {
+          h.cloud_status.set(format!("云端导入失败：{err}"));
+          h.bridge.set_status_flash(format!("导入失败：{err}"));
+        }
+      }
+    });
+  }
+
+  /// Restore a Web (`wasm32`) cloud session silently via the server's `HttpOnly`
+  /// `mica_refresh` cookie (`POST /api/auth/refresh` with `{}`).
+  fn restore_web_cookie_session(&self, raw_origin: String) {
+    let origin = canonicalize_cloud_url(&raw_origin);
+    if !is_cloud_origin(&origin) {
+      self.world_can_close.set(false);
+      self.world_switcher_open.set(true);
+      return;
+    }
+    let auth_epoch = self.auth_gen.get_untracked().wrapping_add(1);
+    let load_epoch = self.cloud_load_gen.get_untracked().wrapping_add(1);
+    self.auth_gen.set(auth_epoch);
+    self.cloud_load_gen.set(load_epoch);
+    self.world_busy.set(true);
+    self.world_error.set(String::new());
+    self.cloud_status.set("正在恢复云端会话…".to_string());
+
+    let h = self.clone();
+    let origin_req = origin.clone();
+    spawn(async move {
+      let outcome = net::run_blocking(move || {
+        let mut conn = CloudConnector::new(CloudConfig {
+          server_url: origin_req,
+          access_token: None,
+          email: None,
+        });
+        let email = conn.refresh_session_cookie()?;
+        let boot = fetch_cloud_bootstrap(&mut conn, None)?;
+        Ok::<_, String>((conn, email, boot))
+      })
+      .await;
+      if h.auth_gen.get_untracked() != auth_epoch {
+        return;
+      }
+      match outcome {
+        Ok((conn, email, boot)) => h.apply_bootstrap(origin, email, conn, boot),
+        Err(_) => {
+          h.is_cloud_signed_in.set(false);
+          h.cloud_status.set("请登录云端账户".to_string());
+          h.world_error.set(String::new());
+          h.world_can_close.set(false);
+          h.world_switcher_open.set(true);
+        }
+      }
+      h.world_busy.set(false);
+    });
+  }
+
   /// Automatically restore a valid cloud session on startup (and keep the
   /// full-screen Cloud Sign-In gate open on Web when unauthenticated).
   pub(crate) fn restore_startup_session(&self) {
     if !self.allow_local {
       let web_origin = self.selected_cloud_origin.get_untracked();
-      if is_cloud_origin(&web_origin)
-        && self
-          .vault
-          .saved_server_credential_full(&web_origin)
-          .is_some_and(|(_, tok, rt)| !tok.trim().is_empty() || !rt.trim().is_empty())
-      {
-        self.enter_origin(web_origin, true);
-      } else {
-        self.world_can_close.set(false);
-        self.world_switcher_open.set(true);
-      }
+      self.restore_web_cookie_session(web_origin);
       return;
     }
 

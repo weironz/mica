@@ -638,9 +638,39 @@ fn read_relative_board_svg_from_disk(base_dir: &Path, raw_dest: &str) -> Option<
 
 // ── Native OS File Dialog Wrappers (nsh-core 0.6.1) ─────────────────────────
 
-/// Show a native OS Save-As dialog and write `bytes` to the chosen destination.
+/// One user-selected file ready for cross-platform import (loaded directly from
+/// disk on Desktop or via browser `FileReader` on Web).
+#[derive(Debug, Clone)]
+pub struct PickedImportFile {
+  pub name: String,
+  pub bytes: Vec<u8>,
+}
+
+/// Infer a canonical browser download MIME type from a filename or extension list.
+pub fn infer_mime_type(filename: &str, exts: &[&str]) -> &'static str {
+  let ext = filename
+    .rsplit('.')
+    .next()
+    .filter(|_| filename.contains('.'))
+    .or_else(|| exts.first().copied())
+    .unwrap_or("")
+    .to_ascii_lowercase();
+  match ext.as_str() {
+    "zip" => "application/zip",
+    "md" | "markdown" => "text/markdown;charset=utf-8",
+    "html" | "htm" => "text/html;charset=utf-8",
+    "svg" => "image/svg+xml;charset=utf-8",
+    "json" => "application/json;charset=utf-8",
+    "txt" => "text/plain;charset=utf-8",
+    "png" => "image/png",
+    _ => "application/octet-stream",
+  }
+}
+
+/// Show a native OS Save-As dialog (desktop) or trigger a real browser Blob
+/// download (`<a download>`, Web) for `bytes`.
 ///
-/// - Returns `Ok(Some(path))` when written.
+/// - Returns `Ok(Some(path))` when written/downloaded.
 /// - Returns `Ok(None)` when the user cancels the dialog.
 /// - On headless / unsupported desktop environments where the OS dialog is
 ///   unavailable, gracefully falls back to writing into `default_export_dir()`.
@@ -686,9 +716,102 @@ pub async fn save_bytes_with_dialog(
   }
   #[cfg(target_arch = "wasm32")]
   {
-    let _ = (suggested_name, filter_name, exts, bytes);
-    Err("Web 端暂不支持原生保存对话框".to_string())
+    let _ = filter_name;
+    let mime = infer_mime_type(suggested_name, exts);
+    crate::web_runtime::web_download_bytes(suggested_name, mime, bytes)?;
+    Ok(Some(PathBuf::from(suggested_name)))
   }
+}
+
+/// Cross-platform file picker returning `(filename, bytes)` directly so both
+/// Desktop OS dialogs and Web `<input type="file">` share identical import code.
+pub async fn pick_import_file_bytes(
+  filter_name: &str,
+  exts: &[&str],
+  multiple: bool,
+) -> Result<Vec<PickedImportFile>, String> {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    let paths = pick_import_files(filter_name, exts, multiple).await?;
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+      let bytes = std::fs::read(&path)
+        .map_err(|e| format!("读取文件失败 {}：{e}", path.display()))?;
+      let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("import.md")
+        .to_string();
+      out.push(PickedImportFile { name, bytes });
+    }
+    Ok(out)
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    let _ = filter_name;
+    let accept = exts
+      .iter()
+      .map(|e| format!(".{}", e.trim_start_matches('.')))
+      .collect::<Vec<_>>()
+      .join(",");
+    let picked = crate::web_runtime::web_pick_files(&accept, multiple).await?;
+    Ok(
+      picked
+        .into_iter()
+        .map(|(name, bytes)| PickedImportFile { name, bytes })
+        .collect(),
+    )
+  }
+}
+
+/// Parse one picked file (`.zip`, `.md`/`.markdown`/`.txt`, or self-contained
+/// Mica board `.svg`) into one or more [`ImportedPageSpec`] entries.
+pub fn parse_picked_file_bytes(
+  filename: &str,
+  bytes: &[u8],
+  notion_mode: bool,
+) -> Result<Vec<ImportedPageSpec>, String> {
+  let ext = filename
+    .rsplit('.')
+    .next()
+    .filter(|_| filename.contains('.'))
+    .unwrap_or("")
+    .to_ascii_lowercase();
+  if ext == "zip" {
+    return parse_zip_archive_to_pages(bytes, notion_mode);
+  }
+  let stem = filename
+    .rsplit(['/', '\\'])
+    .next()
+    .unwrap_or(filename)
+    .rsplit_once('.')
+    .map(|(s, _)| s)
+    .unwrap_or(filename)
+    .trim();
+  let title = if stem.is_empty() { "导入文档".to_string() } else { stem.to_string() };
+
+  if ext == "svg" {
+    if let Some(snap) = mica_board::extract_board_snapshot_from_svg(bytes)
+      && let Ok(compact) = serde_json::to_string(&snap)
+    {
+      let md = format!("```mica-board\n{compact}\n```\n");
+      return Ok(vec![ImportedPageSpec {
+        title: if snap.title.trim().is_empty() { title } else { snap.title },
+        markdown: md,
+        folder_path: Vec::new(),
+      }]);
+    }
+    return Err("该 SVG 不包含可编辑的 Mica 画板元数据".to_string());
+  }
+
+  let raw = String::from_utf8(bytes.to_vec())
+    .map_err(|e| format!("文件不是有效的 UTF-8 编码 {filename}：{e}"))?;
+  let stripped = raw.strip_prefix('\u{feff}').unwrap_or(&raw).to_string();
+  Ok(vec![ImportedPageSpec {
+    title,
+    markdown: stripped,
+    folder_path: Vec::new(),
+  }])
 }
 
 /// Show a native OS file picker for importing `.md` / `.zip` files.
@@ -796,8 +919,9 @@ pub fn export_markdown_file(title: &str, markdown: &str) -> Result<String, Strin
   }
   #[cfg(target_arch = "wasm32")]
   {
-    let stem = sanitize_filename(title, DEFAULT_DOC_FALLBACK);
-    Ok(format!("{stem}.md（{} 字节，Web 端预览导出）", markdown.len()))
+    let filename = format!("{}.md", sanitize_filename(title, DEFAULT_DOC_FALLBACK));
+    crate::web_runtime::web_download_bytes(&filename, "text/markdown;charset=utf-8", markdown.as_bytes())?;
+    Ok(format!("已下载 {filename}（{} 字节）", markdown.len()))
   }
 }
 
@@ -816,9 +940,10 @@ pub fn export_html_file(title: &str, html_body: &str) -> Result<String, String> 
   }
   #[cfg(target_arch = "wasm32")]
   {
-    let stem = sanitize_filename(title, DEFAULT_DOC_FALLBACK);
+    let filename = format!("{}.html", sanitize_filename(title, DEFAULT_DOC_FALLBACK));
     let doc = wrap_standalone_html(title, html_body);
-    Ok(format!("{stem}.html（{} 字节，Web 端预览导出）", doc.len()))
+    crate::web_runtime::web_download_bytes(&filename, "text/html;charset=utf-8", doc.as_bytes())?;
+    Ok(format!("已下载 {filename}（{} 字节）", doc.len()))
   }
 }
 
@@ -840,10 +965,11 @@ pub fn export_workspace_bundle(
   }
   #[cfg(target_arch = "wasm32")]
   {
-    let stem = sanitize_filename(workspace_name, DEFAULT_WORKSPACE_FALLBACK);
+    let filename = format!("{}.mica.json", sanitize_filename(workspace_name, DEFAULT_WORKSPACE_FALLBACK));
     let json = serialize_workspace_bundle(workspace_name, pages)?;
+    crate::web_runtime::web_download_bytes(&filename, "application/json;charset=utf-8", json.as_bytes())?;
     Ok(format!(
-      "{stem}.mica.json（{} 篇页面，{} 字节，Web 端预览导出）",
+      "已下载 {filename}（{} 篇页面，{} 字节）",
       pages.len(),
       json.len()
     ))
@@ -1244,5 +1370,24 @@ mod tests {
     assert_eq!(extract_first_board(&single_body), snap);
 
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn infer_mime_type_and_parse_picked_file_bytes_handle_md_and_board_svg() {
+    assert_eq!(infer_mime_type("notes.zip", &[]), "application/zip");
+    assert_eq!(infer_mime_type("doc.md", &[]), "text/markdown;charset=utf-8");
+    assert_eq!(infer_mime_type("diagram.svg", &[]), "image/svg+xml;charset=utf-8");
+    assert_eq!(infer_mime_type("board.mica-board.json", &[]), "application/json;charset=utf-8");
+
+    let md_specs = parse_picked_file_bytes("hello.md", "\u{feff}# Hi\n\nBody".as_bytes(), false).unwrap();
+    assert_eq!(md_specs.len(), 1);
+    assert_eq!(md_specs[0].title, "hello");
+    assert_eq!(md_specs[0].markdown, "# Hi\n\nBody");
+
+    let snap = mica_board::BoardSnapshot::parse_json(&mica_board::starter_board_json("flowchart")).unwrap();
+    let svg = mica_board::render_board_svg_with_source(&snap, None);
+    let svg_specs = parse_picked_file_bytes("arch.svg", svg.as_bytes(), false).unwrap();
+    assert_eq!(svg_specs.len(), 1);
+    assert!(svg_specs[0].markdown.contains("```mica-board"));
   }
 }

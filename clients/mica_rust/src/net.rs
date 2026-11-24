@@ -311,12 +311,12 @@ impl CloudConnector {
   /// Rotate an expired JWT access token via `POST /api/auth/refresh`.
   pub fn refresh_session(&mut self) -> Result<(), String> {
     self.require_server()?;
-    let refresh_tok = self
-      .refresh_token()
-      .map(str::to_string)
-      .ok_or_else(|| "refresh token is unavailable".to_string())?;
+    let payload = match self.refresh_token() {
+      Some(refresh_tok) => json!({ "refresh_token": refresh_tok }),
+      None if cfg!(target_arch = "wasm32") => json!({}),
+      None => return Err("refresh token is unavailable".to_string()),
+    };
 
-    let payload = json!({ "refresh_token": refresh_tok });
     let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
       .map_err(|e| format!("token refresh failed: {e}"))?;
     let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
@@ -328,6 +328,39 @@ impl CloudConnector {
     self.claims.switch_account(WorldOrigin::Cloud {
       server_url: self.endpoints.base_url().to_string(),
     });
+    Ok(())
+  }
+
+  /// Restore or rotate a browser cloud session using the server's `HttpOnly`
+  /// `mica_refresh` cookie (`POST /api/auth/refresh` with `{}` body), returning
+  /// the authenticated user's email without touching `localStorage`.
+  pub fn refresh_session_cookie(&mut self) -> Result<String, String> {
+    self.require_server()?;
+    let payload = json!({});
+    let body = send_http("POST", &self.endpoints.refresh(), None, Some(&payload), LOGIN_TIMEOUT_SECS)
+      .map_err(|e| format!("cookie session refresh failed: {e}"))?;
+    let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
+    let email = auth.user.email.clone();
+    self.config.access_token = Some(auth.access_token);
+    self.refresh_token = None;
+    self.config.email = Some(email.clone());
+    self.claims.switch_account(WorldOrigin::Cloud {
+      server_url: self.endpoints.base_url().to_string(),
+    });
+    Ok(email)
+  }
+
+  /// End the current cloud session server-side (`POST /api/auth/logout`),
+  /// revoking the refresh token family and clearing `HttpOnly` auth cookies.
+  pub fn logout_server(&self) -> Result<(), String> {
+    self.require_server()?;
+    let url = format!("{}/api/auth/logout", self.endpoints.base_url());
+    let payload = match self.refresh_token() {
+      Some(rt) => json!({ "refresh_token": rt }),
+      None => json!({}),
+    };
+    let _ = send_http("POST", &url, None, Some(&payload), LOGIN_TIMEOUT_SECS)
+      .map_err(|e| format!("logout failed: {e}"))?;
     Ok(())
   }
 
@@ -1717,6 +1750,24 @@ mod tests {
 
     let graph = mock_conn("200 OK", r#"{"nodes":[{"view_id":"v1","name":"Home","degree":2}],"edges":[{"source":"v1","target":"v2"}],"unlinked":3}"#, true).0.fetch_graph(ws).unwrap();
     assert_eq!((graph.nodes.len(), graph.edges.len(), graph.unlinked), (1, 1, 3));
+
+    // 7. Cookie-based refresh (`POST /api/auth/refresh` with `{}`) & server logout (`POST /api/auth/logout`)
+    let (mut rc, _, rh) = mock_conn(
+      "200 OK",
+      r#"{"access_token":"jwt-rotated","token_type":"Bearer","expires_at":"2026-12-31T00:00:00Z","refresh_token":"rt-rotated","user":{"id":"00000000-0000-0000-0000-000000000001","email":"cookie@mica.dev","display_name":"Cookie","created_at":"2026-01-01T00:00:00Z"}}"#,
+      false,
+    );
+    let refreshed_email = rc.refresh_session_cookie().unwrap();
+    assert_eq!(refreshed_email, "cookie@mica.dev");
+    assert_eq!(rc.access_token(), Some("jwt-rotated"));
+    assert!(rc.refresh_token().is_none(), "cookie mode must not retain refresh token in client state");
+    let raw_req = rh.join().unwrap();
+    assert!(raw_req.starts_with("POST /api/auth/refresh "));
+    assert!(raw_req.ends_with("{}"));
+
+    let (lc_out, _, lh_out) = mock_conn("204 No Content", "", false);
+    lc_out.logout_server().unwrap();
+    assert!(lh_out.join().unwrap().starts_with("POST /api/auth/logout "));
   }
 
   #[cfg(not(target_arch = "wasm32"))]

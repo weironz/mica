@@ -2109,13 +2109,9 @@ fn data_tab(
 fn spawn_zip_import_preview(notion_mode: bool, preview: Signal<String>) {
   spawn(async move {
     let label = if notion_mode { "Notion ZIP" } else { "Mica / Markdown ZIP" };
-    match transfer::pick_import_files(label, &["zip"], false).await {
-      Ok(paths) if !paths.is_empty() => {
-        #[cfg(not(target_arch = "wasm32"))]
-        match std::fs::read(&paths[0])
-          .map_err(|e| format!("读取失败：{e}"))
-          .and_then(|b| transfer::parse_zip_archive_to_pages(&b, notion_mode))
-        {
+    match transfer::pick_import_file_bytes(label, &["zip"], false).await {
+      Ok(files) if !files.is_empty() => {
+        match transfer::parse_zip_archive_to_pages(&files[0].bytes, notion_mode) {
           Ok(pages) => preview.set(format!("已解析归档：共 {} 篇页面", pages.len())),
           Err(e) => preview.set(e),
         }

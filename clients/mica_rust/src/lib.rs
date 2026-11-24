@@ -1373,12 +1373,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let v = vault.clone();
     let inner = open_doc_internal.clone();
     let sync_t = sync_tree_snapshots.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |base_parent: Option<Uuid>, specs: Vec<ImportedPageSpec>| {
       if specs.is_empty() {
         return 0;
       }
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
+      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
+        let count = specs.len();
+        cs.import_cloud_pages(orig, cur_ws, base_parent, specs);
+        return count;
+      }
       let mut folder_cache: HashMap<(Option<Uuid>, String), Uuid> = HashMap::new();
       let mut last_opened: Option<(Uuid, String)> = None;
       let mut imported = 0usize;
@@ -2011,23 +2017,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let br_c = br.clone();
       app_owner.run(move || {
         spawn(async move {
-          match transfer::pick_import_files("ZIP Archive", &["zip"], false).await {
-            Ok(paths) if !paths.is_empty() => {
-              match std::fs::read(&paths[0]) {
-                Ok(bytes) => match transfer::parse_zip_archive_to_pages(&bytes, notion) {
-                  Ok(specs) => {
-                    let n = imp_c(parent, specs);
-                    export_preview.set(format!("已从 ZIP 导入 {n} 篇页面"));
-                    br_c.set_status_flash(format!("已导入 {n} 篇页面"));
-                  }
-                  Err(e) => {
-                    export_preview.set(format!("解析 ZIP 失败：{e}"));
-                    br_c.set_status_flash(format!("导入失败：{e}"));
-                  }
-                },
+          match transfer::pick_import_file_bytes("ZIP Archive", &["zip"], false).await {
+            Ok(files) if !files.is_empty() => {
+              match transfer::parse_zip_archive_to_pages(&files[0].bytes, notion) {
+                Ok(specs) => {
+                  let n = imp_c(parent, specs);
+                  export_preview.set(format!("已从 ZIP 导入 {n} 篇页面"));
+                  br_c.set_status_flash(format!("已导入 {n} 篇页面"));
+                }
                 Err(e) => {
-                  export_preview.set(format!("读取 ZIP 失败：{e}"));
-                  br_c.set_status_flash(format!("读取失败：{e}"));
+                  export_preview.set(format!("解析 ZIP 失败：{e}"));
+                  br_c.set_status_flash(format!("导入失败：{e}"));
                 }
               }
             }
@@ -2050,19 +2050,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let br_c = br.clone();
       app_owner.run(move || {
         spawn(async move {
-          match transfer::pick_import_files("Markdown / ZIP", &["md", "markdown", "txt", "zip"], true).await {
-            Ok(paths) if !paths.is_empty() => {
+          match transfer::pick_import_file_bytes("Markdown / ZIP / SVG", &["md", "markdown", "txt", "zip", "svg"], true).await {
+            Ok(files) if !files.is_empty() => {
               let mut all_specs = Vec::new();
-              for p in paths {
-                let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
-                if ext == "zip" {
-                  if let Ok(bytes) = std::fs::read(&p)
-                    && let Ok(specs) = transfer::parse_zip_archive_to_pages(&bytes, false)
-                  {
-                    all_specs.extend(specs);
-                  }
-                } else if let Ok((title, md)) = transfer::import_markdown_from_path(&p.to_string_lossy()) {
-                  all_specs.push(ImportedPageSpec { title, markdown: md, folder_path: Vec::new() });
+              for f in files {
+                if let Ok(specs) = transfer::parse_picked_file_bytes(&f.name, &f.bytes, false) {
+                  all_specs.extend(specs);
                 }
               }
               let n = imp_c(parent, all_specs);
