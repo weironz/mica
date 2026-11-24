@@ -41,12 +41,36 @@ uuid = { version = "1.11", features = ["serde", "v4"] }
 mica-core = { path = "../../crates/mica-core", features = ["store"] }
 mica-sync = { path = "../../crates/mica-sync", features = ["sqlite"] }
 dirs-next = "2"
+tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 nsh-platform-web = { version = "0.6.1", default-features = false }
 uuid = { version = "1.11", features = ["serde", "v4", "js"] }
-web-sys = { version = "0.3", features = ["Window", "Location", "Storage", "XmlHttpRequest"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+  "Blob",
+  "BlobPropertyBag",
+  "CloseEvent",
+  "Document",
+  "Element",
+  "ErrorEvent",
+  "Event",
+  "File",
+  "FileList",
+  "FileReader",
+  "HtmlAnchorElement",
+  "HtmlElement",
+  "HtmlInputElement",
+  "Location",
+  "MessageEvent",
+  "Storage",
+  "Url",
+  "WebSocket",
+  "Window",
+  "XmlHttpRequest",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = "0.6.1"

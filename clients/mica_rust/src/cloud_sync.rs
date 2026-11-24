@@ -13,6 +13,7 @@ use mica_client::PageTreeModel;
 use nsh_core::prelude::*;
 use uuid::Uuid;
 
+use crate::doc_sync_session::{DocSyncController, ViewsWsWatcher};
 use crate::editor_bridge::MicaDocumentBridge;
 use crate::net::{self, CloudConfig, CloudConnector};
 use crate::storage::{DEFAULT_ORIGIN, VaultStore};
@@ -281,6 +282,8 @@ pub(crate) struct CloudSessionHandles {
   pub cloud_load_gen: Signal<u64>,
   pub doc_fetch_gen: Signal<u64>,
   pub doc_save_gen: Signal<u64>,
+  pub doc_sync: DocSyncController,
+  pub views_watcher: ViewsWsWatcher,
   pub refresh_snapshots: Rc<dyn Fn(Uuid)>,
   pub refresh_favorite_pages: Rc<dyn Fn()>,
   pub sync_tree_snapshots: Rc<dyn Fn()>,
@@ -330,9 +333,14 @@ impl CloudSessionHandles {
     mirror_to_vault: bool,
   ) {
     self.bridge.flush_pending_persist();
+    let is_cloud = is_cloud_origin(&origin);
     if mirror_to_vault {
       let _ = self.vault.replace_workspace_views(&origin, ws_id, &views);
-      if let Some((did, ref md)) = initial_doc {
+      // For cloud origins, `SqliteSyncStorage` owns the authoritative Yrs CRDT
+      // `doc_snapshot`; never overwrite it with a synthetic Markdown parse.
+      if !is_cloud
+        && let Some((did, ref md)) = initial_doc
+      {
         let _ = self.vault.save_markdown(&origin, did, md);
       }
     }
@@ -381,7 +389,7 @@ impl CloudSessionHandles {
     *self.favorites.borrow_mut() = self.vault.favorites_for(ws_id);
 
     self.active_workspace_id.set(ws_id);
-    self.active_origin.set(origin);
+    self.active_origin.set(origin.clone());
     self.workspace_name.set(ws_name);
     self.active_folder_id.set(fid);
     self.active_folder_name.set(fname);
@@ -400,7 +408,18 @@ impl CloudSessionHandles {
       self.bridge.load_markdown(&active_md);
       self.open_tabs.set(vec![OpenTab::single(doc_id, title)]);
       self.active_tab_idx.set(0);
+      if is_cloud && self.is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
+        self.doc_sync.open_cloud_doc(
+          origin.clone(),
+          ws_id,
+          doc_id,
+          self.account_name.get_untracked(),
+        );
+      } else {
+        self.doc_sync.close();
+      }
     } else {
+      self.doc_sync.close();
       self.active_doc.set(None);
       self.active_doc_id_str.set(String::new());
       self.active_title.set("暂无页面".to_string());
@@ -410,9 +429,82 @@ impl CloudSessionHandles {
       self.active_tab_idx.set(0);
     }
 
+    if is_cloud && self.is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
+      self.views_watcher.watch(origin, ws_id);
+    } else {
+      self.views_watcher.stop();
+    }
+
     (self.refresh_favorite_pages)();
     self.active_mode.set(MODE_DOC);
     (self.sync_tree_snapshots)();
+  }
+
+  /// Lightweight sidebar-only tree refresh triggered by `/ws/workspaces/{ws}/views`
+  /// (`{"type":"views_changed"}`) — updates folders, pages, titles, and trash
+  /// without disturbing the active editor CRDT document.
+  pub(crate) fn refresh_views_only(&self, origin: String, ws_id: Uuid) {
+    if !is_cloud_origin(&origin) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
+      return;
+    }
+    let email = self.account_email.get_untracked();
+    let mut conn = self.cloud_connector.borrow().clone();
+    let h = self.clone();
+    spawn(async move {
+      let res = net::run_blocking(move || {
+        let ((live, trash), rot) = with_auto_refresh(&mut conn, |c| {
+          let live = c.list_views(ws_id)?;
+          let trash = c.list_trash(ws_id).unwrap_or_default();
+          Ok((live, trash))
+        })?;
+        Ok::<_, String>((conn, merge_live_and_trash(live, trash, ws_id), rot))
+      })
+      .await;
+      if h.active_origin.get_untracked() != origin
+        || h.active_workspace_id.get_untracked() != ws_id
+        || !h.is_cloud_signed_in.get_untracked()
+      {
+        return;
+      }
+      if let Ok((conn, merged, rot)) = res {
+        if rot.is_some() {
+          *h.cloud_connector.borrow_mut() = conn;
+          persist_refreshed_tokens(&h.vault, &origin, &email, rot);
+        }
+        let _ = h.vault.replace_workspace_views(&origin, ws_id, &merged);
+        let page_cnt = merged
+          .iter()
+          .filter(|v| is_page_view(v) && !v.is_deleted)
+          .count();
+        let mut all = h.workspaces.get_untracked();
+        for w in &mut all {
+          if w.id == ws_id {
+            w.page_count = Some(page_cnt);
+          }
+        }
+        h.workspaces.set(all);
+
+        h.tree.borrow_mut().replace_views(merged.clone());
+
+        if let Some(cur_doc) = h.active_doc.get_untracked()
+          && let Some(row) = merged
+            .iter()
+            .find(|v| is_page_view(v) && !v.is_deleted && v.object_id == cur_doc)
+          && h.active_title.get_untracked() != row.name
+        {
+          h.active_title.set(row.name.clone());
+          let mut tabs = h.open_tabs.get_untracked();
+          for tab in &mut tabs {
+            if tab.doc_id == cur_doc {
+              tab.title = row.name.clone();
+            }
+          }
+          h.open_tabs.set(tabs);
+        }
+        (h.refresh_favorite_pages)();
+        (h.sync_tree_snapshots)();
+      }
+    });
   }
 
   /// Refresh a single cloud workspace's tree and opening document asynchronously.
@@ -792,6 +884,8 @@ impl CloudSessionHandles {
   /// Leave the cloud world: restore local SQLite workspaces on Desktop, or
   /// clear cloud session & return to the full-screen Cloud Sign-In gate on Web.
   pub(crate) fn logout_to_local(&self) {
+    self.doc_sync.close();
+    self.views_watcher.stop();
     self.auth_gen.set(self.auth_gen.get_untracked().wrapping_add(1));
     self
       .cloud_load_gen
@@ -927,7 +1021,6 @@ impl CloudSessionHandles {
           let doc_id = view.object_id;
           let title = view.name.clone();
           let _ = h.vault.save_view(&origin, &view);
-          let _ = h.vault.save_markdown(&origin, doc_id, &markdown);
           {
             let mut t = h.tree.borrow_mut();
             t.upsert_view(view);

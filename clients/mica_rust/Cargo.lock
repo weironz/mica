@@ -3352,6 +3352,7 @@ version = "0.14.11"
 dependencies = [
  "chrono",
  "dirs-next",
+ "js-sys",
  "mica-api-types",
  "mica-board",
  "mica-client",
@@ -3370,8 +3371,10 @@ dependencies = [
  "nsh-testing",
  "serde",
  "serde_json",
+ "tungstenite",
  "ureq",
  "uuid",
+ "wasm-bindgen",
  "web-sys",
 ]
 
@@ -6586,6 +6589,7 @@ dependencies = [
  "sha1 0.10.7",
  "thiserror 2.0.21",
  "utf-8",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

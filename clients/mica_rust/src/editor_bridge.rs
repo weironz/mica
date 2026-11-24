@@ -51,6 +51,7 @@ pub struct OutlineItem {
 }
 
 type PersistCallback = Rc<dyn Fn(String, Option<Vec<u8>>)>;
+type CrdtDiffCallback = Rc<dyn Fn(Vec<u8>)>;
 
 /// Reactive bridge connecting `mica_editor::EditorSession` to `virtual_list`
 /// and all outer Mica chrome (header, outline, find bar, slash menu, version history).
@@ -68,6 +69,9 @@ pub struct MicaDocumentBridge {
   /// Lightweight dirty notification for debounced persistence (avoids synchronous
   /// full-document Markdown export & SQLite disk writes on every keystroke).
   on_dirty: RefCell<Option<Rc<dyn Fn()>>>,
+  /// Incremental yrs CRDT diff callback invoked on every local content edit
+  /// (drives real-time `/ws/` cloud sync without full-document `replace_all`).
+  on_crdt_diff: RefCell<Option<CrdtDiffCallback>>,
   pending_persist: std::cell::Cell<bool>,
 
   // ── Reactive UI Signals ──────────────────────────────────────────────────
@@ -135,6 +139,7 @@ impl MicaDocumentBridge {
       block_revs: RefCell::new(HashMap::new()),
       on_persist: RefCell::new(None),
       on_dirty: RefCell::new(None),
+      on_crdt_diff: RefCell::new(None),
       pending_persist: std::cell::Cell::new(false),
       structure_rev: signal(0u64),
       selection_sig: signal(sel),
@@ -167,6 +172,19 @@ impl MicaDocumentBridge {
   /// [`Self::flush_pending_persist`].
   pub fn set_on_dirty(&self, cb: Rc<dyn Fn()>) {
     *self.on_dirty.borrow_mut() = Some(cb);
+  }
+
+  /// Registers a callback invoked with the incremental lib0 v1 yrs CRDT diff on
+  /// every local edit (never fired for remote updates applied via
+  /// [`Self::apply_remote_update`]).
+  pub fn set_on_crdt_diff(&self, cb: Rc<dyn Fn(Vec<u8>)>) {
+    *self.on_crdt_diff.borrow_mut() = Some(cb);
+  }
+
+  /// Current yrs state vector of the active editor document (used to compute
+  /// minimal remote diffs from `SyncEngine::doc()`).
+  pub fn state_vector(&self) -> Vec<u8> {
+    self.session.borrow().state_vector()
   }
 
   /// If edits are waiting to be persisted, clears the dirty flag and exports
@@ -320,7 +338,21 @@ impl MicaDocumentBridge {
   /// Replaces the entire document with `markdown` (e.g. when switching pages).
   /// Clears stale per-block signals and bumps `structure_rev` once.
   pub fn load_markdown(&self, markdown: &str) {
-    let next_session = session_from_markdown(markdown);
+    self.replace_session(session_from_markdown(markdown), true);
+  }
+
+  /// Replaces the editor session with an authoritative yrs CRDT document state
+  /// (e.g. when `SyncEngine` emits `SyncEffect::Ready` after `sync.base` or
+  /// local SQLite seed), preserving the exact server Yrs block IDs without
+  /// triggering `on_persist` or `on_crdt_diff`.
+  pub fn load_crdt_doc(&self, state: &[u8], client_id: Option<u64>) -> Result<(), String> {
+    let doc = MicaDoc::from_update_with_client_id(state, client_id).map_err(|e| e.to_string())?;
+    let next_session = EditorSession::from_doc(doc);
+    self.replace_session(next_session, false);
+    Ok(())
+  }
+
+  fn replace_session(&self, next_session: EditorSession, scroll_to_top: bool) {
     let ids: Vec<String> = next_session.blocks().iter().map(|b| b.id.clone()).collect();
     let fm = read_root_front_matter(next_session.doc(), next_session.root_block_id());
     let sel = next_session.selection().cloned();
@@ -358,7 +390,9 @@ impl MicaDocumentBridge {
     self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
     self.structure_rev.set(self.structure_rev.get_untracked().wrapping_add(1));
     self.session_rev.set(self.session_rev.get_untracked().wrapping_add(1));
-    self.request_scroll_to_block(0);
+    if scroll_to_top {
+      self.request_scroll_to_block(0);
+    }
   }
 
   /// Applies a remote peer's yrs CRDT update without echoing it back to `on_persist`.
@@ -548,6 +582,12 @@ impl MicaDocumentBridge {
       set_if_changed(self.last_edited, String::from(DEFAULT_STATUS_TEXT));
       self.session_rev.set(self.session_rev.get_untracked().wrapping_add(1));
       if emit_persist {
+        if let Some(diff) = patch.crdt_update.clone().filter(|d| !d.is_empty()) {
+          let crdt_cb = self.on_crdt_diff.borrow().clone();
+          if let Some(crdt_cb) = crdt_cb {
+            crdt_cb(diff);
+          }
+        }
         let dirty_cb = self.on_dirty.borrow().clone();
         if let Some(dirty_cb) = dirty_cb {
           self.pending_persist.set(true);
@@ -1370,6 +1410,12 @@ impl MicaDocumentBridge {
       self.front_matter.set(trimmed.to_owned());
       self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
       self.session_rev.set(self.session_rev.get_untracked().wrapping_add(1));
+      if let Some(diff) = crdt_bytes.clone().filter(|d| !d.is_empty()) {
+        let crdt_cb = self.on_crdt_diff.borrow().clone();
+        if let Some(crdt_cb) = crdt_cb {
+          crdt_cb(diff);
+        }
+      }
       let cb = self.on_persist.borrow().clone();
       if let Some(cb) = cb {
         cb(self.export_markdown(), crdt_bytes);
