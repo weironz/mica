@@ -91,22 +91,34 @@ pub fn materialize_portable_boards(
 
 /// Restore self-contained Mica board SVGs referenced in `markdown` back into
 /// editable ` ```mica-board ` fenced code blocks using archive `files`.
+///
+/// Any archive path whose self-contained board SVG was restored is inserted
+/// into `consumed_svgs` so the planner can drop those synthetic preview SVGs
+/// from `ImportPlan::files` instead of reporting them as skipped attachments.
 pub fn restore_embedded_boards_from_archive(
   markdown: &str,
   archive_path: &str,
   files: &HashMap<String, Vec<u8>>,
   file_paths: &HashSet<String>,
+  consumed_svgs: &mut HashSet<String>,
 ) -> String {
   if files.is_empty() || !markdown.contains("![") {
     return markdown.to_string();
   }
-  restore_embedded_boards_in_markdown(markdown, |dest| {
+  let consumed = std::cell::RefCell::new(Vec::<String>::new());
+  let rewritten = restore_embedded_boards_in_markdown(markdown, |dest| {
     let resolved = resolve_ref(archive_path, dest, file_paths)?;
     if !resolved.to_ascii_lowercase().ends_with(".svg") {
       return None;
     }
-    files.get(&resolved).map(|bytes| Cow::Borrowed(bytes.as_slice()))
-  })
+    let bytes = files.get(&resolved)?;
+    if mica_board::extract_board_json_from_svg(bytes).is_some() {
+      consumed.borrow_mut().push(resolved);
+    }
+    Some(Cow::Borrowed(bytes.as_slice()))
+  });
+  consumed_svgs.extend(consumed.into_inner());
+  rewritten
 }
 
 /// Scan `markdown` outside fenced code blocks for standalone image references
@@ -487,6 +499,11 @@ mod tests {
     let imported_nested = plan.pages.iter().find(|p| p.title == "架构评审").unwrap();
     let nested_boards = extract_board_snapshots(&imported_nested.markdown);
     assert_eq!(nested_boards, vec![b2]);
+    // Restored board preview SVGs are removed from `plan.files` so server imports
+    // never report them as "skipped unreferenced attachments", while plain SVGs stay!
+    assert!(!plan.files.contains_key("assets/系统架构.svg"));
+    assert!(!plan.files.contains_key("assets/系统架构-1.svg"));
+    assert!(plan.files.contains_key("assets/plain.svg"));
   }
 
   #[test]
