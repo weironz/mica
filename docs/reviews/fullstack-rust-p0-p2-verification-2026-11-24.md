@@ -4,9 +4,9 @@
 > **分支**：`feat/fullstack-rust-architecture`（未合并 `main`，未触发正式发版）  
 > **源评审**：[`origin/main:docs/reviews/fullstack-rust-branch-review-2026-11-24.md`](https://github.com/weironz/mica/blob/main/docs/reviews/fullstack-rust-branch-review-2026-11-24.md)  
 > **实测证据**：
-> - 终版完整 GitHub Actions CI（`scope=full`，含 A1b 评审修复及全部体验修复 `fbd91002`）：[Run 45427644316](https://github.com/weironz/mica/actions/runs/45427644316)（**7 / 7 任务全绿**：workspace **1,586**、`mica-editor` **74**、`mica-client` **34**、`clients/mica_rust` **131**、首包 Brotli-11 **`3,927,323 B` / 3.75 MiB**）
-> - 前序完整 CI（`23bfecfa`）：[Run 45377675471](https://github.com/weironz/mica/actions/runs/45377675471)（**7 / 7 任务全绿**）
-> - Release dry-run（`build_linux_deb=true`, `publish=false`）：[Run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409)（**9 / 9 构建任务全绿**，未发布）
+> - 终版完整 GitHub Actions CI（`scope=full`，含旧 Flutter Web `mica-localfirst` 迁移及 E2E 第 7 场景 `52ceac8c`）：[Run 45454096995](https://github.com/weironz/mica/actions/runs/45454096995)（**7 / 7 任务全绿**：workspace **1,589**、`mica-editor` **74**、`mica-client` **37**、`clients/mica_rust` **131**、Playwright E2E **7/7**、首包 Brotli-11 **`3,929,256 B` / 3.75 MiB**）
+> - 终版 Release dry-run（`build_linux_deb=true`, `publish=false`, `@ a76fdb22`）：[Run 45450328047](https://github.com/weironz/mica/actions/runs/45450328047)（**9 / 9 构建任务全绿**，未发布）
+> - 历史前序绿灯参考：CI [45427644316](https://github.com/weironz/mica/actions/runs/45427644316)、CI [45377675471](https://github.com/weironz/mica/actions/runs/45377675471)、Release dry-run [45374949409](https://github.com/weironz/mica/actions/runs/45374949409)
 
 ---
 

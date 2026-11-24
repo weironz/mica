@@ -488,11 +488,11 @@ M0 拆分合入 ──┬── M1 数据与升级安全（P0-1、P0-4）──�
 - [x] P1-1 文档、发布说明、对外平台列表已按“不提供 Android 和 macOS 桌面”更新（`eb605e76`）
 - [x] P1-2 Windows 输入法与三种浏览器的验证报告已归档，全部通过（报告已归档于 [fullstack-rust-ime-browser-verification-2026-11-24.md](fullstack-rust-ime-browser-verification-2026-11-24.md)；用户 Windows 桌面 + Chrome 真人实测通过，2026-11-24 用户拍板 Firefox / 搜狗 / Safari 无需补测，发版说明如实标注范围）
 - [x] P1-3 测试补齐：按用户 2026-11-24 务实调整（重高价值回归与核心 E2E，不凑 200 条水测试），`mica-editor` 已扩至 73 条行为回归 + `proptest`，Web 6 场景 Playwright E2E 已进 CI，回执下限已全部上调（`3bdb9a9a`、`6daa44f7`、`23bfecfa`、`48c5d219`）
-- [x] P1-4 完整 CI 与 Release 彩排全绿（终版全量 CI [Run 45427644316](https://github.com/weironz/mica/actions/runs/45427644316) 7/7 全绿 @ `fbd91002`：workspace 1,586、`mica-editor` 74、`mica-client` 34、`clients/mica_rust` 131、Playwright E2E 6/6、MCP 39 tools、RustSec 0 告警；Release dry-run [Run 45374949409](https://github.com/weironz/mica/actions/runs/45374949409) 9/9 全绿）
+- [x] P1-4 完整 CI 与 Release 彩排全绿（终版全量 CI [Run 45454096995](https://github.com/weironz/mica/actions/runs/45454096995) 7/7 全绿 @ `52ceac8c`：workspace 1,589、`mica-editor` 74、`mica-client` 37、`clients/mica_rust` 131、Playwright E2E **7/7** 含旧 `mica-localfirst` 迁移实测通过、MCP 39 tools、RustSec 0 告警；终版 Release dry-run [Run 45450328047](https://github.com/weironz/mica/actions/runs/45450328047) 9/9 全绿 @ `a76fdb22`）
 - [x] P1-5 CSP 恢复按哈希放行（`8c100db7`，`test-web-csp-hashes.sh` + Playwright E2E 0 违规）
-- [x] W5 体积门禁 ≤ 4,194,304 B（Brotli）在 CI 中生效并通过（`8c100db7`，终版 CI `45427644316` 实测 **`3,927,323 B` / 3.75 MiB**）
-- [x] A1b 已通过评审和完整 CI，待切换时合入（`fbd91002` 完成针对 `migrations/0040_usage_stats.sql`、`routes/stats.rs`、`metrics.rs`、`app-core/{sync,store}.rs` 的口径/隐私/迁移安全/写入热路径评审并修复 3 项发现：`metrics.rs` `orphan_pages` O(N²) → O(N+E) CTE、`sync.rs` 消除 `push_update_checked` 冗余 `word_count` 查询、`transfer.rs` 计数移至 `tx.commit()` 后；终版 CI [45427644316](https://github.com/weironz/mica/actions/runs/45427644316) 含真实 Postgres 全绿）
-- [x] M4 切换前冒烟全部通过（桌面/Web 核心编辑、实时同步、离线恢复、覆盖升级、单实例、回滚 `v0.14.11` 与终版全量 CI [45427644316](https://github.com/weironz/mica/actions/runs/45427644316) 7/7 全部通过）
+- [x] W5 体积门禁 ≤ 4,194,304 B（Brotli）在 CI 中生效并通过（`8c100db7`，终版 CI `45454096995` 实测 **`3,929,256 B` / 3.75 MiB**）
+- [x] A1b 已通过评审和完整 CI，待切换时合入（`fbd91002` 完成针对 `migrations/0040_usage_stats.sql`、`routes/stats.rs`、`metrics.rs`、`app-core/{sync,store}.rs` 的口径/隐私/迁移安全/写入热路径评审并修复 3 项发现：`metrics.rs` `orphan_pages` O(N²) → O(N+E) CTE、`sync.rs` 消除 `push_update_checked` 冗余 `word_count` 查询、`transfer.rs` 计数移至 `tx.commit()` 后；终版 CI [45454096995](https://github.com/weironz/mica/actions/runs/45454096995) 含真实 Postgres 全绿）
+- [x] M4 切换前冒烟全部通过（桌面/Web 核心编辑、实时同步、离线恢复、旧 Flutter Web `mica-localfirst` 迁移、覆盖升级、单实例、回滚 `v0.14.11` 与终版全量 CI [45454096995](https://github.com/weironz/mica/actions/runs/45454096995) 7/7 + Release dry-run [45450328047](https://github.com/weironz/mica/actions/runs/45450328047) 9/9 全部通过）
 - [x] 回滚预案已演练（见 C1、C2：C1 桌面卸载 + 重装官方 Flutter `v0.14.11` + 124 MB `store.db` `PRAGMA quick_check = ok` 已于 2026-11-24 物理机演练通过；C2 Web 切换部署前保留最后一个 Flutter Web 镜像 tag）
 
 ### 5.1 补充：合入前复核发现并修复的 Web 旧数据迁移缺口（2026-11-24）
