@@ -759,17 +759,26 @@ fn account_identity_copy(
   if is_local {
     ("本地工作区".to_string(), Some("这台设备".to_string()))
   } else {
-    let name = if display_name.trim().is_empty() {
-      "未登录".to_string()
+    let raw_name = display_name.trim();
+    let raw_email = email.trim();
+    let clean_name = if !raw_name.is_empty() && !raw_name.eq_ignore_ascii_case(raw_email) {
+      raw_name.to_string()
+    } else if let Some((local_part, domain)) = raw_email.split_once('@')
+      && !local_part.trim().is_empty()
+      && domain.contains('.')
+    {
+      local_part.trim().to_string()
+    } else if !raw_name.is_empty() {
+      raw_name.to_string()
     } else {
-      display_name.trim().to_string()
+      "未登录".to_string()
     };
-    let sub = if email.trim().is_empty() {
+    let sub = if raw_email.is_empty() || raw_email.eq_ignore_ascii_case(&clean_name) {
       None
     } else {
-      Some(email.trim().to_string())
+      Some(raw_email.to_string())
     };
-    (name, sub)
+    (clean_name, sub)
   }
 }
 
@@ -1190,6 +1199,10 @@ mod tests {
     assert_eq!(
       account_identity_copy(false, "willmica", "w@example.com"),
       ("willmica".to_string(), Some("w@example.com".to_string()))
+    );
+    assert_eq!(
+      account_identity_copy(false, "willzhmic@outlook.com", "willzhmic@outlook.com"),
+      ("willzhmic".to_string(), Some("willzhmic@outlook.com".to_string()))
     );
     assert_eq!(
       account_identity_copy(false, "", ""),

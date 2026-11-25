@@ -67,6 +67,7 @@ pub fn canonicalize_cloud_url(raw: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct CloudBootstrapPayload {
   pub account_id: String,
+  pub display_name: Option<String>,
   pub workspaces: Vec<Workspace>,
   pub active_workspace_id: Option<Uuid>,
   pub views: Vec<View>,
@@ -169,8 +170,8 @@ pub async fn fetch_cloud_bootstrap(
   preferred_ws: Option<Uuid>,
 ) -> Result<CloudBootstrapPayload, String> {
   let mut refreshed_tokens: Option<(String, String)> = None;
-  let account_id = if let Some(uid) = conn.user_id() {
-    uid.to_string()
+  let (account_id, display_name) = if let (Some(uid), Some(dname)) = (conn.user_id(), conn.display_name()) {
+    (uid.to_string(), Some(dname.to_string()))
   } else {
     let (me, rot) = with_auto_refresh(conn, |c| async move { c.fetch_me().await }).await?;
     if rot.is_some() {
@@ -179,9 +180,14 @@ pub async fn fetch_cloud_bootstrap(
     let uid = me
       .id
       .filter(|s| !s.trim().is_empty())
+      .or_else(|| conn.user_id().map(str::to_string))
       .ok_or_else(|| "server /api/auth/me returned empty user id".to_string())?;
-    *conn = conn.clone().with_user_id(Some(uid.clone()));
-    uid
+    let dname = (!me.display_name.trim().is_empty()).then(|| me.display_name.trim().to_string());
+    *conn = conn
+      .clone()
+      .with_user_id(Some(uid.clone()))
+      .with_display_name(dname.clone());
+    (uid, dname)
   };
 
   let (workspaces, rot_ws) =
@@ -206,6 +212,7 @@ pub async fn fetch_cloud_bootstrap(
 
   Ok(CloudBootstrapPayload {
     account_id,
+    display_name,
     workspaces,
     active_workspace_id: target_ws_id,
     views,
@@ -674,7 +681,14 @@ impl CloudSessionHandles {
     self.world_active_origin.set(server_url.clone());
     self.account_id.set(payload.account_id);
     self.account_email.set(email.clone());
-    self.account_name.set(email);
+    let resolved_name = payload
+      .display_name
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .map(str::to_string)
+      .unwrap_or_else(|| crate::sidebar::format_footer_account_label(&email));
+    self.account_name.set(resolved_name);
     self.is_cloud_signed_in.set(true);
     self.world_can_close.set(true);
     self.world_switcher_open.set(false);
@@ -843,7 +857,7 @@ impl CloudSessionHandles {
       self.world_active_origin.set(origin.clone());
       self.account_id.set(saved_account_id.clone());
       self.account_email.set(email.clone());
-      self.account_name.set(email.clone());
+      self.account_name.set(crate::sidebar::format_footer_account_label(&email));
       self.is_cloud_signed_in.set(true);
       let entries: Vec<WorkspaceEntry> = cached_ws
         .iter()

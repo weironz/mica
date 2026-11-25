@@ -1052,7 +1052,11 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     }
     "quote" => {
       // SINGLE-LAYER quote bar (3px left border + optional GFM callout wash & header).
-      // Zero double-nesting!
+      // Continuous vertical bar across consecutive `quote` blocks in the same
+      // quote group (broken only when `data.qbreak == true` or indent/callout changes).
+      let br_q_pt = bridge.clone();
+      let br_q_pb = bridge.clone();
+      let struct_rev_q = bridge.structure_rev_signal();
       let mut q = view()
         .test_id("node-view-quote")
         .w_full()
@@ -1074,7 +1078,28 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         .rounded_r(px(if callout.is_some() { 6.0 } else { 0.0 }))
         .pl(px(14.0))
         .pr(px(if callout.is_some() { 12.0 } else { 0.0 }))
-        .py(px(if callout.is_some() { 8.0 } else { 2.0 }));
+        .pt(move || {
+          struct_rev_q.get();
+          let (from_prev, _) = quote_edges_at(&br_q_pt, at.index());
+          if callout.is_some() {
+            px(8.0)
+          } else if from_prev {
+            px(5.0)
+          } else {
+            px(2.0)
+          }
+        })
+        .pb(move || {
+          struct_rev_q.get();
+          let (_, to_next) = quote_edges_at(&br_q_pb, at.index());
+          if to_next {
+            px(5.0)
+          } else if callout.is_some() {
+            px(8.0)
+          } else {
+            px(2.0)
+          }
+        });
 
       if let Some(c) = callout {
         q = q.child(
@@ -1111,16 +1136,84 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
 
   let layouts_row = layouts;
   let bid_row = block_id;
+  let is_quote_row = kind == "quote";
+  let br_mt = bridge.clone();
+  let br_mb = bridge.clone();
+  let struct_rev_m = bridge.structure_rev_signal();
   view()
     .test_id(&format!("block-row-{init_idx}"))
     .w_full()
-    .mt(move || if at.index() == 0 { px(2.0) } else { px(raw_mt) })
-    .mb(px(mb))
+    .mt(move || {
+      let idx = at.index();
+      if idx == 0 {
+        return px(2.0);
+      }
+      if is_quote_row {
+        struct_rev_m.get();
+        let (from_prev, _) = quote_edges_at(&br_mt, idx);
+        return px(if from_prev { 0.0 } else { raw_mt });
+      }
+      px(raw_mt)
+    })
+    .mb(move || {
+      if is_quote_row {
+        struct_rev_m.get();
+        let (_, to_next) = quote_edges_at(&br_mb, at.index());
+        return px(if to_next { 0.0 } else { mb });
+      }
+      px(mb)
+    })
     .pl(px(indent * 24.0))
     .on_layout(move |b: &Bounds<Points>| {
       layouts_row.borrow_mut().update_row_frame(&bid_row, *b);
     })
     .child(row_content)
+}
+
+/// Determine whether a `quote` block joins seamlessly with the previous/next
+/// `quote` block in the same group (no `qbreak`, same indent/list nesting, and
+/// not starting a separate callout). Matches `v0.14.11` `render.dart`.
+pub(crate) fn quote_group_edges(
+  prev: Option<&EditorBlock>,
+  cur: &EditorBlock,
+  next: Option<&EditorBlock>,
+) -> (bool, bool) {
+  if cur.kind != "quote" {
+    return (false, false);
+  }
+  let indent_of = |b: &EditorBlock| b.data.get("indent").and_then(Value::as_u64).unwrap_or(0);
+  let li_of = |b: &EditorBlock| b.data.get("li").and_then(Value::as_u64);
+  let qbreak_of = |b: &EditorBlock| b.data.get("qbreak").and_then(Value::as_bool).unwrap_or(false);
+  let has_callout = |b: &EditorBlock| {
+    b.data
+      .get("alert")
+      .and_then(Value::as_str)
+      .and_then(CalloutKind::from_attr)
+      .is_some()
+  };
+
+  let cur_ind = indent_of(cur);
+  let cur_li = li_of(cur);
+  let from_prev = !qbreak_of(cur)
+    && !has_callout(cur)
+    && prev.is_some_and(|p| p.kind == "quote" && indent_of(p) == cur_ind && li_of(p) == cur_li);
+  let to_next = next.is_some_and(|n| {
+    n.kind == "quote"
+      && !qbreak_of(n)
+      && !has_callout(n)
+      && indent_of(n) == cur_ind
+      && li_of(n) == cur_li
+  });
+  (from_prev, to_next)
+}
+
+fn quote_edges_at(bridge: &MicaDocumentBridge, idx: usize) -> (bool, bool) {
+  let Some(cur) = bridge.block_at(idx) else {
+    return (false, false);
+  };
+  let prev = idx.checked_sub(1).and_then(|i| bridge.block_at(i));
+  let next = bridge.block_at(idx + 1);
+  quote_group_edges(prev.as_ref(), &cur, next.as_ref())
 }
 
 #[derive(Clone)]
@@ -3527,6 +3620,21 @@ mod tests {
     let (w, h) = parse_svg_aspect_size(r#"<svg viewBox="0 0 800 200"></svg>"#, 680.0, 320.0);
     assert!((w - 680.0).abs() < 1.0);
     assert!((h - 170.0).abs() < 1.0);
+  }
+
+  #[test]
+  fn quote_group_edges_join_adjacent_quotes_and_break_on_qbreak_or_callout() {
+    let q1 = EditorBlock::new("q1", "quote", "line 1");
+    let q2 = EditorBlock::new("q2", "quote", "line 2");
+    let mut q3_break = EditorBlock::new("q3", "quote", "separate quote");
+    q3_break.data = serde_json::json!({ "qbreak": true });
+    let mut q4_callout = EditorBlock::new("q4", "quote", "note");
+    q4_callout.data = serde_json::json!({ "alert": "note" });
+
+    assert_eq!(quote_group_edges(None, &q1, Some(&q2)), (false, true));
+    assert_eq!(quote_group_edges(Some(&q1), &q2, Some(&q3_break)), (true, false));
+    assert_eq!(quote_group_edges(Some(&q2), &q3_break, Some(&q4_callout)), (false, false));
+    assert_eq!(quote_group_edges(Some(&q3_break), &q4_callout, None), (false, false));
   }
 
   #[test]

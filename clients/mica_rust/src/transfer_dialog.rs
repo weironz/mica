@@ -380,7 +380,7 @@ pub fn transfer_dialog_modal(
     .child(
       view()
         .test_id("transfer-dialog-panel")
-        .w(px(440.0))
+        .w(px(540.0))
         .max_w(relative(0.92))
         .max_h(relative(0.88))
         .rounded(px(12.0))
@@ -426,7 +426,7 @@ pub fn transfer_dialog_modal(
           // Taffy never collapses the scroll region to 0px inside an auto-height modal!)
           scroll()
             .w_full()
-            .max_h(px(460.0))
+            .max_h(px(620.0))
             .px_5()
             .py_4()
             .child(if destinations.is_empty() {
@@ -487,7 +487,8 @@ pub fn transfer_dialog_modal(
                     .child(
                       scroll()
                         .w_full()
-                        .max_h(px(132.0))
+                        .min_h(px(120.0))
+                        .max_h(px(260.0))
                         .rounded(px(6.0))
                         .border_1()
                         .border_color(move || palette(dark_mode.get()).border_normal)

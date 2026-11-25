@@ -2489,21 +2489,58 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
 
       stats_loading.set(true);
-      let conn = cc.borrow().clone();
+      let mut conn = cc.borrow().clone();
+      let cc_write = cc.clone();
+      let v_save = v.clone();
       let orig_expect = orig.clone();
+      let srv_url = server_url.get_untracked();
+      let email_cur = account_email.get_untracked();
+      let uid_cur = account_id.get_untracked();
       app_owner.run(move || {
         spawn(async move {
-          let res = match conn.get_usage_overview().await {
-            Ok(ov) => conn
-              .get_usage_activity(&range, tz_offset, ws_filter.as_deref(), inc_imp)
+          let mut rotated_tokens: Option<(String, String)> = None;
+          let ov_res =
+            cloud_sync::with_auto_refresh(&mut conn, |c| async move { c.get_usage_overview().await })
+              .await;
+          let res = match ov_res {
+            Ok((ov, rot1)) => {
+              if rot1.is_some() {
+                rotated_tokens = rot1;
+              }
+              match cloud_sync::with_auto_refresh(&mut conn, |c| {
+                let r = range.clone();
+                let wf = ws_filter.clone();
+                async move { c.get_usage_activity(&r, tz_offset, wf.as_deref(), inc_imp).await }
+              })
               .await
-              .map(|act| (ov, act)),
+              {
+                Ok((act, rot2)) => {
+                  if rot2.is_some() {
+                    rotated_tokens = rot2;
+                  }
+                  Ok((ov, act))
+                }
+                Err(e) => Err(e),
+              }
+            }
             Err(e) => Err(e),
           };
           if stats_fetch_gen.get_untracked() != epoch
             || active_origin.get_untracked() != orig_expect
           {
             return;
+          }
+          if let Some((ref new_tok, ref new_refresh)) = rotated_tokens {
+            *cc_write.borrow_mut() = conn.clone();
+            if allow_local && !new_tok.is_empty() {
+              let _ = v_save.save_server_credential_full(
+                &srv_url,
+                &email_cur,
+                &uid_cur,
+                new_tok,
+                new_refresh,
+              );
+            }
           }
           stats_loading.set(false);
           match res {

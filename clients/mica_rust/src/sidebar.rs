@@ -1483,6 +1483,27 @@ fn menu_divider(dark_mode: Signal<bool>) -> impl IntoElement {
 
 // ── Account Footer (`28×28` avatar `本` + `本地工作区` + gear button) ─────────
 
+/// Format the resident bottom-left account footer label without ever exposing
+/// a full email address (`v0.14.11` privacy/compactness rule: details belong
+/// inside the account popover, while the resident row shows only the owner name).
+pub(crate) fn format_footer_account_label(raw: &str) -> String {
+  let t = raw.trim();
+  if t.is_empty() || t.eq_ignore_ascii_case("local") {
+    return if crate::web_runtime::is_web() {
+      "未登录".to_string()
+    } else {
+      "本地工作区".to_string()
+    };
+  }
+  if let Some((local_part, domain)) = t.split_once('@')
+    && !local_part.trim().is_empty()
+    && domain.contains('.')
+  {
+    return local_part.trim().to_string();
+  }
+  t.to_string()
+}
+
 fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<SidebarCallbacks>) -> impl IntoElement {
   let cb_acct = cb.clone();
   let cb_set = cb;
@@ -1501,14 +1522,13 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
             .bg(move || palette(dark_mode.get()).surface_hover)
             .child(
               text(move || {
-                let raw = account_name.get();
-                let t = raw.trim();
-                if t == "未登录" {
+                let label = format_footer_account_label(&account_name.get());
+                if label == "未登录" {
                   "M".to_string()
-                } else if t.is_empty() || t.eq_ignore_ascii_case("local") || t == "本地工作区" {
+                } else if label == "本地工作区" {
                   if crate::web_runtime::is_web() { "M".to_string() } else { "本".to_string() }
                 } else {
-                  t.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "M".to_string())
+                  label.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "M".to_string())
                 }
               })
               .text_size(px(12.0)).font_weight(FontWeight::MEDIUM)
@@ -1516,15 +1536,7 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
             ),
         )
         .child(
-          text(move || {
-            let raw = account_name.get();
-            let t = raw.trim();
-            if t.is_empty() || t.eq_ignore_ascii_case("local") {
-              if crate::web_runtime::is_web() { "未登录".to_string() } else { "本地工作区".to_string() }
-            } else {
-              raw
-            }
-          })
+          text(move || format_footer_account_label(&account_name.get()))
           .text_size(px(14.0)).font_weight(FontWeight::MEDIUM)
           .text_color(move || palette(dark_mode.get()).text_primary)
           .truncate(),
@@ -2009,4 +2021,17 @@ pub fn rename_dialog_modal(
         )
     }
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn footer_account_label_never_exposes_full_email() {
+    assert_eq!(format_footer_account_label("willzhmic@outlook.com"), "willzhmic");
+    assert_eq!(format_footer_account_label("Will Zhang"), "Will Zhang");
+    assert_eq!(format_footer_account_label("本地工作区"), "本地工作区");
+    assert_eq!(format_footer_account_label(""), "本地工作区");
+  }
 }

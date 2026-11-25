@@ -278,6 +278,7 @@ fn percent_encode_path_segment(seg: &str) -> String {
 pub struct CloudConnector {
   config: CloudConfig,
   user_id: Option<String>,
+  display_name: Option<String>,
   refresh_token: Option<String>,
   endpoints: ApiEndpoints,
   claims: ClaimTracker,
@@ -306,6 +307,7 @@ impl CloudConnector {
     Self {
       config,
       user_id: None,
+      display_name: None,
       refresh_token: None,
       endpoints,
       claims: ClaimTracker::new(origin),
@@ -329,6 +331,23 @@ impl CloudConnector {
       .as_deref()
       .map(str::trim)
       .filter(|u| !u.is_empty())
+  }
+
+  /// Attach the authenticated user's display name (if known).
+  pub fn with_display_name(mut self, display_name: Option<String>) -> Self {
+    self.display_name = display_name
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
+    self
+  }
+
+  /// Authenticated user's display name, if known from login/refresh/`GET /api/auth/me`.
+  pub fn display_name(&self) -> Option<&str> {
+    self
+      .display_name
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
   }
 
   /// Attach a persisted refresh token so expired access tokens can be rotated
@@ -434,6 +453,8 @@ impl CloudConnector {
 
     self.config.access_token = Some(auth.access_token);
     self.user_id = Some(auth.user.id.to_string());
+    self.display_name = (!auth.user.display_name.trim().is_empty())
+      .then(|| auth.user.display_name.trim().to_string());
     self.refresh_token = (!auth.refresh_token.trim().is_empty()).then_some(auth.refresh_token);
     self.config.email = Some(auth.user.email.clone());
     self.claims.switch_account(WorldOrigin::Cloud {
@@ -495,6 +516,9 @@ impl CloudConnector {
     let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
     self.config.access_token = Some(auth.access_token);
     self.user_id = Some(auth.user.id.to_string());
+    if !auth.user.display_name.trim().is_empty() {
+      self.display_name = Some(auth.user.display_name.trim().to_string());
+    }
     if !auth.refresh_token.trim().is_empty() {
       self.refresh_token = Some(auth.refresh_token);
     }
@@ -524,6 +548,8 @@ impl CloudConnector {
     let email = auth.user.email.clone();
     self.config.access_token = Some(auth.access_token);
     self.user_id = Some(auth.user.id.to_string());
+    self.display_name = (!auth.user.display_name.trim().is_empty())
+      .then(|| auth.user.display_name.trim().to_string());
     self.refresh_token = None;
     self.config.email = Some(email.clone());
     self.claims.switch_account(WorldOrigin::Cloud {
@@ -1520,6 +1546,7 @@ impl CloudConnector {
   pub fn logout(&mut self) {
     self.config.access_token = None;
     self.user_id = None;
+    self.display_name = None;
     self.refresh_token = None;
     self.config.email = None;
     self.phase = SyncPhase::Offline;
