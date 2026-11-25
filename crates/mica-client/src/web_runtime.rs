@@ -177,6 +177,172 @@ pub async fn fetch_request(
   }
 }
 
+/// Fetch binary bytes from `url` via the browser Fetch API (`GET`), returning
+/// `(bytes, content_type)`. Uses `same-origin` credentials for same-origin URLs
+/// and `omit` for cross-origin URLs so external images/S3 redirects don't fail
+/// strict CORS credential rules.
+#[cfg(target_arch = "wasm32")]
+pub async fn fetch_bytes(url: &str, timeout_secs: u64) -> Result<(Vec<u8>, String), String> {
+  use wasm_bindgen::closure::Closure;
+  use wasm_bindgen::JsCast;
+  use wasm_bindgen_futures::JsFuture;
+  use web_sys::{AbortController, Request, RequestCredentials, RequestInit, Response};
+
+  struct TimeoutGuard {
+    window: web_sys::Window,
+    timer_id: i32,
+    _cb: Closure<dyn FnMut()>,
+  }
+  impl Drop for TimeoutGuard {
+    fn drop(&mut self) {
+      self.window.clear_timeout_with_handle(self.timer_id);
+    }
+  }
+
+  let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
+  let controller =
+    AbortController::new().map_err(|e| format!("failed to construct AbortController: {e:?}"))?;
+  let ctrl_abort = controller.clone();
+  let timed_out = std::rc::Rc::new(std::cell::Cell::new(false));
+  let timed_out_cb = std::rc::Rc::clone(&timed_out);
+  let abort_cb = Closure::<dyn FnMut()>::new(move || {
+    timed_out_cb.set(true);
+    ctrl_abort.abort();
+  });
+  let timeout_ms = timeout_secs.clamp(1, 600).saturating_mul(1000) as i32;
+  let timer_id = window
+    .set_timeout_with_callback_and_timeout_and_arguments_0(
+      abort_cb.as_ref().unchecked_ref(),
+      timeout_ms,
+    )
+    .map_err(|e| format!("failed to schedule fetch timeout: {e:?}"))?;
+  let _guard = TimeoutGuard {
+    window: window.clone(),
+    timer_id,
+    _cb: abort_cb,
+  };
+
+  let init = RequestInit::new();
+  init.set_method("GET");
+  let same_origin = web_origin().is_some_and(|orig| url.starts_with(&orig));
+  init.set_credentials(if same_origin {
+    RequestCredentials::SameOrigin
+  } else {
+    RequestCredentials::Omit
+  });
+  init.set_signal(Some(&controller.signal()));
+
+  let request = Request::new_with_str_and_init(url, &init)
+    .map_err(|e| format!("GET {url} request init failed: {e:?}"))?;
+  let resp_val = JsFuture::from(window.fetch_with_request(&request))
+    .await
+    .map_err(|e| {
+      if timed_out.get() {
+        format!("GET {url} timed out after {timeout_secs}s")
+      } else {
+        format!("GET {url} network error: {e:?}")
+      }
+    })?;
+  let resp: Response = resp_val
+    .dyn_into()
+    .map_err(|_| format!("GET {url} returned non-Response object"))?;
+  let status = resp.status();
+  if !(200..300).contains(&status) {
+    return Err(format!("HTTP {status}"));
+  }
+  let content_type = resp
+    .headers()
+    .get("content-type")
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+  let buf_promise = resp
+    .array_buffer()
+    .map_err(|e| format!("GET {url} response.arrayBuffer() failed: {e:?}"))?;
+  let buf_val = JsFuture::from(buf_promise)
+    .await
+    .map_err(|e| format!("GET {url} body read failed: {e:?}"))?;
+  let bytes = js_sys::Uint8Array::new(&buf_val).to_vec();
+  Ok((bytes, content_type))
+}
+
+/// PUT raw bytes to a presigned object-storage URL with explicit SigV4 headers
+/// and `credentials: "omit"`, returning the HTTP status code.
+#[cfg(target_arch = "wasm32")]
+pub async fn put_presigned_bytes(
+  url: &str,
+  headers_kv: &[(&str, &str)],
+  body: &[u8],
+  timeout_secs: u64,
+) -> Result<u16, String> {
+  use wasm_bindgen::closure::Closure;
+  use wasm_bindgen::JsCast;
+  use wasm_bindgen_futures::JsFuture;
+  use web_sys::{AbortController, Headers, Request, RequestCredentials, RequestInit, Response};
+
+  struct TimeoutGuard {
+    window: web_sys::Window,
+    timer_id: i32,
+    _cb: Closure<dyn FnMut()>,
+  }
+  impl Drop for TimeoutGuard {
+    fn drop(&mut self) {
+      self.window.clear_timeout_with_handle(self.timer_id);
+    }
+  }
+
+  let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
+  let controller =
+    AbortController::new().map_err(|e| format!("failed to construct AbortController: {e:?}"))?;
+  let ctrl_abort = controller.clone();
+  let timed_out = std::rc::Rc::new(std::cell::Cell::new(false));
+  let timed_out_cb = std::rc::Rc::clone(&timed_out);
+  let abort_cb = Closure::<dyn FnMut()>::new(move || {
+    timed_out_cb.set(true);
+    ctrl_abort.abort();
+  });
+  let timeout_ms = timeout_secs.clamp(1, 600).saturating_mul(1000) as i32;
+  let timer_id = window
+    .set_timeout_with_callback_and_timeout_and_arguments_0(
+      abort_cb.as_ref().unchecked_ref(),
+      timeout_ms,
+    )
+    .map_err(|e| format!("failed to schedule PUT timeout: {e:?}"))?;
+  let _guard = TimeoutGuard {
+    window: window.clone(),
+    timer_id,
+    _cb: abort_cb,
+  };
+
+  let headers = Headers::new().map_err(|e| format!("failed to construct Headers: {e:?}"))?;
+  for &(k, v) in headers_kv {
+    let _ = headers.set(k, v);
+  }
+  let init = RequestInit::new();
+  init.set_method("PUT");
+  init.set_headers(&headers);
+  init.set_credentials(RequestCredentials::Omit);
+  init.set_signal(Some(&controller.signal()));
+  let arr = js_sys::Uint8Array::from(body);
+  init.set_body(&arr);
+
+  let request = Request::new_with_str_and_init(url, &init)
+    .map_err(|e| format!("PUT {url} request init failed: {e:?}"))?;
+  let resp_val = JsFuture::from(window.fetch_with_request(&request))
+    .await
+    .map_err(|e| {
+      if timed_out.get() {
+        format!("PUT {url} timed out after {timeout_secs}s")
+      } else {
+        format!("PUT {url} network error: {e:?}")
+      }
+    })?;
+  let resp: Response = resp_val
+    .dyn_into()
+    .map_err(|_| format!("PUT {url} returned non-Response object"))?;
+  Ok(resp.status())
+}
+
 /// Trigger a real browser file download (`Blob` + `<a download>` + `URL.revokeObjectURL`)
 /// on `wasm32`. Returns an error on native desktop (which uses OS Save-As dialogs).
 pub fn web_download_bytes(filename: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {

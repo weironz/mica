@@ -3285,6 +3285,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "tungstenite",
  "ureq",
@@ -3362,6 +3363,7 @@ version = "0.15.0"
 dependencies = [
  "chrono",
  "dirs-next",
+ "image",
  "js-sys",
  "mica-api-types",
  "mica-board",

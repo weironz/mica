@@ -35,6 +35,7 @@ pub mod editor_slash;
 pub mod editor_view;
 pub mod emoji_picker;
 pub mod graph_dialog;
+pub mod image_blocks;
 pub mod mica_icons;
 pub mod mica_theme;
 pub mod page_width;
@@ -2170,6 +2171,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
+  let rehost_images_sig = signal(true);
+  let image_ctx = image_blocks::ImageContext::new(
+    is_cloud_signed_in,
+    server_url,
+    active_workspace_id,
+    active_doc,
+    cloud_connector.clone(),
+    rehost_images_sig,
+  );
+
   let editor_header = Rc::new(EditorHeaderProps {
     workspace_name,
     folder_name: active_folder_name,
@@ -2263,21 +2274,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     }),
     on_insert_image: {
       let br = bridge.clone();
+      let ctx = image_ctx.clone();
       Rc::new(move || {
         let br_c = br.clone();
+        let ctx_c = ctx.clone();
         app_owner.run(move || {
-          spawn(async move {
-            if let Ok(paths) = transfer::pick_import_files("Images", &["png", "jpg", "jpeg", "gif", "webp", "svg"], false).await
-              && let Some(p) = paths.first()
-            {
-              let uri = format!("file:///{}", p.to_string_lossy().replace('\\', "/"));
-              let alt = p.file_stem().and_then(|s| s.to_str()).unwrap_or("图片");
-              br_c.insert_custom_block("image", alt, Some(&uri));
-            }
-          });
+          image_blocks::pick_and_insert_image(br_c, ctx_c);
         });
       })
     },
+    image_ctx: image_ctx.clone(),
     property_panel_slot: Some(prop_panel_slot),
     backlinks_panel_slot: Some(backlinks_slot),
   });
@@ -2418,6 +2424,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   settings_props_val.show_page_title = show_page_title;
   settings_props_val.account_name = account_name;
   settings_props_val.ai_enabled = ai_enabled;
+  settings_props_val.rehost_images = rehost_images_sig;
   settings_props_val.trashed_views = trashed_views_sig;
   settings_props_val.live_views = live_views_sig;
   settings_props_val.on_export_mica_zip = Some({

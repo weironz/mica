@@ -105,6 +105,7 @@ pub struct EditorHeaderProps {
   pub on_open_version_history: Rc<dyn Fn()>,
   pub on_inline_ai: Rc<dyn Fn(String)>,
   pub on_insert_image: Rc<dyn Fn()>,
+  pub image_ctx: crate::image_blocks::ImageContext,
   pub property_panel_slot: Option<Rc<dyn Fn() -> AnyElement>>,
   pub backlinks_panel_slot: Option<Rc<dyn Fn() -> AnyElement>>,
 }
@@ -617,12 +618,14 @@ pub fn editor_view(
   // title input, code block editor, table cell, find bar, search, or whiteboard!).
   let show_page_title_key = header.show_page_title;
   let page_title_key = header.page_title;
+  let img_ctx_key = header.image_ctx.clone();
   {
     let b_keys = bridge.clone();
     let l_keys = layouts.clone();
     let st_keys = sink_state.clone();
     let on_ai_k = on_inline_ai_key.clone();
     let on_img_k = on_insert_image_key.clone();
+    let img_ctx_k = img_ctx_key.clone();
     effect(move || {
       if !editor_focused.get()
         || focused_code_block.get().is_some()
@@ -673,6 +676,7 @@ pub fn editor_view(
         let st = st_keys.clone();
         let ai_cb = on_ai_k.clone();
         let img_cb = on_img_k.clone();
+        let img_ctx_c = img_ctx_k.clone();
         on_key_with(
           stroke,
           KeyOptions {
@@ -699,6 +703,7 @@ pub fn editor_view(
               link_draft,
               &ai_cb,
               &img_cb,
+              &img_ctx_c,
               show_page_title_key,
               page_title_key,
               title_ref,
@@ -993,12 +998,18 @@ pub fn editor_view(
   let page_width = header.page_width;
 
   let inline_math_edit: Signal<Option<crate::editor_positioning::InlineMathEdit>> = signal(None);
+  let image_ctx_env = header.image_ctx.clone();
+  let image_ctx_paste = header.image_ctx.clone();
+  let image_ctx_menu = header.image_ctx.clone();
+  let image_ctx_cap = header.image_ctx.clone();
+  let image_ctx_toast = header.image_ctx.clone();
   let block_env = BlockRenderEnv {
     bridge: bridge.clone(),
     dark_mode,
     layouts: layouts.clone(),
     drag_anchor,
     lightbox,
+    image_ctx: image_ctx_env,
     focused_code_block,
     focused_table_cell,
     table_selection,
@@ -2060,7 +2071,7 @@ pub fn editor_view(
               focused_table_cell.set(None);
               table_selection.set(None);
               empty_ime_sink(&st_paste, sink_value);
-              handle_clipboard_paste(p, &br_paste, slash, ai_enabled);
+              handle_clipboard_paste(p, &br_paste, &image_ctx_paste, slash, ai_enabled);
               br_paste.request_focus();
             }),
         )
@@ -2371,7 +2382,19 @@ pub fn editor_view(
           },
         ))
     })
-    .child(render_lightbox_modal(lightbox, b_lightbox, dark_mode))
+    .child(render_lightbox_modal(lightbox, b_lightbox.clone(), dark_mode))
+    .child(crate::image_blocks::render_image_context_menu_overlay(
+      image_ctx_menu,
+      b_lightbox.clone(),
+      lightbox,
+      dark_mode,
+    ))
+    .child(crate::image_blocks::render_image_caption_modal(
+      image_ctx_cap,
+      b_lightbox,
+      dark_mode,
+    ))
+    .child(crate::image_blocks::render_image_toast(image_ctx_toast, dark_mode))
 }
 
 #[derive(Clone, Copy)]
@@ -2550,7 +2573,8 @@ fn try_backspace_to_title(
 /// 4. Falls through to Markdown / rich HTML paste (`bridge.paste_clipboard`).
 fn handle_clipboard_paste(
   p: &PasteEvent,
-  bridge: &MicaDocumentBridge,
+  bridge: &Rc<MicaDocumentBridge>,
+  image_ctx: &crate::image_blocks::ImageContext,
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
 ) {
@@ -2563,19 +2587,30 @@ fn handle_clipboard_paste(
   let is_data_table_html = !html.is_empty()
     && crate::clipboard_platform::clipboard_html_is_data_table(&html);
 
-  // 1. Pasted image bytes (screenshot / copy image from browser or app)
+  // 1. Pasted image bytes (screenshot / copy image from browser or app):
+  //    uploads to cloud storage (getting `file_id`) when signed in, or stores in
+  //    Desktop local CAS, matching `v0.14.11`.
   if !is_data_table_html && !p.files.is_empty() {
     let mut inserted_any = false;
     for f in &p.files {
-      if let Some(uri) = crate::clipboard_platform::persist_pasted_image(&f.data, &f.mime, &f.name) {
-        let alt = std::path::Path::new(&f.name)
-          .file_stem()
-          .and_then(|s| s.to_str())
-          .filter(|s| !s.is_empty() && *s != "image")
-          .unwrap_or("");
-        bridge.insert_custom_block("image", alt, Some(&uri));
-        inserted_any = true;
+      if f.data.is_empty() {
+        continue;
       }
+      let alt = std::path::Path::new(&f.name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty() && *s != "image")
+        .unwrap_or("")
+        .to_string();
+      crate::image_blocks::insert_image_from_bytes(
+        bridge.clone(),
+        image_ctx.clone(),
+        f.data.clone(),
+        f.name.clone(),
+        f.mime.clone(),
+        alt,
+      );
+      inserted_any = true;
     }
     if inserted_any {
       sync_slash_palette_from_caret(bridge, slash, ai_enabled);
@@ -2588,6 +2623,28 @@ fn handle_clipboard_paste(
     let mut inserted_any = false;
     for u in &p.uris {
       if let Some((uri, alt)) = crate::clipboard_platform::image_uri_from_pasted_file_uri(u) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = crate::clipboard_platform::file_uri_to_local_path(&uri)
+          && let Ok(bytes) = std::fs::read(&path)
+          && !bytes.is_empty()
+        {
+          let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image.png")
+            .to_string();
+          let mime = crate::clipboard_platform::mime_for_image(&bytes, &name).to_string();
+          crate::image_blocks::insert_image_from_bytes(
+            bridge.clone(),
+            image_ctx.clone(),
+            bytes,
+            name,
+            mime,
+            alt,
+          );
+          inserted_any = true;
+          continue;
+        }
         bridge.insert_custom_block("image", &alt, Some(&uri));
         inserted_any = true;
       }
@@ -2598,7 +2655,15 @@ fn handle_clipboard_paste(
     }
   }
 
-  // 3. Markdown / rich HTML / plain text paste
+  // 3. Same-workspace Mica blob URL: reuse `file_id` directly.
+  if html.is_empty()
+    && crate::image_blocks::try_handle_pasted_image_url(&p.text, bridge, image_ctx)
+  {
+    sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+    return;
+  }
+
+  // 4. Markdown / rich HTML / plain text paste
   if !p.text.is_empty() || !html.is_empty() {
     bridge.paste_clipboard(&p.text, &html, false);
     sync_slash_palette_from_caret(bridge, slash, ai_enabled);
@@ -2617,6 +2682,7 @@ fn handle_editor_key(
   link_draft: Signal<String>,
   on_inline_ai: &Rc<dyn Fn(String)>,
   on_insert_image: &Rc<dyn Fn()>,
+  image_ctx: &crate::image_blocks::ImageContext,
   show_page_title: Signal<bool>,
   page_title: Signal<String>,
   title_ref: ElementRef,
@@ -2685,6 +2751,11 @@ fn handle_editor_key(
       }
     }
     EditorKeyAction::Backspace => {
+      if let Some((img_idx, _, _)) = crate::image_blocks::selected_single_image_block(bridge, image_ctx) {
+        bridge.delete_block_and_focus_neighbor(img_idx);
+        sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+        return;
+      }
       if try_backspace_to_title(
         bridge,
         show_page_title,
@@ -2699,6 +2770,11 @@ fn handle_editor_key(
       sync_slash_palette_from_caret(bridge, slash, ai_enabled);
     }
     EditorKeyAction::Delete => {
+      if let Some((img_idx, _, _)) = crate::image_blocks::selected_single_image_block(bridge, image_ctx) {
+        bridge.delete_block_and_focus_neighbor(img_idx);
+        sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+        return;
+      }
       if let Some(sel) = bridge.selection()
         && sel.is_collapsed()
         && let Some(blk) = bridge.block_at(sel.focus_pos().node)
@@ -2735,12 +2811,25 @@ fn handle_editor_key(
       bridge.select_all();
     }
     EditorKeyAction::Copy => {
-      if let Some(payload) = bridge.copy_selection() {
+      if let Some((_, _, resolved)) = crate::image_blocks::selected_single_image_block(bridge, image_ctx) {
+        let ctx_cp = image_ctx.clone();
+        spawn(async move {
+          let _ = crate::image_blocks::copy_resolved_image_bitmap(&resolved, &ctx_cp).await;
+        });
+        return;
+      }
+      let img_urls = crate::image_blocks::build_document_image_urls(bridge, image_ctx);
+      if let Some(payload) = bridge.copy_selection_with_images(img_urls) {
         write_rich_clipboard(payload);
       }
     }
     EditorKeyAction::Cut => {
-      if let Some(payload) = bridge.cut_selection() {
+      if let Some((_, bid, resolved)) = crate::image_blocks::selected_single_image_block(bridge, image_ctx) {
+        crate::image_blocks::cut_image_block(bridge.clone(), bid, resolved, image_ctx.clone());
+        return;
+      }
+      let img_urls = crate::image_blocks::build_document_image_urls(bridge, image_ctx);
+      if let Some(payload) = bridge.cut_selection_with_images(img_urls) {
         write_rich_clipboard(payload);
       }
     }

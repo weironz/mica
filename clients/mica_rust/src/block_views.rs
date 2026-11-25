@@ -90,7 +90,7 @@ pub struct CodeAiCallback(pub Rc<dyn Fn(CodeAiAction, usize, String)>);
 #[derive(Clone, Debug, PartialEq)]
 pub enum LightboxContent {
   Mermaid { block_index: usize, source: String },
-  Image { url: String, alt: String },
+  Image { url: String, alt: String, natural_size: Option<(f32, f32)> },
 }
 
 /// Rectangular multi-cell selection inside a table block: `(block_id, anchor, focus)`.
@@ -104,6 +104,7 @@ pub struct BlockRenderEnv {
   pub layouts: Rc<RefCell<VisibleLayoutCache>>,
   pub drag_anchor: Signal<Option<DocPosition>>,
   pub lightbox: Signal<Option<LightboxContent>>,
+  pub image_ctx: crate::image_blocks::ImageContext,
   pub focused_code_block: Signal<Option<String>>,
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
   pub table_selection: Signal<Option<TableCellSelection>>,
@@ -3012,121 +3013,10 @@ fn render_math_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
     }))
 }
 
-// ── 6. Image Block (Inline Preview + Click-to-Zoom Lightbox + Alignment) ─────
+// ── 6. Image Block (Delegated to `crate::image_blocks`) ──────────────────────
 
 fn render_image_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
-  let dark_mode = env.dark_mode;
-  let bridge = env.bridge.clone();
-  let lightbox = env.lightbox;
-  let hovered = signal(false);
-
-  let url = block
-    .data
-    .get("url")
-    .and_then(Value::as_str)
-    .or_else(|| block.data.get("src").and_then(Value::as_str))
-    .unwrap_or("")
-    .trim()
-    .to_string();
-  let alt = block.text.clone();
-  let align = block.data.get("align").and_then(Value::as_str).unwrap_or("left").to_string();
-  let width_px = block.data.get("width").and_then(Value::as_f64).map(|v| (v as f32).clamp(120.0, 960.0));
-
-  let url_zoom = url.clone();
-  let alt_zoom = alt.clone();
-  let alt_cap = alt.clone();
-  let br_al = bridge.clone();
-  let br_ac = bridge.clone();
-  let br_ar = bridge.clone();
-  let br_del = bridge.clone();
-
-  let mut outer = view()
-    .test_id("node-view-image")
-    .w_full()
-    .my_2()
-    .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
-    .on_mouse_leave(move |_: &MouseEvent| hovered.set(false));
-  outer = match align.as_str() {
-    "center" => outer.items_center(),
-    "right" => outer.items_end(),
-    _ => outer.items_start(),
-  };
-
-  let mut card = view()
-    .relative()
-    .rounded(px(8.0))
-    .overflow_hidden()
-    .border_1()
-    .border_color(move || palette(dark_mode.get()).border_subtle)
-    .bg(move || palette(dark_mode.get()).surface_raised);
-  if let Some(w) = width_px {
-    card = card.w(px(w));
-  } else {
-    card = card.max_w(relative(1.0));
-  }
-
-  let body: AnyElement = if url.is_empty() {
-    view()
-      .w(px(360.0))
-      .h(px(120.0))
-      .items_center()
-      .justify_center()
-      .child(text("图片地址为空").text_size(px(13.0)).text_color(move || palette(dark_mode.get()).text_muted))
-      .into_element()
-  } else {
-    let (disp_w, disp_h) = compute_image_display_size(&url, width_px);
-    button()
-      .test_id("image-preview-btn")
-      .accessibility_label("点击放大查看图片")
-      .cursor(Cursor::ZoomIn)
-      .on_press(move || {
-        lightbox.set(Some(LightboxContent::Image {
-          url: url_zoom.clone(),
-          alt: alt_zoom.clone(),
-        }));
-      })
-      .child(
-        image(ImageSrc::from(url.clone()))
-          .w(px(disp_w))
-          .h(px(disp_h)),
-      )
-      .into_element()
-  };
-
-  outer
-    .child(
-      card
-        .child(body)
-        .child(when(move || hovered.get(), move || {
-          let (b1, b2, b3, b4) = (br_al.clone(), br_ac.clone(), br_ar.clone(), br_del.clone());
-          view()
-            .absolute()
-            .top(px(8.0))
-            .right(px(8.0))
-            .z_index(20)
-            .flex_row()
-            .items_center()
-            .gap(px(4.0))
-            .p_1()
-            .rounded(px(6.0))
-            .bg(move || palette(dark_mode.get()).surface_overlay)
-            .border_1()
-            .border_color(move || palette(dark_mode.get()).border_normal)
-            .child(mini_chip("左", dark_mode, move || b1.update_block_data_attr_at(live_index(at), "align", Value::String("left".into()))))
-            .child(mini_chip("中", dark_mode, move || b2.update_block_data_attr_at(live_index(at), "align", Value::String("center".into()))))
-            .child(mini_chip("右", dark_mode, move || b3.update_block_data_attr_at(live_index(at), "align", Value::String("right".into()))))
-            .child(mini_chip("删除", dark_mode, move || b4.delete_block_at(live_index(at))))
-        })),
-    )
-    .child(when(move || !alt_cap.trim().is_empty(), {
-      let ac = alt.clone();
-      move || {
-        text(ac.clone())
-          .pt_1()
-          .text_size(px(12.0))
-          .text_color(move || palette(dark_mode.get()).text_muted)
-      }
-    }))
+  crate::image_blocks::render_image_block_view(env, at, block)
 }
 
 fn mini_chip(label: &'static str, dark_mode: Signal<bool>, on_press: impl Fn() + 'static) -> impl IntoElement {
@@ -3140,22 +3030,6 @@ fn mini_chip(label: &'static str, dark_mode: Signal<bool>, on_press: impl Fn() +
 }
 
 // ── 7. Table Block (Content-Adaptive Columns + Free Multi-Cell Drag Select) ──
-
-fn compute_image_display_size(url: &str, explicit_w: Option<f32>) -> (f32, f32) {
-  let max_w = explicit_w.unwrap_or(680.0).clamp(120.0, 960.0);
-  let max_h = 480.0_f32;
-  if let Some((nw, nh)) = crate::clipboard_platform::probe_local_image_dimensions(url) {
-    let fw = nw as f32;
-    let fh = nh as f32;
-    if let Some(w) = explicit_w {
-      let h = (w * fh / fw.max(1.0)).clamp(64.0, 960.0);
-      return (w, h);
-    }
-    let scale = (max_w / fw).min(max_h / fh).min(1.0);
-    return ((fw * scale).clamp(80.0, max_w), (fh * scale).clamp(60.0, max_h));
-  }
-  (explicit_w.unwrap_or(560.0), 300.0)
-}
 
 // ── 8. Divider Block ─────────────────────────────────────────────────────────
 
@@ -3490,12 +3364,28 @@ pub fn render_lightbox_modal(
                   }))
                   .into_element()
               }
-              LightboxContent::Image { url, alt } => {
-                let (bw, bh) = (780.0_f32, 500.0_f32);
-                base_size.set((bw, bh));
+              LightboxContent::Image { url, alt, natural_size } => {
+                let fit_box = |nat: Option<(f32, f32)>| -> (f32, f32) {
+                  if let Some((nw, nh)) = nat
+                    && nw > 1.0
+                    && nh > 1.0
+                  {
+                    let scale = (860.0 / nw).min(560.0 / nh).min(1.0);
+                    return ((nw * scale).max(80.0), (nh * scale).max(60.0));
+                  }
+                  (780.0, 500.0)
+                };
+                base_size.set(fit_box(natural_size));
                 let img_el = image(ImageSrc::from(url))
-                  .w(move || px(bw * zoom.get()))
-                  .h(move || px(bh * zoom.get()))
+                  .w(move || px(base_size.get().0 * zoom.get()))
+                  .h(move || px(base_size.get().1 * zoom.get()))
+                  .on_load(move |sz: &nsh_core::geometry::Size<nsh_core::geometry::DevicePixels>| {
+                    let nw = sz.width.0 as f32;
+                    let nh = sz.height.0 as f32;
+                    if nw > 1.0 && nh > 1.0 {
+                      base_size.set(fit_box(Some((nw, nh))));
+                    }
+                  })
                   .into_element();
                 view()
                   .flex_1()

@@ -181,6 +181,96 @@ pub struct CloudGraphPayload {
   pub unlinked: i64,
 }
 
+/// Metadata returned by image upload / URL import endpoints.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadedFile {
+  pub file_id: String,
+  pub name: String,
+  pub download_url: String,
+}
+
+/// Compute lowercase hex SHA-256 of `bytes` (matches server `/files/presign`
+/// `content_hash` and desktop CAS filenames).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+  use sha2::{Digest, Sha256};
+  let digest = Sha256::digest(bytes);
+  let mut out = String::with_capacity(64);
+  for b in digest {
+    use std::fmt::Write as _;
+    let _ = write!(&mut out, "{b:02x}");
+  }
+  out
+}
+
+/// Build the stable, never-expiring Mica blob URL for `(origin, workspace_id, file_id, name)`.
+///
+/// Matches server route `GET /api/workspaces/{ws}/files/{file_id}/blob[/{name}]`
+/// (`crates/api-server/src/routes/files.rs`): unauthenticated capability URL
+/// that 302-redirects to a freshly-signed storage URL on every request.
+pub fn build_file_blob_url(
+  origin: &str,
+  workspace_id: Uuid,
+  file_id: &str,
+  name: Option<&str>,
+) -> String {
+  let base = origin.trim().trim_end_matches('/');
+  let fid = file_id.trim();
+  let clean_name = name
+    .map(str::trim)
+    .filter(|s| !s.is_empty() && !s.contains('/') && !s.contains('\\') && !s.contains('?') && !s.contains('#'));
+  match clean_name {
+    Some(n) => format!(
+      "{base}/api/workspaces/{workspace_id}/files/{fid}/blob/{}",
+      percent_encode_path_segment(n)
+    ),
+    None => format!("{base}/api/workspaces/{workspace_id}/files/{fid}/blob"),
+  }
+}
+
+/// Parse a Mica blob link (`<origin>/api/workspaces/<ws>/files/<file_id>/blob[/<name>]`)
+/// belonging to `origin`. Used so pasting a Mica blob link from the same
+/// workspace reuses its `file_id` instead of re-uploading duplicate bytes.
+pub fn parse_mica_blob_link(url: &str, origin: &str) -> Option<(Uuid, String, Option<String>)> {
+  let base = origin.trim().trim_end_matches('/');
+  if base.is_empty() {
+    return None;
+  }
+  let stripped = url.trim().strip_prefix(base)?;
+  let path = stripped.split(['?', '#']).next()?;
+  let rest = path.strip_prefix("/api/workspaces/")?;
+  let mut parts = rest.split('/');
+  let ws = Uuid::parse_str(parts.next()?).ok()?;
+  if parts.next()? != "files" {
+    return None;
+  }
+  let file_id = parts.next()?.trim();
+  if file_id.is_empty() || Uuid::parse_str(file_id).is_err() {
+    return None;
+  }
+  if parts.next()? != "blob" {
+    return None;
+  }
+  let name = parts
+    .next()
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .map(str::to_owned);
+  Some((ws, file_id.to_owned(), name))
+}
+
+fn percent_encode_path_segment(seg: &str) -> String {
+  let mut out = String::with_capacity(seg.len());
+  for &b in seg.as_bytes() {
+    if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+      out.push(b as char);
+    } else {
+      use std::fmt::Write as _;
+      let _ = write!(&mut out, "%{b:02X}");
+    }
+  }
+  out
+}
+
 /// Coordinates cloud HTTP auth/health probes, [`ClaimTracker`] ownership
 /// generations, cloud resource APIs, and per-document Sans-I/O [`SyncEngine`]
 /// instances.
@@ -1261,6 +1351,169 @@ impl CloudConnector {
     )
   }
 
+  // ── Cloud Files / Images ────────────────────────────────────────────────
+
+  /// Build the permanent capability blob URL for `file_id` on this connector's server.
+  pub fn file_blob_url(&self, workspace_id: Uuid, file_id: &str, name: Option<&str>) -> String {
+    build_file_blob_url(self.endpoints.base_url(), workspace_id, file_id, name)
+  }
+
+  /// Upload image bytes to `workspace_id` using the server's 3-step presign/PUT/complete
+  /// flow (`POST /files/presign` → `PUT <signed>` → `POST /files/complete`), handling
+  /// SHA-256 deduplication (`existing`) and write-once retry (`HTTP 412`).
+  pub async fn upload_image(
+    &self,
+    workspace_id: Uuid,
+    file_name: &str,
+    mime_type: &str,
+    bytes: &[u8],
+  ) -> Result<UploadedFile, String> {
+    if bytes.is_empty() {
+      return Err("image bytes are empty".to_string());
+    }
+    let clean_name = if file_name.trim().is_empty() {
+      "image.png"
+    } else {
+      file_name.trim()
+    };
+    let hash = sha256_hex(bytes);
+    let presign_raw = self
+      .authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/files/presign"),
+        &json!({
+          "file_name": clean_name,
+          "mime_type": mime_type,
+          "byte_size": bytes.len() as i64,
+          "content_hash": hash,
+        }),
+        API_TIMEOUT_SECS,
+      )
+      .await?;
+    let presign_val: Value =
+      serde_json::from_str(&presign_raw).map_err(|e| format!("invalid presign response: {e}"))?;
+
+    if let Some(existing) = presign_val.get("existing").filter(|v| v.is_object()) {
+      return parse_uploaded_file_value(existing, clean_name);
+    }
+
+    let object_key = presign_val
+      .get("object_key")
+      .and_then(Value::as_str)
+      .ok_or_else(|| "presign response missing object_key".to_string())?;
+    let upload = presign_val
+      .get("upload")
+      .and_then(Value::as_object)
+      .ok_or_else(|| "presign response missing upload details".to_string())?;
+    let upload_url = upload
+      .get("upload_url")
+      .and_then(Value::as_str)
+      .ok_or_else(|| "presign response missing upload_url".to_string())?;
+    let content_type = upload
+      .get("content_type")
+      .and_then(Value::as_str)
+      .unwrap_or(mime_type);
+    let if_none_match = upload
+      .get("if_none_match")
+      .and_then(Value::as_str)
+      .unwrap_or("*");
+    let checksum_sha256 = upload
+      .get("checksum_sha256")
+      .and_then(Value::as_str)
+      .unwrap_or("");
+
+    let mut headers = vec![
+      ("Content-Type", content_type),
+      ("If-None-Match", if_none_match),
+    ];
+    if !checksum_sha256.is_empty() {
+      headers.push(("x-amz-checksum-sha256", checksum_sha256));
+    }
+    let status = put_presigned_bytes(upload_url, &headers, bytes, 60).await?;
+    if !(200..300).contains(&status) && status != 412 {
+      return Err(format!("image storage upload failed (HTTP {status})"));
+    }
+
+    let complete_raw = self
+      .authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/files/complete"),
+        &json!({
+          "object_key": object_key,
+          "file_name": clean_name,
+          "mime_type": mime_type,
+          "byte_size": bytes.len() as i64,
+        }),
+        API_TIMEOUT_SECS,
+      )
+      .await?;
+    let complete_val: Value =
+      serde_json::from_str(&complete_raw).map_err(|e| format!("invalid complete response: {e}"))?;
+    parse_uploaded_file_value(&complete_val, clean_name)
+  }
+
+  /// Re-host an external image URL into `workspace_id` server-side
+  /// (`POST /api/workspaces/{ws}/files/import-url`).
+  pub async fn import_image_url(
+    &self,
+    workspace_id: Uuid,
+    url: &str,
+  ) -> Result<UploadedFile, String> {
+    let trimmed = url.trim();
+    if let Some((ws, file_id, name)) = parse_mica_blob_link(trimmed, self.endpoints.base_url())
+      && ws == workspace_id
+    {
+      return Ok(UploadedFile {
+        file_id: file_id.clone(),
+        name: name.unwrap_or_else(|| "image.png".to_string()),
+        download_url: self.file_blob_url(workspace_id, &file_id, None),
+      });
+    }
+    let raw = self
+      .authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/files/import-url"),
+        &json!({ "url": trimmed }),
+        API_TIMEOUT_SECS,
+      )
+      .await?;
+    let val: Value =
+      serde_json::from_str(&raw).map_err(|e| format!("invalid import-url response: {e}"))?;
+    parse_uploaded_file_value(&val, "image.png")
+  }
+
+  /// Resolve a batch of `file_id`s to fresh signed download URLs
+  /// (`POST /api/workspaces/{ws}/files/resolve`).
+  pub async fn resolve_files(
+    &self,
+    workspace_id: Uuid,
+    file_ids: &[String],
+  ) -> Result<std::collections::HashMap<String, String>, String> {
+    if file_ids.is_empty() {
+      return Ok(std::collections::HashMap::new());
+    }
+    let raw = self
+      .authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/files/resolve"),
+        &json!({ "ids": file_ids }),
+        API_TIMEOUT_SECS,
+      )
+      .await?;
+    let val: Value =
+      serde_json::from_str(&raw).map_err(|e| format!("invalid resolve response: {e}"))?;
+    let mut out = std::collections::HashMap::new();
+    if let Some(arr) = val.get("files").and_then(Value::as_array) {
+      for item in arr {
+        let id = item
+          .get("file")
+          .and_then(|f| f.get("id"))
+          .and_then(Value::as_str);
+        let url = item.get("download_url").and_then(Value::as_str);
+        if let (Some(id), Some(url)) = (id, url) {
+          out.insert(id.to_string(), url.to_string());
+        }
+      }
+    }
+    Ok(out)
+  }
+
   // ── Session & SyncEngine Lifecycle ──────────────────────────────────────
 
   /// Clear stored credentials and advance [`ClaimTracker`] back to [`WorldOrigin::Local`].
@@ -1602,6 +1855,113 @@ async fn send_http(
     timeout_secs,
   )
   .await
+}
+
+fn parse_uploaded_file_value(val: &Value, fallback_name: &str) -> Result<UploadedFile, String> {
+  let file_obj = val.get("file").unwrap_or(val);
+  let file_id = file_obj
+    .get("id")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .ok_or_else(|| "file response missing file.id".to_string())?
+    .to_string();
+  let name = file_obj
+    .get("original_name")
+    .or_else(|| file_obj.get("name"))
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .unwrap_or(fallback_name)
+    .to_string();
+  let download_url = val
+    .get("download_url")
+    .and_then(Value::as_str)
+    .unwrap_or_default()
+    .to_string();
+  Ok(UploadedFile {
+    file_id,
+    name,
+    download_url,
+  })
+}
+
+/// Download raw binary bytes from `url` (supports redirects; returns `(bytes, content_type)`).
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn download_url_bytes(url: &str, timeout_secs: u64) -> Result<(Vec<u8>, String), String> {
+  let url_owned = url.to_string();
+  run_blocking(move || {
+    let agent = shared_http_agent();
+    let timeout = Some(Duration::from_secs(timeout_secs));
+    let mut resp = agent
+      .get(&url_owned)
+      .config()
+      .timeout_global(timeout)
+      .build()
+      .call()
+      .map_err(|e| e.to_string())?;
+    let content_type = resp
+      .headers()
+      .get("content-type")
+      .and_then(|v| v.to_str().ok())
+      .unwrap_or("")
+      .to_string();
+    let bytes = resp
+      .body_mut()
+      .with_config()
+      .limit(50 * 1024 * 1024)
+      .read_to_vec()
+      .map_err(|e| e.to_string())?;
+    Ok((bytes, content_type))
+  })
+  .await
+}
+
+/// Download raw binary bytes from `url` on WebAssembly via `window.fetch`.
+#[cfg(target_arch = "wasm32")]
+pub async fn download_url_bytes(url: &str, timeout_secs: u64) -> Result<(Vec<u8>, String), String> {
+  crate::web_runtime::fetch_bytes(url, timeout_secs).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn put_presigned_bytes(
+  url: &str,
+  headers_kv: &[(&str, &str)],
+  body: &[u8],
+  timeout_secs: u64,
+) -> Result<u16, String> {
+  let url_owned = url.to_string();
+  let headers_owned: Vec<(String, String)> = headers_kv
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .collect();
+  let body_owned = body.to_vec();
+  run_blocking(move || {
+    let agent = shared_http_agent();
+    let timeout = Some(Duration::from_secs(timeout_secs));
+    let mut req = agent
+      .put(&url_owned)
+      .config()
+      .timeout_global(timeout)
+      .http_status_as_error(false)
+      .build();
+    for (k, v) in &headers_owned {
+      req = req.header(k.as_str(), v.as_str());
+    }
+    let resp = req.send(body_owned.as_slice()).map_err(|e| e.to_string())?;
+    Ok(resp.status().as_u16())
+  })
+  .await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn put_presigned_bytes(
+  url: &str,
+  headers_kv: &[(&str, &str)],
+  body: &[u8],
+  timeout_secs: u64,
+) -> Result<u16, String> {
+  crate::web_runtime::put_presigned_bytes(url, headers_kv, body, timeout_secs).await
 }
 
 fn j_str(v: &Value, key: &str) -> String {
@@ -2523,5 +2883,49 @@ mod tests {
       1,
       "sequential requests to the same host must reuse the pooled Keep-Alive connection"
     );
+  }
+
+  #[test]
+  fn build_and_parse_file_blob_url_round_trip() {
+    let ws = Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap();
+    let fid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let named = build_file_blob_url("https://mica.cloudcele.com/", ws, fid, Some("架构 图.png"));
+    assert_eq!(
+      named,
+      "https://mica.cloudcele.com/api/workspaces/11111111-2222-3333-4444-555555555555/files/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/blob/%E6%9E%B6%E6%9E%84%20%E5%9B%BE.png"
+    );
+    let parsed = parse_mica_blob_link(&named, "https://mica.cloudcele.com").unwrap();
+    assert_eq!(parsed.0, ws);
+    assert_eq!(parsed.1, fid);
+    assert_eq!(parsed.2.as_deref(), Some("%E6%9E%B6%E6%9E%84%20%E5%9B%BE.png"));
+
+    let bare = build_file_blob_url("https://mica.cloudcele.com", ws, fid, None);
+    assert_eq!(
+      bare,
+      "https://mica.cloudcele.com/api/workspaces/11111111-2222-3333-4444-555555555555/files/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/blob"
+    );
+    let parsed_bare = parse_mica_blob_link(&bare, "https://mica.cloudcele.com/").unwrap();
+    assert_eq!(parsed_bare, (ws, fid.to_string(), None));
+
+    assert!(parse_mica_blob_link(&bare, "https://other.example.com").is_none());
+  }
+
+  #[test]
+  fn sha256_hex_and_uploaded_file_parser() {
+    assert_eq!(
+      sha256_hex(b"abc"),
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    let parsed = parse_uploaded_file_value(
+      &json!({
+        "file": { "id": "f-1", "original_name": "diagram.png" },
+        "download_url": "https://cdn.example/f-1"
+      }),
+      "fallback.png",
+    )
+    .unwrap();
+    assert_eq!(parsed.file_id, "f-1");
+    assert_eq!(parsed.name, "diagram.png");
+    assert_eq!(parsed.download_url, "https://cdn.example/f-1");
   }
 }

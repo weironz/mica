@@ -33,7 +33,7 @@ pub fn read_windows_cf_html(expected_text: &str) -> Option<String> {
 
   #[link(name = "kernel32")]
   unsafe extern "system" {
-    fn GlobalLock(h_mem: *mut c_void) -> *const u8;
+    fn GlobalLock(h_mem: *mut c_void) -> *mut c_void;
     fn GlobalUnlock(h_mem: *mut c_void) -> i32;
     fn GlobalSize(h_mem: *mut c_void) -> usize;
   }
@@ -66,7 +66,7 @@ pub fn read_windows_cf_html(expected_text: &str) -> Option<String> {
       if handle.is_null() {
         false
       } else {
-        let ptr = GlobalLock(handle);
+        let ptr = GlobalLock(handle) as *const u8;
         let os_text = if ptr.is_null() {
           None
         } else {
@@ -93,7 +93,7 @@ pub fn read_windows_cf_html(expected_text: &str) -> Option<String> {
       if handle.is_null() {
         None
       } else {
-        let ptr = GlobalLock(handle);
+        let ptr = GlobalLock(handle) as *const u8;
         if ptr.is_null() {
           None
         } else {
@@ -408,7 +408,7 @@ pub fn path_to_file_uri(path: &Path) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn file_uri_to_local_path(uri: &str) -> Option<std::path::PathBuf> {
+pub fn file_uri_to_local_path(uri: &str) -> Option<std::path::PathBuf> {
   let rest = uri.strip_prefix("file://")?;
   let rest = rest.strip_prefix("localhost").unwrap_or(rest);
   let decoded = percent_decode(rest);
@@ -453,8 +453,45 @@ fn hex_val(b: u8) -> Option<u8> {
   }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn encode_base64(bytes: &[u8]) -> String {
+/// Sniff MIME type from image magic bytes, falling back to file extension.
+pub fn mime_for_image(bytes: &[u8], name: &str) -> &'static str {
+  if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+    return "image/png";
+  }
+  if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+    return "image/jpeg";
+  }
+  if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+    return "image/gif";
+  }
+  if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+    return "image/webp";
+  }
+  if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
+    return "image/bmp";
+  }
+  let head = std::str::from_utf8(&bytes[..bytes.len().min(256)]).unwrap_or("");
+  if head.trim_start().starts_with("<svg") || head.contains("<svg ") {
+    return "image/svg+xml";
+  }
+  let lower = name.to_ascii_lowercase();
+  if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+    "image/jpeg"
+  } else if lower.ends_with(".gif") {
+    "image/gif"
+  } else if lower.ends_with(".webp") {
+    "image/webp"
+  } else if lower.ends_with(".bmp") {
+    "image/bmp"
+  } else if lower.ends_with(".svg") {
+    "image/svg+xml"
+  } else {
+    "image/png"
+  }
+}
+
+/// Standard base64 encoder (shared across desktop clipboard & Web `data:` URIs).
+pub fn encode_base64(bytes: &[u8]) -> String {
   const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
   for chunk in bytes.chunks(3) {
@@ -476,6 +513,226 @@ fn encode_base64(bytes: &[u8]) -> String {
     }
   }
   out
+}
+
+/// Standard base64 decoder (ignores ASCII whitespace; used for `data:` URIs).
+pub fn decode_base64(input: &str) -> Option<Vec<u8>> {
+  let clean: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+  if clean.is_empty() || !clean.len().is_multiple_of(4) {
+    return None;
+  }
+  let val = |b: u8| -> Option<u32> {
+    match b {
+      b'A'..=b'Z' => Some((b - b'A') as u32),
+      b'a'..=b'z' => Some((b - b'a' + 26) as u32),
+      b'0'..=b'9' => Some((b - b'0' + 52) as u32),
+      b'+' => Some(62),
+      b'/' => Some(63),
+      _ => None,
+    }
+  };
+  let mut out = Vec::with_capacity(clean.len() / 4 * 3);
+  for chunk in clean.as_chunks::<4>().0 {
+    let a = val(chunk[0])?;
+    let b = val(chunk[1])?;
+    out.push(((a << 2) | (b >> 4)) as u8);
+    if chunk[2] != b'=' {
+      let c = val(chunk[2])?;
+      out.push((((b & 0x0F) << 4) | (c >> 2)) as u8);
+      if chunk[3] != b'=' {
+        let d = val(chunk[3])?;
+        out.push((((c & 0x03) << 6) | d) as u8);
+      }
+    }
+  }
+  Some(out)
+}
+
+/// Parse a `data:<mime>;base64,<payload>` URI into `(mime, decoded_bytes)`.
+pub fn decode_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
+  let rest = uri.trim().strip_prefix("data:")?;
+  let (meta, body) = rest.split_once(',')?;
+  if !meta.ends_with(";base64") {
+    return None;
+  }
+  let mime = meta.strip_suffix(";base64")?.trim();
+  let mime = if mime.is_empty() { "image/png" } else { mime };
+  let bytes = decode_base64(body)?;
+  Some((mime.to_owned(), bytes))
+}
+
+/// Write an encoded raster image onto the system clipboard across all platforms:
+/// - **Windows**: writes BOTH `"PNG"` (alpha-preserving, Chrome/Mica/Feishu)
+///   and `CF_DIB` (32-bit BGRA, WeChat/Paint/Word/PowerPoint) atomically.
+/// - **macOS / Linux**: ensures PNG and delegates to `nsh_core::element::set_clipboard_image`.
+/// - **WebAssembly**: delegates to `nsh_core::element::set_clipboard_image` (`ClipboardItem` + PNG transcode).
+pub fn copy_image_bytes_to_clipboard(bytes: &[u8], mime: &str) -> bool {
+  if bytes.is_empty() {
+    return false;
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    let (png_bytes, dib_bytes) = prepare_windows_clipboard_image(bytes);
+    if write_windows_clipboard_image(png_bytes.as_deref(), dib_bytes.as_deref()) {
+      return true;
+    }
+    if let Some(png) = png_bytes {
+      let uri = format!("data:image/png;base64,{}", encode_base64(&png));
+      nsh_core::element::set_clipboard_image(uri);
+      return true;
+    }
+    let _ = mime;
+    false
+  }
+
+  #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+  {
+    let png = ensure_png_bytes(bytes).unwrap_or_else(|| bytes.to_vec());
+    let resolved_mime = if png.starts_with(b"\x89PNG\r\n\x1a\n") {
+      "image/png"
+    } else {
+      mime
+    };
+    let uri = format!("data:{resolved_mime};base64,{}", encode_base64(&png));
+    nsh_core::element::set_clipboard_image(uri);
+    true
+  }
+
+  #[cfg(target_arch = "wasm32")]
+  {
+    let resolved_mime = if mime.starts_with("image/") {
+      mime
+    } else {
+      mime_for_image(bytes, "")
+    };
+    let uri = format!("data:{resolved_mime};base64,{}", encode_base64(bytes));
+    nsh_core::element::set_clipboard_image(uri);
+    true
+  }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn ensure_png_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+  if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+    return Some(bytes.to_vec());
+  }
+  let decoded = image::load_from_memory(bytes).ok()?;
+  let mut buf = std::io::Cursor::new(Vec::new());
+  decoded.write_to(&mut buf, image::ImageFormat::Png).ok()?;
+  Some(buf.into_inner())
+}
+
+#[cfg(target_os = "windows")]
+fn prepare_windows_clipboard_image(bytes: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+  let png_out = ensure_png_bytes(bytes);
+  let dib_out = image::load_from_memory(bytes).ok().map(|img| {
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let pixel_bytes = (w as usize) * (h as usize) * 4;
+    let mut dib = Vec::with_capacity(40 + pixel_bytes);
+    // BITMAPINFOHEADER (40 bytes)
+    dib.extend_from_slice(&40u32.to_le_bytes()); // biSize
+    dib.extend_from_slice(&(w as i32).to_le_bytes()); // biWidth
+    dib.extend_from_slice(&(h as i32).to_le_bytes()); // biHeight (positive = bottom-up)
+    dib.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
+    dib.extend_from_slice(&32u16.to_le_bytes()); // biBitCount (BGRA)
+    dib.extend_from_slice(&0u32.to_le_bytes()); // biCompression = BI_RGB
+    dib.extend_from_slice(&(pixel_bytes as u32).to_le_bytes()); // biSizeImage
+    dib.extend_from_slice(&0i32.to_le_bytes()); // biXPelsPerMeter
+    dib.extend_from_slice(&0i32.to_le_bytes()); // biYPelsPerMeter
+    dib.extend_from_slice(&0u32.to_le_bytes()); // biClrUsed
+    dib.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+    for y in (0..h).rev() {
+      for x in 0..w {
+        let p = rgba.get_pixel(x, y).0;
+        dib.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+      }
+    }
+    dib
+  });
+  (png_out, dib_out)
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_clipboard_image(png: Option<&[u8]>, dib: Option<&[u8]>) -> bool {
+  use std::ffi::c_void;
+
+  const CF_DIB: u32 = 8;
+  const GMEM_MOVEABLE: u32 = 0x0002;
+
+  #[link(name = "user32")]
+  unsafe extern "system" {
+    fn RegisterClipboardFormatW(lpsz_format: *const u16) -> u32;
+    fn OpenClipboard(hwnd_new_owner: *mut c_void) -> i32;
+    fn EmptyClipboard() -> i32;
+    fn SetClipboardData(u_format: u32, h_mem: *mut c_void) -> *mut c_void;
+    fn CloseClipboard() -> i32;
+  }
+
+  #[link(name = "kernel32")]
+  unsafe extern "system" {
+    fn GlobalAlloc(u_flags: u32, dw_bytes: usize) -> *mut c_void;
+    fn GlobalLock(h_mem: *mut c_void) -> *mut c_void;
+    fn GlobalUnlock(h_mem: *mut c_void) -> i32;
+    fn GlobalFree(h_mem: *mut c_void) -> *mut c_void;
+  }
+
+  if png.is_none() && dib.is_none() {
+    return false;
+  }
+
+  let png_name: Vec<u16> = "PNG".encode_utf16().chain(std::iter::once(0)).collect();
+  unsafe {
+    let png_fmt = RegisterClipboardFormatW(png_name.as_ptr());
+    let mut opened = false;
+    for _ in 0..8 {
+      if OpenClipboard(std::ptr::null_mut()) != 0 {
+        opened = true;
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    if !opened {
+      return false;
+    }
+    if EmptyClipboard() == 0 {
+      let _ = CloseClipboard();
+      return false;
+    }
+
+    let put_fmt = |fmt: u32, data: &[u8]| -> bool {
+      if fmt == 0 || data.is_empty() {
+        return false;
+      }
+      let h = GlobalAlloc(GMEM_MOVEABLE, data.len());
+      if h.is_null() {
+        return false;
+      }
+      let ptr = GlobalLock(h) as *mut u8;
+      if ptr.is_null() {
+        let _ = GlobalFree(h);
+        return false;
+      }
+      std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+      let _ = GlobalUnlock(h);
+      if SetClipboardData(fmt, h).is_null() {
+        let _ = GlobalFree(h);
+        return false;
+      }
+      true
+    };
+
+    let mut wrote_any = false;
+    if let Some(p) = png {
+      wrote_any |= put_fmt(png_fmt, p);
+    }
+    if let Some(d) = dib {
+      wrote_any |= put_fmt(CF_DIB, d);
+    }
+    let _ = CloseClipboard();
+    wrote_any
+  }
 }
 
 #[cfg(test)]
@@ -524,5 +781,31 @@ mod tests {
       ))
     );
     assert_eq!(image_uri_from_pasted_file_uri("file:///C:/Users/demo/notes.txt"), None);
+  }
+
+  #[test]
+  fn base64_and_data_uri_round_trip() {
+    let raw = b"\x89PNG\r\n\x1a\nhello-mica-image";
+    let b64 = encode_base64(raw);
+    assert_eq!(decode_base64(&b64).as_deref(), Some(raw.as_slice()));
+    let uri = format!("data:image/png;base64,{b64}");
+    let (mime, decoded) = decode_data_uri(&uri).expect("decode data uri");
+    assert_eq!(mime, "image/png");
+    assert_eq!(decoded, raw);
+  }
+
+  #[cfg(target_os = "windows")]
+  #[test]
+  fn windows_clipboard_image_prepares_both_png_and_dib() {
+    let img = image::RgbaImage::from_pixel(2, 2, image::Rgba([0x10, 0x20, 0x30, 0xFF]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let (out_png, out_dib) = prepare_windows_clipboard_image(png.get_ref());
+    assert!(out_png.as_ref().is_some_and(|b| b.starts_with(b"\x89PNG\r\n\x1a\n")));
+    let dib = out_dib.expect("CF_DIB bytes");
+    // 40-byte BITMAPINFOHEADER + 2*2*4 BGRA pixels
+    assert_eq!(dib.len(), 40 + 16);
+    assert_eq!(&dib[0..4], &40u32.to_le_bytes());
+    assert_eq!(&dib[40..44], &[0x30, 0x20, 0x10, 0xFF]);
   }
 }

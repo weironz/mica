@@ -1052,6 +1052,111 @@ impl MicaDocumentBridge {
     }
   }
 
+  pub fn insert_image_block(
+    &self,
+    file_id: Option<String>,
+    url: Option<String>,
+    name: Option<String>,
+    alt: &str,
+  ) {
+    self.dispatch(EditorCommand::InsertImage {
+      file_id,
+      url,
+      name,
+      alt: alt.to_owned(),
+      align: Some("left".to_owned()),
+    });
+  }
+
+  /// Replaces an existing image block's source (`file_id` / `url` / `name`) by
+  /// its stable block `id`, preserving `width`, `align`, and `caption` — used
+  /// after async upload, replace-from-file, or external-URL re-hosting.
+  pub fn set_image_source_by_id(
+    &self,
+    block_id: &str,
+    file_id: Option<String>,
+    url: Option<String>,
+    name: Option<String>,
+  ) -> bool {
+    let idx = {
+      let sess = self.session.borrow();
+      sess.blocks().iter().position(|b| b.id == block_id && b.kind == "image")
+    };
+    let Some(block_index) = idx else {
+      return false;
+    };
+    let Some(block) = self.block_at(block_index) else {
+      return false;
+    };
+    let mut map = match block.data {
+      Value::Object(m) => m,
+      _ => Map::new(),
+    };
+    match file_id {
+      Some(fid) if !fid.trim().is_empty() => {
+        map.insert("file_id".to_owned(), Value::String(fid));
+        map.remove("url");
+        map.remove("src");
+      }
+      _ => {
+        map.remove("file_id");
+      }
+    }
+    if let Some(u) = url.filter(|s| !s.trim().is_empty()) {
+      map.insert("url".to_owned(), Value::String(u));
+    }
+    if let Some(n) = name.filter(|s| !s.trim().is_empty()) {
+      map.insert("name".to_owned(), Value::String(n));
+    }
+    let next_data = if map.is_empty() { Value::Null } else { Value::Object(map) };
+    let prev_sel = self.selection();
+    let _ = self.dispatch_inner(
+      EditorCommand::SetSelection {
+        selection: Some(DocSelection::caret(block_index, 0)),
+      },
+      false,
+      None,
+    );
+    self.dispatch_inner(
+      EditorCommand::TransformBlock {
+        kind: "image".to_owned(),
+        data: Some(next_data),
+      },
+      true,
+      None,
+    );
+    if let Some(sel) = prev_sel {
+      let _ = self.dispatch_inner(
+        EditorCommand::SetSelection { selection: Some(sel) },
+        false,
+        None,
+      );
+    }
+    true
+  }
+
+  /// Collects all `(file_id, name)` pairs referenced by `image` blocks in the
+  /// current document so selection copy/cut can resolve permanent `/blob` URLs.
+  pub fn document_image_file_ids(&self) -> Vec<(String, Option<String>)> {
+    let sess = self.session.borrow();
+    let mut out = Vec::new();
+    for b in sess.blocks() {
+      if b.kind == "image"
+        && let Some(fid) = b.data.get("file_id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+      {
+        let name = b
+          .data
+          .get("name")
+          .and_then(Value::as_str)
+          .map(str::trim)
+          .filter(|s| !s.is_empty())
+          .map(str::to_owned);
+        out.push((fid.to_owned(), name));
+      }
+    }
+    out
+  }
+
   pub fn delete_block_at(&self, block_index: usize) {
     self.delete_block_range(block_index, block_index);
   }
@@ -1282,8 +1387,15 @@ impl MicaDocumentBridge {
   }
 
   pub fn copy_selection(&self) -> Option<ClipboardPayload> {
+    self.copy_selection_with_images(BTreeMap::new())
+  }
+
+  pub fn copy_selection_with_images(
+    &self,
+    image_urls: BTreeMap<String, String>,
+  ) -> Option<ClipboardPayload> {
     let patch = self.dispatch_inner(
-      EditorCommand::CopySelection { image_urls: BTreeMap::new() },
+      EditorCommand::CopySelection { image_urls },
       false,
       None,
     );
@@ -1291,9 +1403,14 @@ impl MicaDocumentBridge {
   }
 
   pub fn cut_selection(&self) -> Option<ClipboardPayload> {
-    let patch = self.dispatch(EditorCommand::CutSelection {
-      image_urls: BTreeMap::new(),
-    });
+    self.cut_selection_with_images(BTreeMap::new())
+  }
+
+  pub fn cut_selection_with_images(
+    &self,
+    image_urls: BTreeMap<String, String>,
+  ) -> Option<ClipboardPayload> {
+    let patch = self.dispatch(EditorCommand::CutSelection { image_urls });
     patch.clipboard_out
   }
 

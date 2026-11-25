@@ -20,6 +20,7 @@ mica-md = { path = "../md-core" }
 mica-sync = { path = "../mica-sync" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
