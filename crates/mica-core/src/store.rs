@@ -1194,13 +1194,15 @@ impl LocalStore {
     // Both ends scoped: the target join is by bare id, and ids are only
     // unique per origin — a cloud mirror page with the same id would
     // otherwise add a second copy of every edge into it.
+    // `CROSS JOIN` keeps `tgt` AFTER `json_each` so SQLite does an `(origin, id)`
+    // PK lookup per link instead of an O(N^2) scan of `local_view`.
     let mut stmt = self.conn.prepare(
       "SELECT src.id, tgt.id
              FROM local_view src
              JOIN doc_snapshot s ON s.doc_id = src.object_id AND s.origin = src.origin
              JOIN json_each(s.link_targets) j
-             JOIN local_view tgt ON tgt.id = j.value AND tgt.trashed = 0
-                 AND tgt.origin = 'local' AND tgt.workspace_id = ?1
+             CROSS JOIN local_view tgt ON tgt.origin = 'local' AND tgt.id = j.value
+                 AND tgt.trashed = 0 AND tgt.workspace_id = ?1
              WHERE src.trashed = 0
                AND src.origin = 'local' AND src.workspace_id = ?1
                AND src.object_type = 'document'
@@ -1291,10 +1293,9 @@ impl LocalStore {
     let Some(state) = state else {
       return Ok(());
     };
-    // Base + logs when they decode; otherwise fall back to the base alone — a
-    // rotted log row must not cost the page the body it still has.
-    let mut projections = derive_projections(doc_id, &state);
-    let folded = contain_yrs_panic(doc_id, || {
+    // Base + logs when they decode; only fall back to base-only projection on
+    // a corrupt log row so the healthy fast path decodes `state` exactly once.
+    let projections = contain_yrs_panic(doc_id, || {
       let mut doc = MicaDoc::from_update(&state)?;
       for (_rid, update) in self.doc_remote_updates(origin, doc_id)? {
         doc.apply_update(&update)?;
@@ -1303,10 +1304,8 @@ impl LocalStore {
         doc.apply_update(&update)?;
       }
       Ok(derive_projections_from_doc(&doc))
-    });
-    if let Ok(folded) = folded {
-      projections = folded;
-    }
+    })
+    .unwrap_or_else(|_| derive_projections(doc_id, &state));
     let text = projections.content_text.unwrap_or_default();
     let links = projections.link_targets.unwrap_or_else(|| "[]".to_string());
     let words = projections.word_count.unwrap_or(0);
@@ -1317,6 +1316,27 @@ impl LocalStore {
       params![origin, doc_id, text, links, words, chars],
     )?;
     Ok(())
+  }
+
+  /// Run `body` inside a SQLite `SAVEPOINT` so bulk reindex loops coalesce into
+  /// a single disk transaction instead of one fsync per document.
+  pub(crate) fn with_savepoint<F>(&self, name: &str, body: F) -> Result<(), StoreError>
+  where
+    F: FnOnce() -> Result<(), StoreError>,
+  {
+    self.conn.execute_batch(&format!("SAVEPOINT {name};"))?;
+    match body() {
+      Ok(()) => {
+        self.conn.execute_batch(&format!("RELEASE SAVEPOINT {name};"))?;
+        Ok(())
+      }
+      Err(err) => {
+        let _ = self
+          .conn
+          .execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}; RELEASE SAVEPOINT {name};"));
+        Err(err)
+      }
+    }
   }
 
   /// Bring every STALE projection in one workspace up to date, before a reader
@@ -1342,10 +1362,15 @@ impl LocalStore {
       })?
       .collect::<Result<_, _>>()?;
     drop(stmt);
-    for (row_origin, doc_id) in stale {
-      self.reindex_doc(&row_origin, &doc_id)?;
+    if stale.is_empty() {
+      return Ok(());
     }
-    Ok(())
+    self.with_savepoint("mica_refresh_ws_proj", || {
+      for (row_origin, doc_id) in stale {
+        self.reindex_doc(&row_origin, &doc_id)?;
+      }
+      Ok(())
+    })
   }
 
   pub fn save_doc(&self, origin: &str, doc_id: &str, doc: &MicaDoc) -> Result<(), StoreError> {

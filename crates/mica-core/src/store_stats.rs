@@ -130,10 +130,15 @@ impl LocalStore {
       .query_map(params![origin], |r| r.get::<_, String>(0))?
       .collect::<Result<_, _>>()?;
     drop(stmt);
-    for doc_id in pending {
-      self.reindex_doc(origin, &doc_id)?;
+    if pending.is_empty() {
+      return Ok(());
     }
-    Ok(())
+    self.with_savepoint("mica_refresh_stats_proj", || {
+      for doc_id in pending {
+        self.reindex_doc(origin, &doc_id)?;
+      }
+      Ok(())
+    })
   }
 
   /// Approximate SQLite database size in bytes (`page_count * page_size`).
@@ -217,14 +222,17 @@ impl LocalStore {
     drop(agg_stmt);
 
     // 3. Per-workspace link edges & linked-node sets (same contract as `graph_local`).
+    // `CROSS JOIN` pins `local_view tgt` AFTER `json_each(s.link_targets)` so SQLite
+    // uses the `(origin, id)` PK point lookup instead of reordering `tgt` ahead of
+    // the table-valued function into an O(N^2) Cartesian scan on large vaults.
     let mut edge_stmt = self.conn.prepare(
       "SELECT src.workspace_id, src.id, tgt.id
        FROM local_view src
        JOIN doc_snapshot s ON s.doc_id = src.object_id AND s.origin = src.origin
        JOIN json_each(s.link_targets) j
-       JOIN local_view tgt ON tgt.id = j.value
+       CROSS JOIN local_view tgt ON tgt.origin = src.origin
+           AND tgt.id = j.value
            AND tgt.trashed = 0
-           AND tgt.origin = src.origin
            AND tgt.workspace_id = src.workspace_id
            AND tgt.object_type <> 'folder'
        WHERE src.trashed = 0
@@ -660,5 +668,67 @@ mod tests {
       .unwrap();
     assert_eq!(incl.totals.pages_created, 2);
     assert_eq!(incl.totals.words_added, 900);
+  }
+
+  #[test]
+  fn edge_queries_pin_target_lookup_after_json_each_for_pk_point_probe() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let queries = [
+      (
+        "usage_overview_edges",
+        "EXPLAIN QUERY PLAN
+         SELECT src.workspace_id, src.id, tgt.id
+         FROM local_view src
+         JOIN doc_snapshot s ON s.doc_id = src.object_id AND s.origin = src.origin
+         JOIN json_each(s.link_targets) j
+         CROSS JOIN local_view tgt ON tgt.origin = src.origin
+             AND tgt.id = j.value
+             AND tgt.trashed = 0
+             AND tgt.workspace_id = src.workspace_id
+             AND tgt.object_type <> 'folder'
+         WHERE src.trashed = 0
+           AND src.origin = ?1
+           AND src.object_type <> 'folder'
+           AND s.link_targets IS NOT NULL
+           AND src.id <> j.value",
+      ),
+      (
+        "graph_local_edges",
+        "EXPLAIN QUERY PLAN
+         SELECT src.id, tgt.id
+         FROM local_view src
+         JOIN doc_snapshot s ON s.doc_id = src.object_id AND s.origin = src.origin
+         JOIN json_each(s.link_targets) j
+         CROSS JOIN local_view tgt ON tgt.origin = 'local' AND tgt.id = j.value
+             AND tgt.trashed = 0 AND tgt.workspace_id = ?1
+         WHERE src.trashed = 0
+           AND src.origin = 'local' AND src.workspace_id = ?1
+           AND src.object_type = 'document'
+           AND s.link_targets IS NOT NULL
+           AND src.id <> j.value",
+      ),
+    ];
+    for (label, sql) in queries {
+      let mut stmt = store.conn.prepare(sql).unwrap();
+      let details: Vec<String> = stmt
+        .query_map(params!["local"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+      let j_pos = details
+        .iter()
+        .position(|d| d.contains("VIRTUAL TABLE") || d.contains(" j "))
+        .unwrap_or_else(|| panic!("{label}: expected json_each step in plan: {details:?}"));
+      let tgt_pos = details
+        .iter()
+        .position(|d| d.contains("tgt") && d.contains("origin=? AND id=?"))
+        .unwrap_or_else(|| {
+          panic!("{label}: expected PK (origin=? AND id=?) lookup for tgt in plan: {details:?}")
+        });
+      assert!(
+        tgt_pos > j_pos,
+        "{label}: tgt lookup must stay after json_each to avoid O(N^2) join: {details:?}"
+      );
+    }
   }
 }
