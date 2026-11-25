@@ -817,6 +817,10 @@ fn regression_sidebar_context_menu_new_tab_unclipped_modals_transfer_and_exports
 
   app.wait_for("欢迎使用 Mica").unwrap();
 
+  // Folders default to collapsed on workspace open; expand root folder to interact with its child page.
+  app.press("id:sidebar-row-0").unwrap();
+  app.wait_for("id:sidebar-row-1").unwrap();
+
   // 1. Right-click on the currently active page -> "在新标签页打开"
   //    MUST open a fresh 2nd tab (`doc-tab-1`) instead of silently no-oping!
   app.right_click("id:sidebar-row-1").unwrap();
@@ -1035,4 +1039,105 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
     "Web account menu must hide '切换世界…'"
   );
   assert!(!menu_app.shows("本地工作区"));
+}
+
+#[test]
+fn regression_sidebar_folders_collapse_on_workspace_open_and_table_spacing_is_compact() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. On initial workspace open, sidebar folders start collapsed:
+  //    top-level folder `sidebar-row-0` is visible while its child page `sidebar-row-1` is hidden.
+  app.wait_for("id:sidebar-row-0").unwrap();
+  assert!(
+    !app.shows("id:sidebar-row-1"),
+    "sidebar folders must default to collapsed when opening a workspace"
+  );
+
+  // Expanding the folder reveals its child page.
+  app.press("id:sidebar-row-0").unwrap();
+  app.wait_for("id:sidebar-row-1").unwrap();
+
+  // Re-opening / switching into a workspace resets all folders back to collapsed.
+  app.press("id:workspace-switcher-btn").unwrap();
+  app.wait_for("id:workspace-item-0").unwrap();
+  app.press("id:workspace-item-0").unwrap();
+  app.wait_for("id:sidebar-row-0").unwrap();
+  assert!(
+    !app.shows("id:sidebar-row-1"),
+    "re-opening a workspace must reset sidebar folders to collapsed"
+  );
+
+  // 2. Table vertical spacing matches standard prose spacing and right/bottom `+` bars are slim.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+
+  let mut paste = nsh_core::PasteEvent::default();
+  paste.text = "上文标准段落\n\n| 列A | 列B |\n| --- | --- |\n| 值1 | 值2 |\n\n下文标准段落".into();
+  app.paste("id:mica-editor-ime-sink", &paste).unwrap();
+  app.wait_for("id:node-view-table").unwrap();
+  app.wait_for("上文标准段落").unwrap();
+  app.wait_for("下文标准段落").unwrap();
+  app.wait_for("id:table-cell-1-0-0").unwrap();
+  app.wait_for("id:table-cell-1-1-0").unwrap();
+  app.wait_for("id:table-add-col-bar").unwrap();
+  app.wait_for("id:table-add-row-bar").unwrap();
+
+  let nodes = app.screen().layout_nodes();
+  let top_para = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("block-row-0"))
+    .expect("top prose block")
+    .bounds;
+  let first_cell = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("table-cell-1-0-0"))
+    .expect("table header cell")
+    .bounds;
+  let last_cell = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("table-cell-1-1-0"))
+    .expect("table last row cell")
+    .bounds;
+  let bottom_para = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("block-row-2"))
+    .expect("bottom prose block")
+    .bounds;
+  let right_bar = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("table-add-col-bar"))
+    .expect("right add-column bar")
+    .bounds;
+  let bottom_bar = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("table-add-row-bar"))
+    .expect("bottom add-row bar")
+    .bounds;
+
+  let top_gap = first_cell.origin.y.0 - (top_para.origin.y.0 + top_para.size.height.0);
+  let bottom_gap = bottom_para.origin.y.0 - (last_cell.origin.y.0 + last_cell.size.height.0);
+
+  assert!(
+    (3.0..=10.5).contains(&top_gap),
+    "table top gap ({top_gap}px) must match standard prose spacing (~7px)"
+  );
+  assert!(
+    (4.0..=12.5).contains(&bottom_gap),
+    "table bottom gap ({bottom_gap}px) must stay compact near standard prose spacing (~9px)"
+  );
+  assert!(
+    right_bar.size.width.0 <= 11.0,
+    "right add-col bar width ({}px) should be slim (~10px)",
+    right_bar.size.width.0
+  );
+  assert!(
+    bottom_bar.size.height.0 <= 11.0,
+    "bottom add-row bar height ({}px) should be slim (~10px)",
+    bottom_bar.size.height.0
+  );
 }

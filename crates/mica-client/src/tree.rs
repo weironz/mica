@@ -164,6 +164,16 @@ impl PageTreeModel {
   /// Flatten visible live tree rows in sidebar order (folders/pages sorted by
   /// `position`, then `created_at`, then `name`).
   pub fn visible_rows(&self) -> Vec<TreeRow> {
+    self.flatten_rows(false)
+  }
+
+  /// Flatten ALL live (non-deleted) tree rows in sidebar order, regardless of
+  /// whether ancestor folders are currently collapsed.
+  pub fn all_live_rows(&self) -> Vec<TreeRow> {
+    self.flatten_rows(true)
+  }
+
+  fn flatten_rows(&self, include_collapsed: bool) -> Vec<TreeRow> {
     let mut children_by_parent: HashMap<Option<Uuid>, Vec<&View>> = HashMap::new();
     for v in self.views.values() {
       if v.is_deleted {
@@ -191,7 +201,14 @@ impl PageTreeModel {
 
     let mut out = Vec::new();
     let mut visited = HashSet::new();
-    self.walk(None, 0, &children_by_parent, &mut visited, &mut out);
+    self.walk(
+      None,
+      0,
+      include_collapsed,
+      &children_by_parent,
+      &mut visited,
+      &mut out,
+    );
     out
   }
 
@@ -199,6 +216,7 @@ impl PageTreeModel {
     &self,
     parent: Option<Uuid>,
     depth: usize,
+    include_collapsed: bool,
     children_by_parent: &HashMap<Option<Uuid>, Vec<&View>>,
     visited: &mut HashSet<Uuid>,
     out: &mut Vec<TreeRow>,
@@ -227,8 +245,15 @@ impl PageTreeModel {
         expanded,
         parent_view_id: v.parent_view_id,
       });
-      if expanded {
-        self.walk(Some(v.id), depth + 1, children_by_parent, visited, out);
+      if expanded || (include_collapsed && is_folder) {
+        self.walk(
+          Some(v.id),
+          depth + 1,
+          include_collapsed,
+          children_by_parent,
+          visited,
+          out,
+        );
       }
     }
   }
@@ -301,6 +326,10 @@ mod tests {
     let mut tree = PageTreeModel::new(vec![f1.clone(), f2.clone(), p.clone()]);
 
     assert_eq!(tree.visible_rows().len(), 1);
+    assert!(!tree.visible_rows()[0].expanded);
+    let all = tree.all_live_rows();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[2].view_id, p.id);
     tree.reveal(p.id);
     let rows = tree.visible_rows();
     assert_eq!(rows.len(), 3);

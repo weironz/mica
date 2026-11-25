@@ -777,7 +777,7 @@ fn backlinks_section(props: Rc<RightSidebarProps>) -> impl IntoElement {
         let needle_wiki = format!("[[{}]]", cur_title.trim());
         let tree = props.tree.borrow();
         let docs = props.docs.borrow();
-        for row in tree.visible_rows() {
+        for row in tree.all_live_rows() {
           if row.is_folder || row.object_id == cid {
             continue;
           }

@@ -46,9 +46,14 @@ use crate::{
 };
 
 const LEFT_GUTTER_PX: f32 = 16.0;
-const TOP_GUTTER_PX: f32 = 16.0;
-const RIGHT_ADD_W_PX: f32 = 20.0;
-const BOTTOM_ADD_H_PX: f32 = 18.0;
+const TOP_GUTTER_PX: f32 = 12.0;
+const RIGHT_ADD_GAP_PX: f32 = 3.0;
+const RIGHT_ADD_BAR_W_PX: f32 = 10.0;
+const RIGHT_ADD_W_PX: f32 = RIGHT_ADD_GAP_PX + RIGHT_ADD_BAR_W_PX;
+const BOTTOM_ADD_GAP_PX: f32 = 2.0;
+const BOTTOM_ADD_H_PX: f32 = 10.0;
+const PROSE_STANDARD_MT_PX: f32 = 3.0;
+const PROSE_STANDARD_MB_PX: f32 = 4.0;
 const CELL_FONT_PX: f32 = 13.5;
 const CELL_LINE_H_PX: f32 = 21.0;
 
@@ -444,9 +449,9 @@ pub(crate) fn render_table_block_view(
           .element_ref(&corner_ref)
           .test_id("table-corner-handle")
           .accessibility_label("表格操作菜单")
-          .w(px(16.0))
-          .h(px(16.0))
-          .rounded(px(4.0))
+          .w(px(14.0))
+          .h(px(12.0))
+          .rounded(px(3.0))
           .items_center()
           .justify_center()
           .cursor(Cursor::Pointer)
@@ -495,8 +500,8 @@ pub(crate) fn render_table_block_view(
             .test_id(&format!("table-col-handle-{c}"))
             .accessibility_label(format!("第 {} 列操作", c + 1))
             .w(px(28.0))
-            .h(px(12.0))
-            .rounded(px(4.0))
+            .h(px(10.0))
+            .rounded(px(3.0))
             .items_center()
             .justify_center()
             .cursor(Cursor::Pointer)
@@ -517,7 +522,7 @@ pub(crate) fn render_table_block_view(
             .child(
               view()
                 .w(px(22.0))
-                .h(px(4.0))
+                .h(px(3.5))
                 .rounded(px(2.0))
                 .bg(move || {
                   let p = palette(dark_mode.get());
@@ -771,16 +776,16 @@ pub(crate) fn render_table_block_view(
   }
   rows_col = rows_col.child(resize_layer);
 
-  // Right `+` vertical expand-column bar hugging the right edge of the table grid
+  // Right `+` slim vertical expand-column bar hugging the right edge of the table grid
   let br_add_col = bridge.clone();
   let add_col_hovered = signal(false);
   let right_add_bar = button()
     .test_id("table-add-col-bar")
     .accessibility_label("右侧新增一列")
-    .w(px(16.0))
-    .ml(px(4.0))
+    .w(px(RIGHT_ADD_BAR_W_PX))
+    .ml(px(RIGHT_ADD_GAP_PX))
     .flex_shrink_0()
-    .rounded(px(4.0))
+    .rounded(px(3.0))
     .items_center()
     .justify_center()
     .cursor(Cursor::Pointer)
@@ -810,7 +815,7 @@ pub(crate) fn render_table_block_view(
     })
     .child(
       text("+")
-        .text_size(px(13.0))
+        .text_size(px(10.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(move || palette(dark_mode.get()).text_muted),
     );
@@ -822,13 +827,13 @@ pub(crate) fn render_table_block_view(
     .child(rows_col)
     .child(right_add_bar);
 
-  // ── 3. Bottom `+` horizontal expand-row bar hugging the bottom edge of the grid ──
+  // ── 3. Bottom `+` slim horizontal expand-row bar hugging the bottom edge of the grid ──
   let br_add_row = bridge.clone();
   let add_row_hovered = signal(false);
   let bottom_add_row = view()
     .flex_row()
     .items_center()
-    .mt(px(4.0))
+    .mt(px(BOTTOM_ADD_GAP_PX))
     .h(px(BOTTOM_ADD_H_PX))
     .w(move || px(LEFT_GUTTER_PX + grid_w.get() + RIGHT_ADD_W_PX))
     .child(view().w(px(LEFT_GUTTER_PX)).flex_shrink_0())
@@ -837,9 +842,9 @@ pub(crate) fn render_table_block_view(
         .test_id("table-add-row-bar")
         .accessibility_label("底部新增一行")
         .w(move || px(grid_w.get()))
-        .h(px(16.0))
+        .h(px(BOTTOM_ADD_H_PX))
         .flex_shrink_0()
-        .rounded(px(4.0))
+        .rounded(px(3.0))
         .items_center()
         .justify_center()
         .cursor(Cursor::Pointer)
@@ -869,7 +874,7 @@ pub(crate) fn render_table_block_view(
         })
         .child(
           text("+")
-            .text_size(px(13.0))
+            .text_size(px(10.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(move || palette(dark_mode.get()).text_muted),
         ),
@@ -883,8 +888,12 @@ pub(crate) fn render_table_block_view(
     .child(middle_row)
     .child(bottom_add_row);
 
-  // Horizontal scroll wrapper + proportional horizontal scrollbar (auto-hides when
-  // the table fits inside the viewport, appears immediately when wider than viewport).
+  let needs_hscroll = computed(move || {
+    LEFT_GUTTER_PX + grid_w.get() + RIGHT_ADD_W_PX > viewport_w.get() + 1.0
+  });
+
+  // Horizontal scroll wrapper + proportional horizontal scrollbar (occupies vertical
+  // height only when the table actually overflows the viewport width).
   let scrollable_body = view()
     .w_full()
     .flex_col()
@@ -915,8 +924,8 @@ pub(crate) fn render_table_block_view(
         .w_full()
         .pl(px(LEFT_GUTTER_PX))
         .pr(px(RIGHT_ADD_W_PX))
-        .h(px(10.0))
-        .py(px(2.0)),
+        .h(move || if needs_hscroll.get() { px(8.0) } else { px(1.0) })
+        .py(move || if needs_hscroll.get() { px(1.0) } else { px(0.0) }),
     );
 
   // ── 4. Top-level `overlay()` Menus (Table / Row / Column) ──
@@ -930,7 +939,20 @@ pub(crate) fn render_table_block_view(
     .self_stretch()
     .ml(px(-LEFT_GUTTER_PX))
     .mr(px(-RIGHT_ADD_W_PX))
-    .my_2()
+    .mt(move || {
+      if at.index() == 0 {
+        px(-4.0)
+      } else {
+        px(PROSE_STANDARD_MT_PX - TOP_GUTTER_PX)
+      }
+    })
+    .mb(move || {
+      if needs_hscroll.get() {
+        px(PROSE_STANDARD_MB_PX)
+      } else {
+        px(PROSE_STANDARD_MB_PX - BOTTOM_ADD_GAP_PX - BOTTOM_ADD_H_PX + 1.0)
+      }
+    })
     .on_layout(move |b: &Bounds<Points>| {
       if b.size.width.0 > 120.0 && (viewport_w.get_untracked() - b.size.width.0).abs() > 1.0 {
         viewport_w.set(b.size.width.0);

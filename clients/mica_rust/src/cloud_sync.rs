@@ -432,16 +432,8 @@ impl CloudSessionHandles {
       }
     }
 
-    let mut next_tree = PageTreeModel::new(views.clone());
-    for folder in views
-      .iter()
-      .filter(|r| r.object_type == "folder" && !r.is_deleted && r.parent_view_id.is_none())
-    {
-      next_tree.set_expanded(folder.id, true);
-    }
-    if !fid.is_nil() {
-      next_tree.set_expanded(fid, true);
-    }
+    // Every workspace open / switch starts with all folders collapsed by default.
+    let next_tree = PageTreeModel::new(views.clone());
     *self.tree.borrow_mut() = next_tree;
     *self.docs_store.borrow_mut() = next_docs.clone();
     *self.favorites.borrow_mut() = self.vault.favorites_for(ws_id);

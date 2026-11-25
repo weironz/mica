@@ -873,7 +873,7 @@ pub fn matching_workspaces(
 fn derive_recents_from_tree(tree: &PageTreeModel) -> Vec<SearchRecentItem> {
   let now = Utc::now();
   let mut pages = Vec::new();
-  for row in tree.visible_rows() {
+  for row in tree.all_live_rows() {
     if row.is_folder {
       continue;
     }
@@ -928,28 +928,8 @@ pub fn run_rich_workspace_search(
   }
   let q_lower = q_trimmed.to_lowercase();
 
-  // Traverse ALL live rows including collapsed folders by cloning & expanding everything
-  let mut expanded_tree = tree.clone();
-  for row in tree.visible_rows() {
-    if row.is_folder {
-      expanded_tree.set_expanded(row.view_id, true);
-    }
-  }
-  // Collect all live rows cleanly (also expand nested folders iteratively)
-  loop {
-    let before = expanded_tree.visible_rows();
-    let mut expanded_any = false;
-    for r in &before {
-      if r.is_folder && !r.expanded {
-        expanded_tree.set_expanded(r.view_id, true);
-        expanded_any = true;
-      }
-    }
-    if !expanded_any {
-      break;
-    }
-  }
-  let all_rows = expanded_tree.visible_rows();
+  // Traverse ALL live rows including collapsed folders directly.
+  let all_rows = tree.all_live_rows();
 
   let mut out = Vec::new();
 
@@ -966,7 +946,7 @@ pub fn run_rich_workspace_search(
         is_folder: true,
         title_match: true,
         snippet: String::new(),
-        ancestor_path: ancestor_segments(&expanded_tree, row.view_id, workspace_name),
+        ancestor_path: ancestor_segments(tree, row.view_id, workspace_name),
       });
     }
   }
@@ -1014,7 +994,7 @@ pub fn run_rich_workspace_search(
       is_folder: false,
       title_match,
       snippet,
-      ancestor_path: ancestor_segments(&expanded_tree, view_id, workspace_name),
+      ancestor_path: ancestor_segments(tree, view_id, workspace_name),
     });
   }
 
@@ -1031,7 +1011,7 @@ pub fn run_workspace_search(
     return Vec::new();
   }
   let mut corpus = Vec::new();
-  for row in tree.visible_rows() {
+  for row in tree.all_live_rows() {
     if row.is_folder {
       continue;
     }

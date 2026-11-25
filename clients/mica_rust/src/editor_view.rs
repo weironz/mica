@@ -2555,7 +2555,7 @@ fn handle_clipboard_paste(
   ai_enabled: Signal<bool>,
 ) {
   let html = if p.html.is_empty() {
-    crate::clipboard_platform::read_windows_cf_html().unwrap_or_default()
+    crate::clipboard_platform::read_windows_cf_html(&p.text).unwrap_or_default()
   } else {
     p.html.clone()
   };

@@ -14,8 +14,13 @@ use std::path::Path;
 /// down to the selected HTML fragment. Returns `None` on non-Windows platforms
 /// or when no valid `CF_HTML` payload is on the clipboard.
 #[cfg(target_os = "windows")]
-pub fn read_windows_cf_html() -> Option<String> {
+/// Reads the Windows `CF_HTML` fragment only when the OS clipboard matches the
+/// incoming `PasteEvent`'s plain text (or when `expected_text` is empty), so
+/// synthetic/headless paste events are never hijacked by unrelated host HTML.
+pub fn read_windows_cf_html(expected_text: &str) -> Option<String> {
   use std::ffi::c_void;
+
+  const CF_UNICODETEXT: u32 = 13;
 
   #[link(name = "user32")]
   unsafe extern "system" {
@@ -53,7 +58,37 @@ pub fn read_windows_cf_html() -> Option<String> {
     if !opened {
       return None;
     }
-    let raw_bytes: Option<Vec<u8>> = {
+
+    let text_matches = if expected_text.is_empty() {
+      true
+    } else {
+      let handle = GetClipboardData(CF_UNICODETEXT);
+      if handle.is_null() {
+        false
+      } else {
+        let ptr = GlobalLock(handle);
+        let os_text = if ptr.is_null() {
+          None
+        } else {
+          let size = GlobalSize(handle);
+          let slice = std::slice::from_raw_parts(ptr, size);
+          let u16s: Vec<u16> = slice
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
+            .take_while(|&u| u != 0)
+            .collect();
+          let _ = GlobalUnlock(handle);
+          Some(String::from_utf16_lossy(&u16s))
+        };
+        os_text.is_some_and(|t| t.replace("\r\n", "\n") == expected_text.replace("\r\n", "\n"))
+      }
+    };
+
+    let raw_bytes: Option<Vec<u8>> = if !text_matches {
+      None
+    } else {
       let handle = GetClipboardData(fmt);
       if handle.is_null() {
         None
@@ -83,7 +118,7 @@ pub fn read_windows_cf_html() -> Option<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn read_windows_cf_html() -> Option<String> {
+pub fn read_windows_cf_html(_expected_text: &str) -> Option<String> {
   None
 }
 

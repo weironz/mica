@@ -261,7 +261,7 @@ fn format_version_entries(
 fn collect_all_views(tree: &PageTreeModel) -> (Vec<View>, Vec<View>) {
   let mut live = Vec::new();
   let mut trashed = Vec::new();
-  for row in tree.visible_rows() {
+  for row in tree.all_live_rows() {
     if let Some(v) = tree.get(row.view_id).cloned() {
       live.push(v);
     }
@@ -288,7 +288,7 @@ fn compute_backlinks_for(
     Some(format!("[[{}]]", target_title.trim()))
   };
   let mut out = Vec::new();
-  for row in tree.visible_rows() {
+  for row in tree.all_live_rows() {
     if row.is_folder || row.object_id == target_id {
       continue;
     }
@@ -376,10 +376,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   }
   let docs_store = Rc::new(RefCell::new(docs_map));
 
-  let mut tree_model = PageTreeModel::new(views);
-  if !default_folder_id.is_nil() {
-    tree_model.set_expanded(default_folder_id, true);
-  }
+  // Start every workspace with all sidebar folders collapsed by default.
+  let tree_model = PageTreeModel::new(views);
   let (init_live, init_trashed) = collect_all_views(&tree_model);
   let tree = Rc::new(RefCell::new(tree_model));
 
@@ -1002,7 +1000,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move || {
       let order = favs.borrow();
       let t = tree_ref.borrow();
-      let rows = t.visible_rows();
+      let rows = t.all_live_rows();
       let mut list = Vec::new();
       for fav_id in order.iter() {
         if let Some(r) = rows.iter().find(|r| !r.is_folder && r.object_id == *fav_id) {
@@ -1304,7 +1302,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         return;
       }
       let new_doc_id = Uuid::new_v4();
-      let count = tree_ref.borrow().visible_rows().len() + 1;
+      let count = tree_ref.borrow().all_live_rows().len() + 1;
       let pos = format!("{:010}", count * 10);
       let view_row = make_view(cur_ws, new_doc_id, &name, "page", valid_parent, &pos);
       let _ = v.save_view(&orig, &view_row);
@@ -1335,13 +1333,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let tree_ref = tree.clone();
     let create = create_page_with_content.clone();
     Rc::new(move || {
-      let idx = tree_ref
-        .borrow()
-        .visible_rows()
-        .iter()
-        .filter(|r| !r.is_folder)
-        .count()
-        + 1;
+      let idx = tree_ref.borrow().count_live_pages() + 1;
       create(format!("未命名页面 {idx}"), String::new());
     })
   };
@@ -1354,7 +1346,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move |parent: Option<Uuid>, custom_name: Option<String>| {
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
-      let count = tree_ref.borrow().visible_rows().len() + 1;
+      let count = tree_ref.borrow().all_live_rows().len() + 1;
       let name = custom_name.unwrap_or_else(|| format!("文件夹 {count}"));
       let valid_parent = parent.filter(|&pid| {
         tree_ref
@@ -1423,7 +1415,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             existing
           } else {
             let fid = Uuid::new_v4();
-            let pos = format!("{:010}", (tree_ref.borrow().visible_rows().len() + 1) * 10);
+            let pos = format!("{:010}", (tree_ref.borrow().all_live_rows().len() + 1) * 10);
             let f = make_view(cur_ws, fid, &seg_trim, "folder", parent, &pos);
             let _ = v.save_view(&orig, &f);
             {
@@ -1437,7 +1429,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           parent = Some(fid);
         }
         let doc_id = Uuid::new_v4();
-        let pos = format!("{:010}", (tree_ref.borrow().visible_rows().len() + 1) * 10);
+        let pos = format!("{:010}", (tree_ref.borrow().all_live_rows().len() + 1) * 10);
         let page = make_view(cur_ws, doc_id, &spec.title, "page", parent, &pos);
         let _ = v.save_view(&orig, &page);
         let _ = v.save_markdown(&orig, doc_id, &spec.markdown);
@@ -1721,7 +1713,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       };
       let target_id = tree_ref
         .borrow()
-        .visible_rows()
+        .all_live_rows()
         .into_iter()
         .find(|r| !r.is_folder && r.object_id == doc_id)
         .map(|r| r.view_id);
@@ -1740,7 +1732,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       };
       let target_id = tree_ref
         .borrow()
-        .visible_rows()
+        .all_live_rows()
         .into_iter()
         .find(|r| !r.is_folder && r.object_id == doc_id)
         .map(|r| r.view_id);
@@ -1839,7 +1831,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       } else {
         tree_ref
           .borrow()
-          .visible_rows()
+          .all_live_rows()
           .into_iter()
           .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
           .map(|r| r.name)
@@ -1864,7 +1856,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       } else {
         tree_ref
           .borrow()
-          .visible_rows()
+          .all_live_rows()
           .into_iter()
           .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
           .map(|r| r.name)
@@ -2389,7 +2381,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let create = create_page_in_parent.clone();
       let tree_ref = tree.clone();
       Rc::new(move |folder_id: Uuid| {
-        let idx = tree_ref.borrow().visible_rows().len() + 1;
+        let idx = tree_ref.borrow().count_live_pages() + 1;
         create(Some(folder_id), format!("未命名页面 {idx}"), String::new(), false);
       })
     },
@@ -2481,7 +2473,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         Rc::new(move |doc_id: Uuid| {
           let title = t_c
             .borrow()
-            .visible_rows()
+            .all_live_rows()
             .into_iter()
             .find(|r| !r.is_folder && r.object_id == doc_id)
             .map(|r| r.name)
@@ -3533,7 +3525,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let _rev = tree_rev.get();
       let list = workspaces.get();
       let cur_id = active_workspace_id.get();
-      let cur_pages = tree_ref.borrow().visible_rows().iter().filter(|r| !r.is_folder).count();
+      let cur_pages = tree_ref.borrow().count_live_pages();
       ws_switcher_items.set(
         list
           .into_iter()
@@ -4222,7 +4214,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         Rc::new(move |doc_id: Uuid| {
           let title = tree_graph
             .borrow()
-            .visible_rows()
+            .all_live_rows()
             .into_iter()
             .find(|r| !r.is_folder && r.object_id == doc_id)
             .map(|r| r.name)
@@ -4394,7 +4386,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           .collect();
         let recents: Vec<SearchRecentItem> = ts
           .borrow()
-          .visible_rows()
+          .all_live_rows()
           .into_iter()
           .filter(|r| !r.is_folder)
           .take(6)
@@ -4496,7 +4488,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 }
 
 fn resolve_parent_folder_name(tree: &PageTreeModel, doc_id: Uuid) -> Option<String> {
-  let rows = tree.visible_rows();
+  let rows = tree.all_live_rows();
   let page = rows.iter().find(|r| !r.is_folder && r.object_id == doc_id)?;
   let mut ancestors = Vec::new();
   let mut cursor = page.parent_view_id;
