@@ -93,6 +93,18 @@ bench *args:
 bench-10k:
     cargo run -p mica-bench --release -- --docs 10000 --trace-ops 50000
 
+[doc("Real-protocol WebSocket collaboration load test against a live API server")]
+bench-ws *args:
+    cargo run -p mica-bench --release --bin mica-ws-load -- {{args}}
+
+[doc("Playwright WebAssembly performance gate (cold start, 2k-block scroll FPS, typing, 50 switches)")]
+bench-web *args:
+    node benchmarks/web_perf.mjs {{args}}
+
+[doc("Windows native desktop Keystroke-to-Screen latency probe (Typometer-style BitBlt)")]
+bench-desktop *args:
+    pwsh -File benchmarks/desktop_latency.ps1 {{args}}
+
 # ------------------------------------------------------- local artifacts
 
 [doc("1/4  mica-cli binary for this host -> target/release/")]

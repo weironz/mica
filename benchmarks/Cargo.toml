@@ -9,13 +9,22 @@ publish = false
 name = "mica-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "mica-ws-load"
+path = "src/bin/ws_load.rs"
+
 [dependencies]
+base64 = "0.22"
 chrono.workspace = true
+futures-util.workspace = true
 mica-api-types = { path = "../crates/api-types" }
 mica-board = { path = "../crates/mica-board" }
 mica-client = { path = "../crates/mica-client" }
 mica-core = { path = "../crates/mica-core", features = ["store"] }
 mica-editor = { path = "../crates/mica-editor" }
 mica-md = { path = "../crates/md-core" }
+reqwest.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite = "0.29"
 uuid.workspace = true

@@ -1,48 +1,46 @@
-# Mica Performance Benchmark Suite (`mica-bench`)
+# Mica Performance Benchmark Suite (`benchmarks/`)
 
-独立的纯 Rust（L1 + L2）性能基准与压测套件，零额外第三方依赖，面向长期复测与回归对比。
+Mica 全栈纯 Rust 四件套性能基准与压测体系（零额外外部压测框架依赖），用于跨版本回归门禁、大文档/万篇库/多端协同的定量基线对比。
 
 ## 目录结构
 
 ```text
 benchmarks/
-├── Cargo.toml        # workspace 成员（publish = false），复用主仓依赖
-├── src/main.rs       # 4 大压测套件主程序
-├── baselines/        # 历史 Release 基线快照（Markdown 报告与 NDJSON 原始数据）
-└── README.md         # 使用说明
+├── Cargo.toml                 # workspace 成员 `mica-bench`（publish = false）
+├── src/
+│   ├── main.rs                # 套件 ②：L1+L2 内核 / CRDT 轨迹 / 万篇 SQLite 知识库 / 500 节点白板
+│   └── bin/
+│       └── ws_load.rs         # 套件 ④：真实协议 /ws/ 多人协同服务端压测器 + /metrics 采集
+├── desktop_latency.ps1        # 套件 ①：Windows 原生桌面冷启动 + Typometer 式黑盒 BitBlt 像素延迟探针
+├── web_perf.mjs               # 套件 ③：Playwright + Chromium CDP WebAssembly 自动化性能门禁
+├── serve_web_proxy.mjs        # 本地同源静态 + /api /ws 反向代理（供 web_perf.mjs 复用）
+├── baselines/                 # 历史 Release 基线报告与 NDJSON 原始快照
+└── README.md
 ```
 
-## 覆盖套件
+另配 L3 原生壳无头渲染帧基准：`clients/mica_rust/examples/l3_frame_bench.rs`（可在锁屏或无头 CI 环境下测量 NSH 完整信号+布局+帧提交延迟）。
 
-1. **超长混排文档（默认 2,000 块 / ~302 KiB）**
-   - `parse_markdown`、`session_from_markdown`（CRDT 水合）
-   - 连续打字 `typing_insert_text`、Enter 分块 `split_block`、Backspace 合并 `merge_block`
-   - `undo / redo`（打字撤销重做 + 结构化撤销重做）、页内查找 `in_page_find_all`、Markdown / HTML 导出
-2. **CRDT 编辑轨迹回放 & 双端并发合并**
-   - 内置确定性中英混排拟真轨迹（默认 20,000 步 / 重压 50,000 步），也支持通过 `--trace` 加载外部 `josephg/editing-traces`（如 `automerge-paper.json`）
-   - 统计全周期 p50/p95/p99 延迟、早晚期漂移倍数、yrs 状态膨胀比、冷解码耗时、500 次双端远端合并延迟
-3. **大规模合成知识库（真实磁盘 SQLite Vault）**
-   - 批量入库（默认 1,000 篇 + 100 目录；重压 10,000 篇 + 1,000 目录，含双链与代码块）
-   - 冷启动建树、随机单篇加载、全库搜索（高频/稀有靶点/最坏未命中）、双链图谱、SQLite 使用统计聚合
-4. **大型无限白板 / 思维导图（默认 500 节点）**
-   - 加载、自动布局、SVG 渲染、三方合并、全文检索文本提取
-
-## 常用命令
+## 四件套快捷命令
 
 ```bash
-# 标准基线（2k 块 / 20k 步 / 1k 篇 / 500 节点）
-just bench
+# ① 桌面原生端冷启动与按键到屏幕像素延迟（需解锁后的 Windows 交互式桌面）
+just bench-desktop
+# 无头/CI 环境下测 L3 原生壳渲染帧延迟
+cargo run --manifest-path clients/mica_rust/Cargo.toml --release --example l3_frame_bench --locked
 
-# 万篇重压基线（10k 篇知识库 + 50k 步 CRDT 轨迹）
-just bench-10k
+# ② 纯 Rust L1+L2 内核 + 知识库 + CRDT 轨迹 + 白板
+just bench                                          # 标准基线（2k 块 / 20k 步 / 1k 篇 / 500 节点）
+just bench-10k                                      # 万篇重压（10k 篇 SQLite 库 + 50k 步 CRDT 轨迹）
+just bench --trace path/to/automerge-paper.json     # 回放外部 josephg/editing-traces JSON
+just bench --json > benchmarks/baselines/latest.ndjson
 
-# 自定义规模并输出 NDJSON（便于保存至 baselines/ 或 CI 对比）
-just bench --blocks 2000 --docs 1000 --json > benchmarks/baselines/latest.ndjson
+# ③ WebAssembly 真实浏览器自动化性能门禁（冷启动、2k 块滚动 FPS、打字延迟、50 次切页内存斜率）
+just bench-web --base http://127.0.0.1:18090 --email <email> --password <password>
 
-# 回放外部真实编辑轨迹（josephg/editing-traces JSON 格式）
-just bench --trace path/to/automerge-paper.json
+# ④ 服务端真实协议 WebSocket 协作压测（热点房间 + 多房间并发 + 断网重连风暴 + /metrics）
+just bench-ws --base http://127.0.0.1:18088 --email <email> --password <password>
 ```
 
-## 归档新基线
+## 基线归档规范
 
-重大内核优化或发版前，建议将实测数据与对比结论归档至 `benchmarks/baselines/YYYY-MM-DD-<topic>.md`（必要时附带 `.ndjson` 原始输出），以便跨版本追踪回归。
+重大内核/渲染/同步优化或发版前，将实测结果归档至 `benchmarks/baselines/YYYY-MM-DD-<topic>.md`（必要时附 `.ndjson`），并在 [docs/README.md](../docs/README.md) 的 `performance` 索引中登记。

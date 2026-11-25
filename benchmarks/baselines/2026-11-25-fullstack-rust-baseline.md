@@ -79,3 +79,53 @@
 | --- | ---: |
 | `board_load_and_auto_layout` | 加载 `1.68 ~ 1.74 ms`，自动布局 `2.22 ~ 2.24 ms` |
 | `board_svg_merge_and_search_text` | SVG `3.66 ~ 3.78 ms`（206.9 KiB），三方合并 `5.69 ~ 5.74 ms`，文本提取 `1.28 ~ 1.32 ms` |
+
+---
+
+## 三、套件 ①：Windows 原生桌面端实测（`mica-rust.exe` Release + L3 NSH 壳）
+
+- **进程冷启动就绪（5 次独立临时隔离配置，含 SQLite Vault + CRDT 加载 + 首帧探针 `MICA_STARTUP_PROBE_FILE`）**：
+  - 5 次实测：`330.2 ms`、`250.8 ms`、`293.0 ms`、`247.5 ms`、`281.5 ms` → **中位数 `281.5 ms`**（`min=247.5 ms / max=330.2 ms`）。
+- **L3 原生 UI 壳（NSH 1280×820 Release，`l3_frame_bench`）**：
+  - 首帧挂载 `shell_mount_first_frame`：**`19.24 ms`**。
+  - 短文档 vs 100+ 块虚拟列表连续打字（均含 `nsh-testing::Headless` 单步 ~100 ms 固定 settle 等待）：短文档 `p50=103.33 ms`，100 块文档 `p50=105.69 ms`，Enter 分块 `p50=106.67 ms`，Undo `p50=105.90 ms`，打开大纲 `103.61 ms`——扣除 harness 固定 settle 后单帧重绘计算仅约 `3~6 ms`，且 100 块文档相对短文档几乎零退化（`+2.36 ms`）。
+- **黑盒屏幕像素法（[desktop_latency.ps1](../desktop_latency.ps1)）**：
+  - 本次运行时当前 Windows 桌面处于锁屏/无交互式 DWM 合成状态（`GetForegroundWindow=0`，`PrintWindow` 为纯黑），脚本已自动识别并跳过屏幕像素采样；解锁屏幕后运行 `just bench-desktop` 即可采集真实 `BitBlt` 按键到像素延迟。
+
+---
+
+## 四、套件 ③：WebAssembly 浏览器自动化性能门禁（Playwright + Chromium CDP）
+
+基于最新 `scripts/build-web-rust.sh` 构建产物（`mica_rust_bg.wasm` raw `13.36 MiB` / Brotli-11 `3.65 MiB`，首屏总包 Brotli-11 **`3.75 MiB <= 4.0 MiB`** 硬门禁；懒加载 `math.wasm` gzip-9 `979.8 KiB`、`mermaid.wasm` gzip-9 `1.92 MiB`），在 Chromium `1280×820` 实测：
+
+| 阶段 | 指标 | 实测结果 |
+| --- | --- | ---: |
+| **冷启动** | `dom_ready_ms` / `wasm_download` / `first_interactive_ms` | `14.67 ms` / `417.25 ms` / **`480.68 ms`** |
+| **冷启动** | `login_to_synced_ms`（登录 → WS `已实时同步`） | **`228.66 ms`** |
+| **冷启动** | 初始内存 & DOM 规模 | JS 堆 **`3.9 MiB`**，`874` DOM 节点 |
+| **2,000 块文档虚拟滚动** | 切页打开首块可见 `open_large_doc_ms` | `516.79 ms` |
+| **2,000 块文档虚拟滚动** | 真实滚轮帧率（185 帧采样） | **均值 `59.7 FPS` / P95 低位 `59.9 FPS`** |
+| **2,000 块文档虚拟滚动** | 帧间隔 & 长帧卡顿（>50ms） | `p50=16.7 ms` / `p99=16.8 ms` / `max=33.4 ms`，**0 帧卡顿（0%）** |
+| **2,000 块文档真机打字** | `key_to_paint`（40 键，2×rAF 含绘制完成） | **`p50=10.3 ms` / `p95=17.7 ms` / `p99=17.9 ms`** |
+| **50 次反复切页稳定性** | 切页耗时 `p50 / p95 / p99` | `116.39 ms` / `150.01 ms` / `210.75 ms` |
+| **50 次反复切页稳定性** | 显式 GC 后 JS 堆内存斜率 & DOM 节点变化 | `4.96 → 5.25 MiB`（**`+0.28 MiB`，`5.79 KiB/次`**），DOM `2,081 → 1,963`（**-118，零泄漏**） |
+
+---
+
+## 五、套件 ④：服务端真实协议 `/ws/` 协作压测（`mica-ws-load` + Release `mica-api-server` + Postgres 18）
+
+独立压测数据库 `mica_bench_perf`（`DATABASE_MAX_CONNECTIONS=25`），真实说话 `/ws/workspaces/{ws}/documents/{doc}?v=1` 协议（`sync.bootstrap` / `sync.push` / `sync.pull` / `sync.update` / `sync.ack`）：
+
+| 场景 | 规模 | Push-to-Ack 延迟 / 吞吐 | Peer-to-Peer 广播延迟 & 扇出 | 收敛与错误 |
+| --- | --- | ---: | ---: | --- |
+| **热点房间（Hot Room）** | 30 并发编辑同一文档 × 8 pushes（240 写） | `p50=141.41 ms` / `p95=188.50 ms` / `p99=202.53 ms`（**`195.6 pushes/s`**） | `p50=207.77 ms` / `p95=383.76 ms` / `p99=455.04 ms`（**6,960 次扇出**） | **`converged=true`**，`lags=0`，`errs=0` |
+| **多房间并发（Multi-Room）** | 10 房 × 5 人 = 50 并发 WS × 6 pushes（300 写） | **`p50=33.97 ms` / `p95=38.90 ms` / `p99=44.81 ms`（`1,205.0 pushes/s`）** | **`p50=49.96 ms` / `p95=77.73 ms` / `p99=90.86 ms`**（1,200 次扇出） | **`all_converged=true`**，`lags=0`，`errs=0` |
+| **断网重连风暴（Reconnect Storm）** | 30 人断线各攒 5 步离线编辑后同时重连同步 | 全员收敛总耗时 **`736.4 ms`**（单端 `p50=667.90 ms` / `p99=735.56 ms`） | `sync.pull` + `sync.push` 并发突发 | **`all_edits_preserved=true`**，`errs=0` |
+
+**服务端 `/metrics` 压测后快照**：
+- `mica_crdt_integrity_failures_total{kind="push"} = 0`
+- `mica_crdt_lag_notices_total = 0`
+- `mica_crdt_push_rejected_total = 0`
+- `mica_ws_connections = 0`（压测结束后零连接泄漏）
+- `mica_db_pool_connections{state="idle"} = 23` / `in_use = 2`
+

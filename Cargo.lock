@@ -2217,14 +2217,19 @@ dependencies = [
 name = "mica-bench"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
+ "futures-util",
  "mica-api-types",
  "mica-board",
  "mica-client",
  "mica-core",
  "mica-editor",
  "mica-md",
+ "reqwest",
  "serde_json",
+ "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 
