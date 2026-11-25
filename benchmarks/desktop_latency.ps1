@@ -255,15 +255,17 @@ try {
   $rw = [int]($winW * 0.64)
   $rh = [int]($winH * 0.70)
 
-  # Warmup 5 keys
+  # Warmup 5 keys (use wide ASCII digits so active CJK IME never hijacks into preedit)
   for ($i = 0; $i -lt 5; $i++) {
-    [MicaLatencyProbe]::SendVk(0x41, $false) # 'A'
+    [MicaLatencyProbe]::SendVk(0x38, $false) # '8'
     Start-Sleep -Milliseconds 80
   }
   Start-Sleep -Milliseconds 250
 
   # 1. Short document keystroke-to-screen latency
-  $vks = @(0x4D, 0x49, 0x43, 0x41, 0x52, 0x55, 0x53, 0x54, 0x57, 0x58) # M I C A R U S T W X
+  # Wide ASCII digits bypass CJK IME composition when the desktop taskbar is in Chinese mode
+  # and guarantee >20 changed pixels per glyph (avoiding thin-glyph misses like lowercase 'i').
+  $vks = @(0x30, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x39) # 0 2 3 4 5 6 8 9
   $shortSamples = New-Object System.Collections.Generic.List[double]
   $shortOutliers = New-Object System.Collections.Generic.List[string]
   $shortMisses = 0
@@ -301,7 +303,7 @@ try {
 
   # Warmup 3 keys
   for ($i = 0; $i -lt 3; $i++) {
-    [MicaLatencyProbe]::SendVk(0x42, $false)
+    [MicaLatencyProbe]::SendVk(0x38, $false)
     Start-Sleep -Milliseconds 80
   }
   Start-Sleep -Milliseconds 250
