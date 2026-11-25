@@ -115,3 +115,69 @@ fn mica_rust_exe_embeds_win32_icon_resource_id_1() {
   assert!(!taskbar_icon.is_null(), "{exe_path} must provide 32x32 taskbar icon from resource ID 1");
   assert!(!hidpi_icon.is_null(), "{exe_path} must provide 48x48 HiDPI icon from resource ID 1");
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn mica_rust_exe_embeds_win32_product_version() {
+  use core::ffi::c_void;
+
+  #[link(name = "version")]
+  unsafe extern "system" {
+    fn GetFileVersionInfoSizeW(lptstr_filename: *const u16, lpdw_handle: *mut u32) -> u32;
+    fn GetFileVersionInfoW(
+      lptstr_filename: *const u16,
+      dw_handle: u32,
+      dw_len: u32,
+      lp_data: *mut c_void,
+    ) -> i32;
+    fn VerQueryValueW(
+      p_block: *const c_void,
+      lp_sub_block: *const u16,
+      lplp_buffer: *mut *const c_void,
+      pu_len: *mut u32,
+    ) -> i32;
+  }
+
+  let exe_path = env!("CARGO_BIN_EXE_mica-rust");
+  let wide_path: Vec<u16> = exe_path.encode_utf16().chain(core::iter::once(0)).collect();
+  let mut handle = 0u32;
+  let size = unsafe { GetFileVersionInfoSizeW(wide_path.as_ptr(), &mut handle) };
+  assert!(size > 0, "{exe_path} must embed Win32 VS_VERSION_INFO resource");
+
+  let mut buf = vec![0u8; size as usize];
+  let ok = unsafe {
+    GetFileVersionInfoW(
+      wide_path.as_ptr(),
+      0,
+      size,
+      buf.as_mut_ptr().cast::<c_void>(),
+    )
+  };
+  assert_ne!(ok, 0, "GetFileVersionInfoW failed for {exe_path}");
+
+  let sub_block: Vec<u16> = "\\StringFileInfo\\040904B0\\ProductVersion"
+    .encode_utf16()
+    .chain(core::iter::once(0))
+    .collect();
+  let mut ptr: *const c_void = core::ptr::null();
+  let mut len = 0u32;
+  let queried = unsafe {
+    VerQueryValueW(
+      buf.as_ptr().cast::<c_void>(),
+      sub_block.as_ptr(),
+      &mut ptr,
+      &mut len,
+    )
+  };
+  assert_ne!(queried, 0, "ProductVersion string missing from {exe_path} VS_VERSION_INFO");
+  assert!(len > 0 && !ptr.is_null());
+
+  let slice = unsafe { core::slice::from_raw_parts(ptr.cast::<u16>(), len as usize) };
+  let trimmed = slice.iter().copied().take_while(|&u| u != 0).collect::<Vec<u16>>();
+  let product_version = String::from_utf16_lossy(&trimmed);
+  assert_eq!(
+    product_version,
+    env!("CARGO_PKG_VERSION"),
+    "embedded ProductVersion must match Cargo.toml version"
+  );
+}

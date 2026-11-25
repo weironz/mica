@@ -57,7 +57,7 @@ function Write-MicaLoaderDiagnostics {
 
 function Resolve-InstalledMicaExe {
   param([string]$Directory)
-  foreach ($candidate in @('mica-rust.exe', 'mica.exe')) {
+  foreach ($candidate in @('mica-rust.exe', 'mica_flutter.exe', 'mica.exe')) {
     $path = Join-Path $Directory $candidate
     if (Test-Path -LiteralPath $path) { return $path }
   }
@@ -65,9 +65,37 @@ function Resolve-InstalledMicaExe {
 }
 
 function Assert-InstalledVersion {
-  param([string]$Executable, [string]$Expected, [string]$Label = 'Installed')
+  param(
+    [string]$Executable,
+    [string]$Expected,
+    [string]$Label = 'Installed',
+    [string]$FallbackSetupPath = ''
+  )
   if (-not $Expected) { return }
   $actualVersion = ((Get-Item -LiteralPath $Executable).VersionInfo.ProductVersion -split '\+')[0]
+  if (-not $actualVersion -and $FallbackSetupPath) {
+    # Legacy v0.15.0 pure-Rust binary predated VS_VERSION_INFO embedding; accept
+    # only when the verified baseline installer's version metadata or filename
+    # matches the expected baseline release.
+    $vi = (Get-Item -LiteralPath $FallbackSetupPath).VersionInfo
+    $candidates = @($vi.ProductVersion, $vi.FileVersion) | Where-Object { $_ }
+    $matched = $false
+    foreach ($c in $candidates) {
+      $clean = ($c -split '\+')[0].Trim()
+      $prefix = ($clean -split '\.')[0..([Math]::Min(2, ($clean -split '\.').Length - 1))] -join '.'
+      if ($clean -eq $Expected -or $prefix -eq $Expected) {
+        $matched = $true
+        break
+      }
+    }
+    if (-not $matched -and (Split-Path -Leaf $FallbackSetupPath) -eq "Mica-Setup-$Expected.exe") {
+      $matched = $true
+    }
+    if ($matched) {
+      Write-Host "$Label executable ($Expected) has no embedded ProductVersion; verified via baseline installer $(Split-Path -Leaf $FallbackSetupPath)"
+      return
+    }
+  }
   if ($actualVersion -ne $Expected) {
     throw "$Label app version '$actualVersion' does not match expected '$Expected' ($Executable)"
   }
@@ -81,7 +109,8 @@ function Invoke-MicaIsolatedLaunch {
     [System.Collections.IDictionary]$IsolatedEnv,
     [string]$ProbePath,
     [int]$SurviveSeconds = 10,
-    [string]$Label = 'Mica'
+    [string]$Label = 'Mica',
+    [switch]$AllowLegacyProfileReady
   )
   if (Test-Path -LiteralPath $ProbePath) {
     Remove-Item -LiteralPath $ProbePath -Force
@@ -103,6 +132,10 @@ function Invoke-MicaIsolatedLaunch {
       }
     }
 
+    $isolatedProfile = Join-Path $IsolatedEnv.APPDATA 'mica'
+    $legacyStoreDb = Join-Path (Join-Path $isolatedProfile 'local') 'store.db'
+    $flatStoreDb = Join-Path $isolatedProfile 'store.db'
+    $readyByLegacyProfile = $false
     $firstFrameDeadline = (Get-Date).AddSeconds(30)
     while (-not (Test-Path -LiteralPath $ProbePath) -and (Get-Date) -lt $firstFrameDeadline) {
       $proc.Refresh()
@@ -110,9 +143,13 @@ function Invoke-MicaIsolatedLaunch {
         Write-MicaLoaderDiagnostics -Directory $InstallDir -ExitCode $proc.ExitCode
         throw "$Label exited before its first frame (exit code 0x$('{0:X8}' -f $proc.ExitCode))"
       }
+      if ($AllowLegacyProfileReady -and ((Test-Path -LiteralPath $legacyStoreDb) -or (Test-Path -LiteralPath $flatStoreDb))) {
+        $readyByLegacyProfile = $true
+        break
+      }
       Start-Sleep -Milliseconds 250
     }
-    if (-not (Test-Path -LiteralPath $ProbePath)) {
+    if (-not (Test-Path -LiteralPath $ProbePath) -and -not $readyByLegacyProfile) {
       throw "$Label did not produce its first native frame within 30s"
     }
     if ($SurviveSeconds -gt 0) {
@@ -125,11 +162,14 @@ function Invoke-MicaIsolatedLaunch {
     }
     # Proves the isolation took effect: the app created its profile under the
     # redirected APPDATA instead of the caller's real one.
-    $isolatedProfile = Join-Path $IsolatedEnv.APPDATA 'mica'
     if (-not (Test-Path -LiteralPath $isolatedProfile)) {
       throw "$Label did not create its profile under the isolated APPDATA ($isolatedProfile)"
     }
-    Write-Host "$Label rendered its first frame and stayed alive for ${SurviveSeconds}s (pid $($proc.Id)) - OK"
+    if ($readyByLegacyProfile) {
+      Write-Host "$Label initialized isolated profile store.db and stayed alive for ${SurviveSeconds}s (pid $($proc.Id)) - baseline OK"
+    } else {
+      Write-Host "$Label rendered its first frame and stayed alive for ${SurviveSeconds}s (pid $($proc.Id)) - OK"
+    }
   } finally {
     if ($proc -and -not $proc.HasExited) {
       Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -176,18 +216,32 @@ try {
       throw "Baseline executable not found after install in $installDir"
     }
     Write-Host "Baseline installed OK: $prevExe"
-    Assert-InstalledVersion -Executable $prevExe -Expected $UpgradeFromVersion -Label 'Baseline'
+    Assert-InstalledVersion -Executable $prevExe -Expected $UpgradeFromVersion -Label 'Baseline' -FallbackSetupPath $UpgradeFrom
 
+    $legacyBaseline = ($UpgradeFromVersion -eq '0.15.0')
+    $baselineEnv = [ordered]@{}
+    foreach ($k in $isolated.Keys) { $baselineEnv[$k] = $isolated[$k] }
+    if ($legacyBaseline) {
+      # Legacy v0.15.0 predated honoring %APPDATA% in VaultStore::open_default(),
+      # so pin MICA_DATA_DIR to the canonical isolated `mica\local` path while
+      # leaving the upgraded candidate strictly on %APPDATA% alone.
+      $baselineEnv['MICA_DATA_DIR'] = Join-Path (Join-Path $isolated.APPDATA 'mica') 'local'
+    }
     Invoke-MicaIsolatedLaunch -Executable $prevExe -InstallDir $installDir `
-      -IsolatedEnv $isolated -ProbePath $probe -SurviveSeconds 2 -Label 'Baseline Mica'
+      -IsolatedEnv $baselineEnv -ProbePath $probe -SurviveSeconds 2 -Label 'Baseline Mica' `
+      -AllowLegacyProfileReady:$legacyBaseline
 
     $isolatedProfile = Join-Path $isolated.APPDATA 'mica'
     $upgradeSentinelPath = Join-Path $isolatedProfile 'upgrade-sentinel.txt'
     $upgradeSentinelValue = "mica-upgrade-sentinel-" + [guid]::NewGuid().ToString('N')
     Set-Content -LiteralPath $upgradeSentinelPath -Value $upgradeSentinelValue -NoNewline
-    $prevStoreDb = Join-Path $isolatedProfile 'store.db'
+    $prevStoreDb = Join-Path (Join-Path $isolatedProfile 'local') 'store.db'
+    if (-not (Test-Path -LiteralPath $prevStoreDb)) {
+      $prevStoreDb = Join-Path $isolatedProfile 'store.db'
+    }
     $prevStoreDbExisted = Test-Path -LiteralPath $prevStoreDb
-    Write-Host "Baseline profile initialized; starting in-place upgrade with $Setup"
+    $prevStoreDbRel = if ($prevStoreDbExisted) { $prevStoreDb.Substring($isolatedProfile.Length).TrimStart('\') } else { '' }
+    Write-Host "Baseline profile initialized (store.db=$prevStoreDbExisted); starting in-place upgrade with $Setup"
   }
 
   Write-Host "Silent-installing $Setup -> $installDir"
@@ -211,7 +265,7 @@ try {
       throw "In-place upgrade corrupted profile sentinel (expected '$upgradeSentinelValue', got '$afterValue')"
     }
     if ($prevStoreDbExisted) {
-      $afterStoreDb = Join-Path (Join-Path $isolated.APPDATA 'mica') 'store.db'
+      $afterStoreDb = Join-Path (Join-Path $isolated.APPDATA 'mica') $prevStoreDbRel
       if (-not (Test-Path -LiteralPath $afterStoreDb) -or (Get-Item -LiteralPath $afterStoreDb).Length -eq 0) {
         throw "In-place upgrade lost or emptied previous store.db: $afterStoreDb"
       }

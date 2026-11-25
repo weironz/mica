@@ -195,6 +195,25 @@ fn configure_hidden_title_bar() {
   }
 }
 
+/// Writes a non-empty startup receipt once the root window produces its first
+/// non-zero layout frame when `MICA_STARTUP_PROBE_FILE` is set by installer /
+/// release canary smoke harnesses.
+#[cfg(not(target_arch = "wasm32"))]
+fn record_startup_probe_once() {
+  static PROBE_WRITTEN: std::sync::Once = std::sync::Once::new();
+  PROBE_WRITTEN.call_once(|| {
+    if let Some(path) = std::env::var_os("MICA_STARTUP_PROBE_FILE")
+      && !path.is_empty()
+    {
+      let path = std::path::PathBuf::from(path);
+      if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+      }
+      let _ = std::fs::write(&path, format!("Mica {APP_VERSION}\n"));
+    }
+  });
+}
+
 fn format_version_entries(
   vault: &VaultStore,
   origin: &str,
@@ -3350,6 +3369,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     .bg(move || palette(dark_mode.get()).surface_base)
     .on_layout(move |b: &Bounds<Points>| {
       let w = b.size.width.0;
+      #[cfg(not(target_arch = "wasm32"))]
+      if w > 0.0 && b.size.height.0 > 0.0 {
+        record_startup_probe_once();
+      }
       if w > 0.0 && (viewport_width.get_untracked() - w).abs() > 2.0 {
         spawn(async move {
           if (viewport_width.get_untracked() - w).abs() > 2.0 {

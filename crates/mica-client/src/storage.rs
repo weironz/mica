@@ -1967,10 +1967,38 @@ impl VaultStore {
   }
 }
 
+#[cfg(target_os = "windows")]
+fn env_dir(name: &str) -> Option<PathBuf> {
+  std::env::var_os(name)
+    .filter(|v| !v.is_empty())
+    .map(PathBuf::from)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn desktop_roaming_config_dir() -> Option<PathBuf> {
+  // On Windows, `dirs_next::config_dir()` queries `SHGetKnownFolderPath` and
+  // ignores `%APPDATA%` overrides used by isolated smoke tests (#179). Honor an
+  // explicit `APPDATA` override first so `VaultStore` matches `single_instance`.
+  #[cfg(target_os = "windows")]
+  if let Some(dir) = env_dir("APPDATA") {
+    return Some(dir);
+  }
+  dirs_next::config_dir()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn desktop_local_data_dir() -> Option<PathBuf> {
+  #[cfg(target_os = "windows")]
+  if let Some(dir) = env_dir("LOCALAPPDATA") {
+    return Some(dir);
+  }
+  dirs_next::data_local_dir()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn legacy_flutter_db_path() -> Option<PathBuf> {
   #[cfg(any(target_os = "windows", target_os = "macos"))]
-  let base = dirs_next::config_dir()?;
+  let base = desktop_roaming_config_dir()?;
   #[cfg(not(any(target_os = "windows", target_os = "macos")))]
   let base = dirs_next::data_dir()?;
   Some(base.join("mica").join("local").join("store.db"))
@@ -1979,7 +2007,7 @@ fn legacy_flutter_db_path() -> Option<PathBuf> {
 #[cfg(not(target_arch = "wasm32"))]
 fn early_rust_db_path() -> Option<PathBuf> {
   Some(
-    dirs_next::data_local_dir()?
+    desktop_local_data_dir()?
       .join("mica")
       .join("vault.sqlite"),
   )
@@ -1987,7 +2015,7 @@ fn early_rust_db_path() -> Option<PathBuf> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn legacy_flutter_prefs_path() -> Option<PathBuf> {
-  Some(dirs_next::config_dir()?.join("mica").join("prefs.json"))
+  Some(desktop_roaming_config_dir()?.join("mica").join("prefs.json"))
 }
 
 /// Pure, testable desktop SQLite vault path resolution:
