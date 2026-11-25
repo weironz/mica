@@ -19,7 +19,7 @@
 
 - **100% 全栈纯 Rust（L1 + L2 + L3，零 Dart / Flutter / FFI 桥接）**：
   - **L1 数据与渲染引擎**（`crates/mica-core`, `crates/md-core`, `crates/mica-board`, `crates/api-types`, `crates/interchange`, `crates/api-server`, `crates/cli`, `crates/mcp-server`, `crates/md-wasm` SDK）：CRDT 文档核心只有一份（`mica-core::MicaDoc`），Markdown 解析/序列化/HTML/公式(`ratex-*`)/图表(`merman`) 只有一份（`crates/md-core`）。
-  - **L2 无头客户端内核**（`crates/mica-board::session`, `crates/mica-sync`, `crates/mica-editor`, `crates/mica-client`）：纯 Rust 零 UI 依赖，双目标支持原生与 `wasm32`。
+  - **L2 无头客户端内核**（`crates/mica-board::session`, `crates/mica-sync`, `crates/mica-editor`, `crates/mica-client`）：纯 Rust 零 UI 依赖，双目标支持原生与 `wasm32`；与 UI 框架无关的编辑器交互规则（触摸选词、多击计数、框选几何、边缘滚屏速度、原子块判定）统一归属 `mica_editor::interaction`，严禁在 L3 壳层重复维护副本。
   - **L3 原生 UI 壳（`clients/mica_rust`）**：路线二-B（自有 `mica-editor` + `nsh-core` / `nsh-base default-features=false` 原生 `virtual_list` + 原生 IME 代理 + `nsh::Canvas`），直接调用 L1 + L2 Rust API，覆盖桌面与 WebAssembly。
 - **渲染扩展走机制**：编辑器原子块通过 [atomic_blocks.rs](clients/mica_rust/src/atomic_blocks.rs) 注册表扩展（公式 `ratex`、Mermaid `merman`、内嵌白板 `mica-board`、代码块、图片），避免向 `editor_view.rs` 堆分支；`virtual_list` 的 `count` 和 `keys` 严禁订阅正文编辑信号，只订阅 `structure_rev`，块内更新走 per-block 细粒度 `Signal`。
 - **Markdown round-trip 是不变量**：保持 CommonMark / GFM 与现有方言兼容，写侧输出规范化子集；改解析或导出时检查 [规范记分牌](docs/architecture/commonmark-scoreboard.md) 及对应回归测试。

@@ -5,6 +5,7 @@
 pub mod commands;
 pub mod diff_ops;
 pub mod history;
+pub mod interaction;
 pub mod marks;
 pub mod model;
 pub mod paste;
@@ -21,6 +22,11 @@ pub use commands::{
 };
 pub use diff_ops::{compute_move_blocks_target, diff_block_ops, diff_block_patches, in_order_ids};
 pub use history::{EditorHistoryTracker, HistoryEndpoint, HistorySelection};
+pub use interaction::{
+  MARQUEE_DRAG_SLOP, MARQUEE_GUTTER_WIDTH, MARQUEE_SCROLLBAR_STRIP, RectF, TouchTapTracker,
+  edge_autoscroll_speed, hit_block_range, is_atomic_selection_kind, starts_marquee_in_margin,
+  touch_selected_slice, touch_word_bounds,
+};
 pub use marks::{
   EditorMark, apply_mark, apply_or_remove_mark, clip_marks, concat_marks, link_click_hit,
   marks_equal, marks_from_data, marks_to_json, math_run_at, math_run_ending_at,

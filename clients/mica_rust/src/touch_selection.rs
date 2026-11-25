@@ -11,10 +11,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use mica_editor::{
-  DocPosition, DocSelection, EditorCommand,
-  utf16::{utf16_len, utf16_slice},
-};
+use mica_editor::{DocPosition, DocSelection, EditorCommand, utf16::utf16_len};
 use nsh_base::button;
 use nsh_core::{
   element::{ElementRef, ResponderEvent, TouchClaim, clipboard_string, set_clipboard, text_measurer},
@@ -26,6 +23,10 @@ use crate::{
   editor_bridge::{MicaDocumentBridge, effective_block_kind},
   mica_theme::palette,
   text_geometry::{VisibleLayoutCache, offset_at_point},
+};
+
+pub use mica_editor::interaction::{
+  TouchTapTracker, is_atomic_selection_kind, touch_selected_slice, touch_word_bounds,
 };
 
 /// Monotonic millisecond timestamp safe on both native desktop and `wasm32`.
@@ -40,44 +41,6 @@ pub fn now_ms() -> f64 {
   #[cfg(target_arch = "wasm32")]
   {
     js_sys::Date::now()
-  }
-}
-
-/// Counts repeated touch taps (since `nsh-platform-web` always reports
-/// `clicks = 1` for `pointerType === "touch"`). Matches legacy `MultiTapCounter`:
-/// a tap within 400ms and 30px of the previous tap escalates `1 -> 2 -> 3`.
-#[derive(Clone, Debug, Default)]
-pub struct TouchTapTracker {
-  count: u32,
-  last_pos: Option<(f32, f32)>,
-  last_ms: f64,
-}
-
-impl TouchTapTracker {
-  pub const WINDOW_MS: f64 = 400.0;
-  pub const TOUCH_SLOP_PX: f32 = 30.0;
-
-  pub fn bump(&mut self, x: f32, y: f32, now: f64) -> u32 {
-    let near = self.last_pos.is_some_and(|(lx, ly)| {
-      let dx = x - lx;
-      let dy = y - ly;
-      (dx * dx + dy * dy).sqrt() <= Self::TOUCH_SLOP_PX
-    });
-    let soon = self.last_ms > 0.0 && (now - self.last_ms) <= Self::WINDOW_MS;
-    self.count = if near && soon {
-      (self.count % 3) + 1
-    } else {
-      1
-    };
-    self.last_pos = Some((x, y));
-    self.last_ms = now;
-    self.count
-  }
-
-  pub fn reset(&mut self) {
-    self.count = 0;
-    self.last_pos = None;
-    self.last_ms = 0.0;
   }
 }
 
@@ -103,16 +66,6 @@ pub struct MeasuredBlockRow {
   pub text_top: f32,
   pub text_right: f32,
   pub text_u16_len: u32,
-}
-
-/// Returns `true` for atomic blocks that select as a whole rather than by character.
-/// Code blocks are intentionally NOT included so character-level drag selection
-/// flows smoothly through code snippets without stalling.
-pub fn is_atomic_selection_kind(kind: &str) -> bool {
-  matches!(
-    kind,
-    "board" | "mermaid" | "math" | "math_block" | "image" | "table" | "divider"
-  )
 }
 
 /// Maps a target point `(target_x, target_y)` in `paper_ref`-local coordinates
@@ -193,93 +146,6 @@ where
   };
 
   Some(DocPosition::new(row.block_idx, off))
-}
-
-fn is_wide_ideograph(ch: char) -> bool {
-  let c = ch as u32;
-  (0x3400..=0x9FFF).contains(&c)
-    || (0x3040..=0x30FF).contains(&c)
-    || (0xAC00..=0xD7A3).contains(&c)
-    || (0xF900..=0xFAFF).contains(&c)
-    || (0x20000..=0x2FA1F).contains(&c)
-}
-
-fn is_wide_punctuation(ch: char) -> bool {
-  let c = ch as u32;
-  (0x2000..=0x206F).contains(&c)
-    || (0x3000..=0x303F).contains(&c)
-    || (0xFE30..=0xFE4F).contains(&c)
-    || (0xFF00..=0xFF0F).contains(&c)
-    || (0xFF1A..=0xFF20).contains(&c)
-    || (0xFF3B..=0xFF40).contains(&c)
-    || (0xFF5B..=0xFF65).contains(&c)
-}
-
-/// Computes the UTF-16 `(start, end)` range selected by a touch double-tap or
-/// long-press at UTF-16 unit offset `glyph_u16`:
-/// - Wide CJK / kana / hangul: tapped char + next wide char (or previous wide
-///   char at the end of a run, or just that 1 char if isolated).
-/// - Wide CJK punctuation (`，。、“”（）【】`): selected alone.
-/// - Latin words & numbers: full word (`mica_editor::word_range_at`).
-/// - Surrogate-pair safe: never splits emoji or CJK Ext-B characters.
-pub fn touch_word_bounds(text: &str, glyph_u16: u32) -> (u32, u32) {
-  let total_u16 = utf16_len(text);
-  if total_u16 == 0 {
-    return (0, 0);
-  }
-  let g = glyph_u16.min(total_u16.saturating_sub(1));
-
-  // Collect scalar chars with their UTF-16 [start, end) spans.
-  let mut chars: Vec<(char, u32, u32)> = Vec::with_capacity(text.len());
-  let mut cur = 0u32;
-  for ch in text.chars() {
-    let next = cur + ch.len_utf16() as u32;
-    chars.push((ch, cur, next));
-    cur = next;
-  }
-
-  let at = chars
-    .iter()
-    .position(|&(_, s, e)| g >= s && g < e)
-    .unwrap_or(chars.len() - 1);
-  let (ch, s, e) = chars[at];
-
-  if is_wide_punctuation(ch) {
-    return (s, e);
-  }
-  if is_wide_ideograph(ch) {
-    // CJK / Kana / Hangul: take tapped char + 1 neighbor in the same wide run.
-    if at + 1 < chars.len() && is_wide_ideograph(chars[at + 1].0) {
-      return (s, chars[at + 1].2);
-    }
-    if at > 0 && is_wide_ideograph(chars[at - 1].0) {
-      return (chars[at - 1].1, e);
-    }
-    return (s, e);
-  }
-  // Latin / numeric / underscore word: scan contiguous non-wide word chars so
-  // words never bleed into adjacent CJK or emoji.
-  let is_latin_word = |c: char| !is_wide_ideograph(c) && (c.is_alphanumeric() || c == '_');
-  if is_latin_word(ch) {
-    let mut lo = at;
-    while lo > 0 && is_latin_word(chars[lo - 1].0) {
-      lo -= 1;
-    }
-    let mut hi = at;
-    while hi + 1 < chars.len() && is_latin_word(chars[hi + 1].0) {
-      hi += 1;
-    }
-    return (chars[lo].1, chars[hi].2);
-  }
-  // Emoji, symbols, ASCII punctuation, whitespace: select the single scalar
-  // (never splitting UTF-16 surrogate pairs).
-  (s, e)
-}
-
-/// Returns the UTF-16 slice selected by [`touch_word_bounds`] (helper for UI & tests).
-pub fn touch_selected_slice(text: &str, glyph_u16: u32) -> &str {
-  let (s, e) = touch_word_bounds(text, glyph_u16);
-  utf16_slice(text, s, e)
 }
 
 /// Diameter of each teardrop handle knob and its 44px finger-friendly grab box.

@@ -19,6 +19,14 @@
  *   7. Flutter Web (<= 0.14.x) unsynced edits left in the legacy `mica-localfirst`
  *      IndexedDB are migrated on doc open, pushed to the server, and the legacy
  *      record is deleted.
+ *   8. Desktop Web black-box cross-code-block drag selection: real mouse drag
+ *      from top prose through a code block to trailing prose end, verifying
+ *      nothing stalls on the code block and copied text includes every end char.
+ *   9. Mobile Web black-box touch selection (`390x844`, `hasTouch: true`): real
+ *      touch long-press on CJK prose mounts `touch-selection-bar` + draggable
+ *      teardrop handles (`touch-handle-start` / `touch-handle-end`), dragging
+ *      the end handle expands the selection, and Copy puts selected text on the
+ *      clipboard (`CAP-16-06`).
  *
  * Usage:
  *   node web_e2e.mjs --base http://127.0.0.1:8090 --email demo@mica.dev --password password123
@@ -283,6 +291,162 @@ async function legacyFlutterWebMigration(browser, opts) {
   }
 }
 
+async function touchLongPress(cdp, x, y, holdMs = 650) {
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x, y, id: 1 }],
+  });
+  await new Promise((r) => setTimeout(r, holdMs));
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchEnd',
+    touchPoints: [],
+  });
+}
+
+async function touchDrag(cdp, x0, y0, x1, y1, steps = 8) {
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x: x0, y: y0, id: 2 }],
+  });
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / steps;
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t, id: 2 }],
+    });
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchEnd',
+    touchPoints: [],
+  });
+}
+
+async function crossCodeBlockAndMobileTouchSelection(browser, opts) {
+  const pageTag = `SEL-${Date.now()}`;
+  const headText = `AlphaDragStart ${pageTag}`;
+  const codeText = `let code_val = 42;`;
+  const tailText = `中文触摸选区测试段落 OmegaDragTail`;
+
+  // ── 8. Desktop Web: real mouse drag across prose -> code block -> prose ──
+  console.log('==> [8/9] Desktop Web black-box cross-code-block drag selection...');
+  const deskCtx = await browser.newContext({
+    viewport: { width: 1280, height: 820 },
+    permissions: ['clipboard-read', 'clipboard-write'],
+  });
+  try {
+    const page = await deskCtx.newPage();
+    await signInOnPage(page, opts.base, opts.email, opts.password);
+    await page.locator('[data-testid="new-page-btn"]').click();
+    await waitForSyncBadge(page, 15000);
+    await page.waitForTimeout(300);
+
+    const titleHost = page.locator('[data-testid="page-title-input"]');
+    if (await titleHost.isVisible().catch(() => false)) {
+      await fillTestInput(page, 'page-title-input', pageTag);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(250);
+    }
+    await focusEditorAndType(page, headText);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    await page.locator('[data-testid="ed-code-block"]').click();
+    await page.waitForTimeout(250);
+    await page.keyboard.type(codeText, { delay: 12 });
+    await page.waitForTimeout(250);
+    await page.locator('[data-testid="editor-bottom-append-zone"]').click();
+    await page.waitForTimeout(250);
+    await page.keyboard.type(tailText, { delay: 12 });
+    await page.waitForTimeout(1000);
+
+    const headLoc = page.getByText(headText, { exact: false }).first();
+    const codeLoc = page.locator('[data-testid="code-block-editor"]').first();
+    const tailLoc = page.getByText('OmegaDragTail', { exact: false }).first();
+    await headLoc.waitFor({ state: 'visible', timeout: 10000 });
+    await codeLoc.waitFor({ state: 'visible', timeout: 10000 });
+    await tailLoc.waitFor({ state: 'visible', timeout: 10000 });
+
+    const hb = await headLoc.boundingBox();
+    const cb = await codeLoc.boundingBox();
+    const tb = await tailLoc.boundingBox();
+    assert(hb && cb && tb, 'expected visible bounding boxes for head, code block, and tail');
+
+    // Drag from the start of the first paragraph, straight through the code
+    // block (including its upper-right toolbar zone), past the end of the tail.
+    await page.mouse.move(hb.x + 2, hb.y + hb.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(cb.x + cb.width * 0.85, cb.y + 10, { steps: 6 });
+    await page.mouse.move(cb.x + cb.width * 0.5, cb.y + cb.height * 0.5, { steps: 6 });
+    await page.mouse.move(tb.x + tb.width + 60, tb.y + tb.height * 0.5, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+
+    await page.keyboard.press('Control+C');
+    await page.waitForTimeout(250);
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert(
+      copied.includes('AlphaDragStart') && copied.includes('let code_val = 42;') && copied.includes('OmegaDragTail'),
+      `cross-code-block drag selection must capture full head + code + tail without stalling; got: ${JSON.stringify(copied)}`,
+    );
+    console.log('    Desktop cross-code-block drag copied full head + code + tail!');
+  } finally {
+    await deskCtx.close();
+  }
+
+  // ── 9. Mobile Web: touch long-press + teardrop handle drag + copy ────────
+  console.log('==> [9/9] Mobile Web black-box touch selection & teardrop handles...');
+  const mobCtx = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+    permissions: ['clipboard-read', 'clipboard-write'],
+  });
+  try {
+    const page = await mobCtx.newPage();
+    await signInOnPage(page, opts.base, opts.email, opts.password);
+    // Open the page created in scenario 8 via the mobile drawer if needed.
+    const tailOnPage = page.getByText('中文触摸选区测试段落', { exact: false }).first();
+    if (!(await tailOnPage.isVisible().catch(() => false))) {
+      const toggleBtn = page.locator('[data-testid="toggle-sidebar-btn"]');
+      if (await toggleBtn.isVisible().catch(() => false)) {
+        await toggleBtn.click();
+        await page.waitForTimeout(300);
+      }
+      await page.getByText(pageTag, { exact: false }).first().click();
+      await waitForSyncBadge(page, 15000);
+    }
+    await tailOnPage.waitFor({ state: 'visible', timeout: 15000 });
+    const box = await tailOnPage.boundingBox();
+    assert(box, 'expected visible CJK paragraph on mobile viewport');
+
+    const cdp = await mobCtx.newCDPSession(page);
+    await touchLongPress(cdp, box.x + 28, box.y + box.height * 0.5, 650);
+
+    const bar = page.locator('[data-testid="touch-selection-bar"]');
+    const startHandle = page.locator('[data-testid="touch-handle-start"]');
+    const endHandle = page.locator('[data-testid="touch-handle-end"]');
+    await bar.waitFor({ state: 'visible', timeout: 8000 });
+    await startHandle.waitFor({ state: 'visible', timeout: 8000 });
+    await endHandle.waitFor({ state: 'visible', timeout: 8000 });
+
+    const eb = await endHandle.boundingBox();
+    assert(eb, 'expected bounding box for touch-handle-end');
+    await touchDrag(cdp, eb.x + eb.width * 0.5, eb.y + eb.height * 0.5, eb.x + eb.width * 0.5 + 90, eb.y + eb.height * 0.5, 8);
+    await page.waitForTimeout(250);
+
+    await page.locator('[data-testid="touch-sel-copy"]').tap();
+    await page.waitForTimeout(250);
+    const mobileCopied = await page.evaluate(() => navigator.clipboard.readText());
+    assert(
+      mobileCopied.length >= 2 && /[中文触摸选区测试段落OmegaDragTail]/.test(mobileCopied),
+      `mobile touch selection + handle drag must copy selected prose; got: ${JSON.stringify(mobileCopied)}`,
+    );
+    console.log(`    Mobile touch long-press + handle drag copied: ${JSON.stringify(mobileCopied)}`);
+  } finally {
+    await mobCtx.close();
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.register) {
@@ -315,7 +479,7 @@ async function main() {
 
   try {
     // ── 1. Cold start: single WASM load, strict CSP, zero preview, zero XHR ──
-    console.log('==> [1/7] Cold start, CSP, single WASM download & zero XHR...');
+    console.log('==> [1/9] Cold start, CSP, single WASM download & zero XHR...');
     await signInOnPage(pageA, opts.base, opts.email, opts.password);
     await pageA.waitForTimeout(800);
 
@@ -345,7 +509,7 @@ async function main() {
     assert.equal(localStorageSecrets.length, 0, `JWT secret leaked to localStorage: ${JSON.stringify(localStorageSecrets)}`);
 
     // ── 2. Verify #111-scoped IndexedDB persistence (`mica_sync_v1`) ─────────
-    console.log('==> [2/7] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
+    console.log('==> [2/9] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
     const idb1 = await readIdbDocs(pageA);
     assert(!idb1.error, `IDB read error: ${idb1.error}`);
     assert(idb1.entries.length >= 1, `expected >=1 entry in mica_sync_v1/docs, got ${idb1.entries.length}`);
@@ -357,7 +521,7 @@ async function main() {
     console.log(`    IDB mica_sync_v1/docs: ${idb1.entries.length} doc(s), sample key=${idb1.entries[0].key.slice(0, 64)}…`);
 
     // ── 3. Create new page, edit & verify reload persistence via HttpOnly cookie ─
-    console.log('==> [3/7] Create page, edit, reload persistence (HttpOnly cookie)...');
+    console.log('==> [3/9] Create page, edit, reload persistence (HttpOnly cookie)...');
     const tag = `E2E-${Date.now()}`;
     await pageA.locator('[data-testid="new-page-btn"]').click();
     await waitForSyncBadge(pageA, 15000);
@@ -385,7 +549,7 @@ async function main() {
     await pageA.getByText(markerA).waitFor({ state: 'visible', timeout: 15000 });
 
     // ── 4. Two-browser real-time CRDT collaboration over /ws/ ────────────────
-    console.log('==> [4/7] Two-browser real-time CRDT collaboration over /ws/...');
+    console.log('==> [4/9] Two-browser real-time CRDT collaboration over /ws/...');
     const contextB = await browser.newContext({ viewport: { width: 1280, height: 820 } });
     const pageB = await contextB.newPage();
     try {
@@ -407,7 +571,7 @@ async function main() {
     }
 
     // ── 5. Offline edit recovery via IndexedDB (P0-2) ────────────────────────
-    console.log('==> [5/7] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
+    console.log('==> [5/9] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
     const offlineMarker = ` OFFLINE-IDB-${Date.now()}`;
     await contextA.setOffline(true);
     await pageA.waitForTimeout(400);
@@ -439,7 +603,7 @@ async function main() {
     console.log('    Offline edit persisted in mica_sync_v1 outbox and survived reload!');
 
     // ── 6. Lazy mica_preview/math load & clean logout (204 -> Sign-In gate) ──
-    console.log('==> [6/7] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
+    console.log('==> [6/9] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
     await pageA.locator('[data-testid="new-page-btn"]').click();
     await waitForSyncBadge(pageA, 15000);
     await pageA.waitForTimeout(300);
@@ -468,9 +632,12 @@ async function main() {
     console.log('PASS: scenarios 1-6 passed (0 console errors, 0 CSP reports, 0 XHR)');
 
     // ── 7. Legacy Flutter Web IndexedDB (`mica-localfirst`) migration ────────
-    console.log('==> [7/7] Flutter Web mica-localfirst unsynced edit -> migrated & pushed...');
+    console.log('==> [7/9] Flutter Web mica-localfirst unsynced edit -> migrated & pushed...');
     await legacyFlutterWebMigration(browser, opts);
-    console.log('PASS: all 7 pure-Rust Web E2E scenarios passed');
+
+    // ── 8 & 9. Framework-agnostic drag & mobile touch selection contracts ────
+    await crossCodeBlockAndMobileTouchSelection(browser, opts);
+    console.log('PASS: all 9 pure-Rust Web E2E scenarios passed');
   } finally {
     await contextA.close();
     await browser.close();
