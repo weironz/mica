@@ -18,7 +18,9 @@
 //!   Transfer dialog, and Feishu-style 1:1 Infinite Whiteboard with 3-way embedded block merge.
 
 pub mod ai_dialog;
+mod app_chrome;
 pub mod app_menu;
+mod app_transfer_io;
 pub mod atomic_blocks;
 pub mod block_marquee;
 pub mod block_views;
@@ -72,17 +74,12 @@ use chrono::{DateTime, Local, Utc};
 use mica_api_types::View;
 use mica_board::BoardSession;
 use mica_client::PageTreeModel;
-use nsh_base::button;
 #[cfg(not(target_arch = "wasm32"))]
 use nsh_core::desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes};
 #[cfg(not(target_arch = "wasm32"))]
 use nsh_core::element::desktop::current_window;
 use nsh_core::{
-  element::{
-    KeyOptions,
-    desktop::title_bar,
-    on_key_with,
-  },
+  element::{KeyOptions, on_key_with},
   geometry::{Bounds, Points, px},
   keymap::When,
   prelude::*,
@@ -91,7 +88,9 @@ use uuid::Uuid;
 
 use crate::{
   ai_dialog::{AiTarget, GlobalAiState, InlineAiPhase, InlineAiState},
+  app_chrome::{EmbeddedBoardEdit, TopBarProps},
   app_menu::{AccountMenuState, AppMenuCallbacks},
+  app_transfer_io::{AppTransferContext, AppTransferHandlers, CrossWorkspaceTransferCtx},
   block_views::{CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback},
   editor_bridge::MicaDocumentBridge,
   editor_view::EditorHeaderProps,
@@ -105,10 +104,6 @@ use crate::{
   sidebar::{SidebarCallbacks, WorkspaceSwitcherCallbacks, WorkspaceSwitcherItem},
   storage::{DEFAULT_ORIGIN, VaultStore},
   transfer::{ArchiveExportFormat, ImportedPageSpec},
-  transfer_dialog::{
-    DestinationPick, TransferDestination, TransferDestinationNode, TransferDialogState,
-    TransferPreviewReport,
-  },
   version_history::{VersionHistoryItem, VersionHistoryState, format_version_stamp_now},
   workspace_views::WorkspaceSettingsState,
   world_switcher::{LOCAL_ORIGIN, WorldSwitcherState},
@@ -158,20 +153,6 @@ pub(crate) struct WorkspaceEntry {
   pub(crate) name: String,
   pub(crate) origin: String,
   pub(crate) page_count: Option<usize>,
-}
-
-#[derive(Clone)]
-struct EmbeddedBoardEdit {
-  block_pos: usize,
-  base_json: String,
-  session: Rc<RefCell<BoardSession>>,
-  rev: Signal<u64>,
-}
-
-impl PartialEq for EmbeddedBoardEdit {
-  fn eq(&self, other: &Self) -> bool {
-    self.block_pos == other.block_pos && self.base_json == other.base_json && Rc::ptr_eq(&self.session, &other.session)
-  }
 }
 
 /// Root pure-Rust Mica application component (shared by desktop & Web targets).
@@ -258,7 +239,7 @@ fn format_version_entries(
   (entries, ids, history_items)
 }
 
-fn collect_all_views(tree: &PageTreeModel) -> (Vec<View>, Vec<View>) {
+pub(crate) fn collect_all_views(tree: &PageTreeModel) -> (Vec<View>, Vec<View>) {
   let mut live = Vec::new();
   let mut trashed = Vec::new();
   for row in tree.all_live_rows() {
@@ -1781,347 +1762,35 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  // Real Export & Import callbacks (using `transfer.rs` + `mica-interchange` + native OS dialogs).
-  // Every async dialog task is spawned under `app_owner` so closing a context menu,
-  // workspace switcher, or app menu NEVER cancels the native OS Save/Open dialog!
-  let spawn_save_dialog = move |suggested: String,
-                                filter_name: &'static str,
-                                exts: &'static [&'static str],
-                                bytes: Vec<u8>,
-                                label: &'static str,
-                                br_c: Rc<MicaDocumentBridge>| {
-    app_owner.run(move || {
-      spawn(async move {
-        match transfer::save_bytes_with_dialog(&suggested, filter_name, exts, &bytes).await {
-          Ok(Some(path)) => {
-            export_preview.set(format!("已导出 {label}：{}（{} 字节）", path.display(), bytes.len()));
-            br_c.set_status_flash(format!("已导出 {label}"));
-          }
-          Ok(None) => {}
-          Err(err) => {
-            export_preview.set(format!("导出 {label} 失败：{err}"));
-            br_c.set_status_flash(format!("导出失败：{err}"));
-          }
-        }
-      });
-    });
-  };
-
-  let on_export_page_markdown: Rc<dyn Fn(Uuid)> = {
-    let br = bridge.clone();
-    let docs = docs_store.clone();
-    let tree_ref = tree.clone();
-    let v = vault.clone();
-    Rc::new(move |doc_id: Uuid| {
-      br.flush_pending_persist();
-      let is_active = active_doc.get_untracked() == Some(doc_id);
-      let orig = active_origin.get_untracked();
-      let md = if is_active {
-        br.export_markdown()
-      } else {
-        docs
-          .borrow()
-          .get(&doc_id)
-          .cloned()
-          .or_else(|| v.load_markdown(&orig, doc_id))
-          .unwrap_or_default()
-      };
-      let title = if is_active {
-        active_title.get_untracked()
-      } else {
-        tree_ref
-          .borrow()
-          .all_live_rows()
-          .into_iter()
-          .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
-          .map(|r| r.name)
-          .unwrap_or_else(|| "untitled".to_string())
-      };
-      let suggested = format!("{}.md", transfer::sanitize_filename(&title, "untitled"));
-      spawn_save_dialog(suggested, "Markdown", &["md"], md.into_bytes(), "Markdown", br.clone());
-    })
-  };
-
-  let on_export_page_html: Rc<dyn Fn(Uuid)> = {
-    let br = bridge.clone();
-    let docs = docs_store.clone();
-    let tree_ref = tree.clone();
-    let v = vault.clone();
-    Rc::new(move |doc_id: Uuid| {
-      br.flush_pending_persist();
-      let is_active = active_doc.get_untracked() == Some(doc_id);
-      let orig = active_origin.get_untracked();
-      let title = if is_active {
-        active_title.get_untracked()
-      } else {
-        tree_ref
-          .borrow()
-          .all_live_rows()
-          .into_iter()
-          .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
-          .map(|r| r.name)
-          .unwrap_or_else(|| "untitled".to_string())
-      };
-      let html_body = if is_active {
-        br.export_html()
-      } else {
-        let md = docs
-          .borrow()
-          .get(&doc_id)
-          .cloned()
-          .or_else(|| v.load_markdown(&orig, doc_id))
-          .unwrap_or_default();
-        let blocks = mica_md::parse_body(&md, mica_md::ParseMode::Document);
-        mica_md::render_html_body(&blocks, &mica_md::HtmlOptions::default())
-      };
-      let full_html = transfer::wrap_standalone_html(&title, &html_body);
-      let suggested = format!("{}.html", transfer::sanitize_filename(&title, "untitled"));
-      spawn_save_dialog(suggested, "HTML Document", &["html"], full_html.into_bytes(), "HTML", br.clone());
-    })
-  };
-
-  let on_export_markdown: Rc<dyn Fn()> = {
-    let exp = on_export_page_markdown.clone();
-    let br = bridge.clone();
-    Rc::new(move || {
-      if let Some(doc_id) = active_doc.get_untracked() {
-        exp(doc_id);
-      } else {
-        let suggested = format!("{}.md", transfer::sanitize_filename(&active_title.get_untracked(), "untitled"));
-        spawn_save_dialog(suggested, "Markdown", &["md"], br.export_markdown().into_bytes(), "Markdown", br.clone());
-      }
-    })
-  };
-
-  let on_export_html: Rc<dyn Fn()> = {
-    let exp = on_export_page_html.clone();
-    let br = bridge.clone();
-    Rc::new(move || {
-      if let Some(doc_id) = active_doc.get_untracked() {
-        exp(doc_id);
-      } else {
-        let title = active_title.get_untracked();
-        let full = transfer::wrap_standalone_html(&title, &br.export_html());
-        let suggested = format!("{}.html", transfer::sanitize_filename(&title, "untitled"));
-        spawn_save_dialog(suggested, "HTML Document", &["html"], full.into_bytes(), "HTML", br.clone());
-      }
-    })
-  };
-
-  let on_export_bundle: Rc<dyn Fn()> = {
-    let tree_ref = tree.clone();
-    let docs = docs_store.clone();
-    let br = bridge.clone();
-    Rc::new(move || {
-      br.flush_pending_persist();
-      if let Some(aid) = active_doc.get_untracked() {
-        docs.borrow_mut().insert(aid, br.export_markdown());
-      }
-      let ws_name = workspace_name.get_untracked();
-      let (live, _) = collect_all_views(&tree_ref.borrow());
-      let docs_snap = docs.borrow().clone();
-      let pages: Vec<(String, String)> = live
-        .into_iter()
-        .filter(cloud_sync::is_page_view)
-        .map(|v| (v.name, docs_snap.get(&v.object_id).cloned().unwrap_or_default()))
-        .collect();
-      match transfer::serialize_workspace_bundle(&ws_name, &pages) {
-        Ok(json) => {
-          let suggested = format!("{}.mica.json", transfer::sanitize_filename(&ws_name, "mica-workspace"));
-          spawn_save_dialog(suggested, "Mica Backup JSON", &["json"], json.into_bytes(), "工作区备份", br.clone());
-        }
-        Err(err) => {
-          export_preview.set(format!("导出备份失败：{err}"));
-          br.set_status_flash(format!("导出失败：{err}"));
-        }
-      }
-    })
-  };
-
-  let export_workspace_zip: Rc<dyn Fn(Option<Uuid>, ArchiveExportFormat)> = {
-    let tree_ref = tree.clone();
-    let docs = docs_store.clone();
-    let v = vault.clone();
-    let br = bridge.clone();
-    Rc::new(move |target_ws: Option<Uuid>, fmt: ArchiveExportFormat| {
-      br.flush_pending_persist();
-      if let Some(aid) = active_doc.get_untracked() {
-        docs.borrow_mut().insert(aid, br.export_markdown());
-      }
-      let cur_ws = active_workspace_id.get_untracked();
-      let want_ws = target_ws.unwrap_or(cur_ws);
-      let (ws_name, live, docs_map) = if want_ws == cur_ws {
-        let (live, _) = collect_all_views(&tree_ref.borrow());
-        (workspace_name.get_untracked(), live, docs.borrow().clone())
-      } else {
-        let ws_info = workspaces.get_untracked().into_iter().find(|w| w.id == want_ws);
-        let (name, orig) = ws_info
-          .map(|w| (w.name, w.origin))
-          .unwrap_or_else(|| ("workspace".to_string(), DEFAULT_ORIGIN.to_string()));
-        let live: Vec<mica_api_types::View> = v
-          .list_views(&orig)
-          .into_iter()
-          .filter(|row| !row.is_deleted && row.workspace_id == want_ws)
-          .collect();
-        let mut map = HashMap::new();
-        for row in &live {
-          if cloud_sync::is_page_view(row)
-            && let Some(md) = v.load_markdown(&orig, row.object_id)
-          {
-            map.insert(row.object_id, md);
-          }
-        }
-        (name, live, map)
-      };
-      match transfer::build_workspace_zip_bytes(&ws_name, &live, &docs_map, fmt) {
-        Ok(bytes) => {
-          let ext = if fmt == ArchiveExportFormat::BackupMicaZip { "mica.zip" } else { "zip" };
-          let suggested = format!("{}.{ext}", transfer::sanitize_filename(&ws_name, "workspace"));
-          spawn_save_dialog(suggested, "ZIP Archive", &["zip"], bytes, "ZIP", br.clone());
-        }
-        Err(e) => {
-          export_preview.set(format!("打包 ZIP 失败：{e}"));
-          br.set_status_flash(format!("打包失败：{e}"));
-        }
-      }
-    })
-  };
-
-  let export_folder_zip: Rc<dyn Fn(Uuid, ArchiveExportFormat)> = {
-    let tree_ref = tree.clone();
-    let docs = docs_store.clone();
-    let br = bridge.clone();
-    Rc::new(move |root_id: Uuid, fmt: ArchiveExportFormat| {
-      br.flush_pending_persist();
-      if let Some(aid) = active_doc.get_untracked() {
-        docs.borrow_mut().insert(aid, br.export_markdown());
-      }
-      let (live, _) = collect_all_views(&tree_ref.borrow());
-      let folder_name = live
-        .iter()
-        .find(|v| v.id == root_id || v.object_id == root_id)
-        .map(|v| v.name.clone())
-        .unwrap_or_else(|| "export".to_string());
-      let docs_map = docs.borrow().clone();
-      match transfer::build_subtree_zip_bytes(root_id, &live, &docs_map, fmt) {
-        Ok(bytes) => {
-          let ext = if fmt == ArchiveExportFormat::BackupMicaZip { "mica.zip" } else { "zip" };
-          let suggested = format!("{}.{ext}", transfer::sanitize_filename(&folder_name, "export"));
-          spawn_save_dialog(suggested, "ZIP Archive", &["zip"], bytes, "ZIP", br.clone());
-        }
-        Err(e) => {
-          export_preview.set(format!("打包失败：{e}"));
-          br.set_status_flash(format!("打包失败：{e}"));
-        }
-      }
-    })
-  };
-
-  let on_import_markdown: Rc<dyn Fn(String)> = {
-    let create_page = create_page_with_content.clone();
-    Rc::new(move |path: String| match transfer::import_markdown_from_path(&path) {
-      Ok((title, md)) => {
-        export_preview.set(format!("已导入页面「{}」（{} 字节）", title, md.len()));
-        create_page(title, md);
-      }
-      Err(err) => export_preview.set(format!("导入失败：{err}")),
-    })
-  };
-
-  let on_import_zip_picker: Rc<dyn Fn(Option<Uuid>, bool)> = {
-    let imp = import_page_specs.clone();
-    let br = bridge.clone();
-    Rc::new(move |parent: Option<Uuid>, notion: bool| {
-      let imp_c = imp.clone();
-      let br_c = br.clone();
-      app_owner.run(move || {
-        spawn(async move {
-          match transfer::pick_import_file_bytes("ZIP Archive", &["zip"], false).await {
-            Ok(files) if !files.is_empty() => {
-              match transfer::parse_zip_archive_to_pages(&files[0].bytes, notion) {
-                Ok(specs) => {
-                  let n = imp_c(parent, specs);
-                  export_preview.set(format!("已从 ZIP 导入 {n} 篇页面"));
-                  br_c.set_status_flash(format!("已导入 {n} 篇页面"));
-                }
-                Err(e) => {
-                  export_preview.set(format!("解析 ZIP 失败：{e}"));
-                  br_c.set_status_flash(format!("导入失败：{e}"));
-                }
-              }
-            }
-            Ok(_) => {}
-            Err(e) => {
-              export_preview.set(format!("选择文件失败：{e}"));
-              br_c.set_status_flash(format!("选择文件失败：{e}"));
-            }
-          }
-        });
-      });
-    })
-  };
-
-  let on_import_files_picker: Rc<dyn Fn(Option<Uuid>)> = {
-    let imp = import_page_specs.clone();
-    let br = bridge.clone();
-    Rc::new(move |parent: Option<Uuid>| {
-      let imp_c = imp.clone();
-      let br_c = br.clone();
-      app_owner.run(move || {
-        spawn(async move {
-          match transfer::pick_import_file_bytes("Markdown / ZIP / SVG", &["md", "markdown", "txt", "zip", "svg"], true).await {
-            Ok(files) if !files.is_empty() => {
-              let mut all_specs = Vec::new();
-              for f in files {
-                if let Ok(specs) = transfer::parse_picked_file_bytes(&f.name, &f.bytes, false) {
-                  all_specs.extend(specs);
-                }
-              }
-              let n = imp_c(parent, all_specs);
-              export_preview.set(format!("已导入 {n} 篇页面"));
-              br_c.set_status_flash(format!("已导入 {n} 篇页面"));
-            }
-            Ok(_) => {}
-            Err(e) => {
-              export_preview.set(format!("选择文件失败：{e}"));
-              br_c.set_status_flash(format!("选择文件失败：{e}"));
-            }
-          }
-        });
-      });
-    })
-  };
-
-  let on_import_folder_picker: Rc<dyn Fn(Option<Uuid>)> = {
-    let imp = import_page_specs.clone();
-    let br = bridge.clone();
-    Rc::new(move |parent: Option<Uuid>| {
-      let imp_c = imp.clone();
-      let br_c = br.clone();
-      app_owner.run(move || {
-        spawn(async move {
-          match transfer::pick_import_folder().await {
-            Ok(Some(dir)) => match transfer::import_folder_from_disk(&dir, true) {
-              Ok(specs) => {
-                let n = imp_c(parent, specs);
-                export_preview.set(format!("已从文件夹导入 {n} 篇页面"));
-                br_c.set_status_flash(format!("已导入 {n} 篇页面"));
-              }
-              Err(e) => {
-                export_preview.set(format!("导入文件夹失败：{e}"));
-                br_c.set_status_flash(format!("导入失败：{e}"));
-              }
-            },
-            Ok(None) => {}
-            Err(e) => {
-              export_preview.set(format!("选择文件夹失败：{e}"));
-              br_c.set_status_flash(format!("选择文件夹失败：{e}"));
-            }
-          }
-        });
-      });
-    })
-  };
+  // Real Export & Import callbacks (`app_transfer_io` + `transfer.rs` + `mica-interchange`).
+  let AppTransferHandlers {
+    on_export_page_markdown,
+    on_export_page_html,
+    on_export_markdown,
+    on_export_html,
+    on_export_bundle,
+    export_workspace_zip,
+    export_folder_zip,
+    on_import_markdown,
+    on_import_zip_picker,
+    on_import_files_picker,
+    on_import_folder_picker,
+  } = app_transfer_io::build_transfer_handlers(AppTransferContext {
+    app_owner,
+    vault: vault.clone(),
+    bridge: bridge.clone(),
+    tree: tree.clone(),
+    docs_store: docs_store.clone(),
+    active_doc,
+    active_origin,
+    active_title,
+    active_workspace_id,
+    workspace_name,
+    workspaces,
+    export_preview,
+    create_page_with_content: create_page_with_content.clone(),
+    import_page_specs: import_page_specs.clone(),
+  });
 
   // Snapshots & 980×640 Version History Diff callbacks
   let load_version_diff_preview: Rc<dyn Fn(String)> = {
@@ -3689,258 +3358,28 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         });
       }
     })
-    .child(
-      // 1. Unified 34px frameless top bar (`TitleBarStyle::Hidden` + `window_drag`)
-      view()
-        .h(px(34.0))
-        .w_full()
-        .flex_row()
-        .items_end()
-        .window_drag(true)
-        .bg(move || palette(dark_mode.get()).surface_sunken)
-        .child(
-          view()
-            .w(move || {
-              let raw = if !is_narrow.get() && sidebar_open.get() {
-                sidebar_width.get() + 7.0
-              } else {
-                0.0
-              };
-              px(raw.max(84.0))
-            })
-            .h_full()
-            .pl(move || {
-              let inset = title_bar().left.0;
-              px(if inset > 0.0 { inset + 8.0 } else { 8.0 })
-            })
-            .flex_row()
-            .items_center()
-            .gap(px(2.0))
-            .flex_shrink_0()
-            .window_drag(true)
-            .child(
-              // Clickable top-left M logo opening 1:1 Application Menu
-              view().window_drag(false).child(tooltip::with_tooltip(
-                button()
-                  .test_id("app-menu-btn")
-                  .accessibility_label("应用菜单")
-                  .w(px(30.0))
-                  .h(px(30.0))
-                  .items_center()
-                  .justify_center()
-                  .rounded(px(6.0))
-                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                  .on_press(move || {
-                    tooltip::hide_tooltip();
-                    workspace_menu_open.set(false);
-                    account_menu_open.set(false);
-                    app_menu_open.set(!app_menu_open.get_untracked());
-                  })
-                  .child(mica_icons::mica_logo()),
-                "应用菜单",
-              )),
-            )
-            .child(
-              view().window_drag(false).child(tooltip::with_dynamic_tooltip(
-                button()
-                  .test_id("toggle-sidebar-btn")
-                  .accessibility_label("折叠或展开左侧边栏")
-                  .w(px(30.0))
-                  .h(px(30.0))
-                  .items_center()
-                  .justify_center()
-                  .rounded(px(6.0))
-                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                  .on_press(move || {
-                    tooltip::hide_tooltip();
-                    sidebar_open.set(!sidebar_open.get_untracked());
-                  })
-                  .child(dynamic(move || {
-                    mica_icons::sidebar_toggle(palette(dark_mode.get()).text_muted_hex)
-                  })),
-                move || if sidebar_open.get_untracked() { "折叠侧边栏" } else { "展开侧边栏" },
-              )),
-            ),
-        )
-        .child(
-          // DocTabStrip: per-tab `<` `>` history + scrollable tabs (`max_w 200px`) + `+` menu
-          view()
-            .flex_1()
-            .min_w(px(0.0))
-            .h_full()
-            .pl_1()
-            .pr(move || {
-              let inset = title_bar().right.0;
-              px(if inset > 0.0 { inset + 8.0 } else { 8.0 })
-            })
-            .flex_row()
-            .items_end()
-            .gap_1()
-            .window_drag(true)
-            .child(
-              view()
-                .h_full()
-                .flex_row()
-                .items_center()
-                .gap(px(2.0))
-                .pr_1()
-                .window_drag(false)
-                .child(tooltip::with_tooltip(
-                  button()
-                    .test_id("nav-back-btn")
-                    .accessibility_label("后退")
-                    .w(px(26.0))
-                    .h(px(26.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.0))
-                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || {
-                      tooltip::hide_tooltip();
-                      on_nav_back();
-                    })
-                    .child(dynamic(move || {
-                      let p = palette(dark_mode.get());
-                      mica_icons::chevron_left(if can_go_back.get() {
-                        p.text_muted_hex
-                      } else {
-                        p.text_ghost_hex
-                      })
-                    })),
-                  "后退",
-                ))
-                .child(tooltip::with_tooltip(
-                  button()
-                    .test_id("nav-forward-btn")
-                    .accessibility_label("前进")
-                    .w(px(26.0))
-                    .h(px(26.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.0))
-                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || {
-                      tooltip::hide_tooltip();
-                      on_nav_forward();
-                    })
-                    .child(dynamic(move || {
-                      let p = palette(dark_mode.get());
-                      mica_icons::chevron_right(if can_go_forward.get() {
-                        p.text_muted_hex
-                      } else {
-                        p.text_ghost_hex
-                      })
-                    })),
-                  "前进",
-                )),
-            )
-            .child(dynamic(move || {
-              if is_narrow.get() {
-                return view()
-                  .h_full()
-                  .items_center()
-                  .justify_center()
-                  .window_drag(false)
-                  .child(responsive_shell::narrow_tab_switcher_button(
-                    active_title,
-                    narrow_tab_count,
-                    narrow_tabs_open,
-                    dark_mode,
-                  ))
-                  .into_element();
-              }
-              let tabs = open_tabs.get();
-              let active_idx = active_tab_idx.get();
-              let mode = active_mode.get();
-              let p = palette(dark_mode.get());
-              let mut strip = view().flex_row().items_end().gap(px(2.0)).window_drag(false);
-              for (idx, tab) in tabs.iter().enumerate() {
-                let is_active = mode == MODE_DOC && idx == active_idx;
-                let sel_cb = sel_for_tabs.clone();
-                let close_cb = close_tab_ui.clone();
-                let doc_id = tab.doc_id;
-                let title_for_sel = tab.title.clone();
-                let title_display = if tab.title.trim().is_empty() {
-                  "未命名页面".to_string()
-                } else {
-                  tab.title.clone()
-                };
-                let can_close = tabs.len() > 1;
-
-                let mut tab_el = view()
-                  .h(px(28.0))
-                  .max_w(px(200.0))
-                  .px_3()
-                  .flex_row()
-                  .items_center()
-                  .gap_2()
-                  .rounded_t(px(8.0))
-                  .bg(if is_active { p.surface_base } else { p.surface_sunken });
-
-                tab_el = tab_el.child(
-                  button()
-                    .test_id(&format!("doc-tab-{idx}"))
-                    .accessibility_label(format!("切换到标签 {}", title_display))
-                    .on_press(move || {
-                      active_tab_idx.set(idx);
-                      sel_cb(doc_id, title_for_sel.clone());
-                    })
-                    .child(
-                      text(title_display)
-                        .text_size(px(12.0))
-                        .font_weight(if is_active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                        .text_color(if is_active { p.text_primary } else { p.text_muted })
-                        .truncate(),
-                    ),
-                );
-                if can_close && is_active {
-                  tab_el = tab_el.child(
-                    button()
-                      .test_id(&format!("doc-tab-close-{idx}"))
-                      .accessibility_label("关闭标签页")
-                      .w(px(18.0))
-                      .h(px(18.0))
-                      .items_center()
-                      .justify_center()
-                      .rounded(px(4.0))
-                      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                      .on_press(move || close_cb(idx))
-                      .child(mica_icons::close_sm(p.text_faint_hex)),
-                  );
-                }
-                strip = strip.child(tab_el);
-              }
-              strip.into_element()
-            }))
-            .child(
-              view()
-                .h_full()
-                .items_center()
-                .justify_center()
-                .pl_1()
-                .window_drag(false)
-                .child(tooltip::with_tooltip(
-                  button()
-                    .test_id("tab-new-page-btn")
-                    .accessibility_label("新建标签页")
-                    .w(px(28.0))
-                    .h(px(26.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.0))
-                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || {
-                      tooltip::hide_tooltip();
-                      new_tab_menu_open.set(!new_tab_menu_open.get_untracked());
-                    })
-                    .child(dynamic(move || {
-                      mica_icons::plus(palette(dark_mode.get()).text_muted_hex)
-                    })),
-                  "新建标签页",
-                )),
-            ),
-        ),
-    )
+    .child(app_chrome::render_top_bar(TopBarProps {
+      dark_mode,
+      is_narrow,
+      sidebar_open,
+      sidebar_width,
+      app_menu_open,
+      workspace_menu_open,
+      account_menu_open,
+      new_tab_menu_open,
+      active_title,
+      narrow_tab_count,
+      narrow_tabs_open,
+      open_tabs,
+      active_tab_idx,
+      active_mode,
+      can_go_back,
+      can_go_forward,
+      on_nav_back,
+      on_nav_forward,
+      on_select_tab: sel_for_tabs,
+      on_close_tab: close_tab_ui,
+    }))
     .child(
       // 2. Main workspace body: Resizable Left Sidebar + Editor/Board + Resizable Right Sidebar
       //    On narrow viewports (< 768px), sidebars float as overlay drawers so the editor keeps full width.
@@ -3981,66 +3420,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               move || editor_view::editor_view(br.clone(), hdr.clone(), dark_mode)
             }))
             .child(when(move || active_mode.get() == MODE_DOC && doc_loading.get(), move || {
-              view()
-                .test_id("doc-loading-skeleton")
-                .absolute()
-                .top(px(0.0))
-                .left(px(0.0))
-                .right(px(0.0))
-                .bottom(px(0.0))
-                .bg(move || palette(dark_mode.get()).surface_base)
-                .items_center()
-                .pt(px(72.0))
-                .px(px(32.0))
-                .child(
-                  view()
-                    .flex_col()
-                    .w_full()
-                    .max_w(px(640.0))
-                    .gap(px(14.0))
-                    .child(
-                      text(move || {
-                        let t = active_title.get();
-                        if t.trim().is_empty() {
-                          "正在加载页面内容…".to_string()
-                        } else {
-                          format!("正在加载「{t}」…")
-                        }
-                      })
-                      .text_size(px(13.0))
-                      .text_color(move || palette(dark_mode.get()).text_muted),
-                    )
-                    .child(
-                      view()
-                        .w(px(260.0))
-                        .h(px(22.0))
-                        .rounded(px(6.0))
-                        .bg(move || palette(dark_mode.get()).surface_sunken),
-                    )
-                    .child(
-                      view()
-                        .w_full()
-                        .h(px(14.0))
-                        .rounded(px(4.0))
-                        .bg(move || palette(dark_mode.get()).surface_sunken),
-                    )
-                    .child(
-                      view()
-                        .w_full()
-                        .max_w(px(480.0))
-                        .h(px(14.0))
-                        .rounded(px(4.0))
-                        .bg(move || palette(dark_mode.get()).surface_sunken),
-                    )
-                    .child(
-                      view()
-                        .w_full()
-                        .max_w(px(380.0))
-                        .h(px(14.0))
-                        .rounded(px(4.0))
-                        .bg(move || palette(dark_mode.get()).surface_sunken),
-                    ),
-                )
+              app_chrome::render_doc_loading_skeleton(active_title, dark_mode)
             }))
             .child(when(move || active_mode.get() == MODE_BOARD, {
               let bs = board_session.clone();
@@ -4118,62 +3498,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let np = new_page_tab.clone();
       let os = open_search_tab.clone();
       move || {
-        let np_c = np.clone();
-        let os_c = os.clone();
-        view()
-          .test_id("new-tab-menu-popover")
-          .absolute()
-          .top(px(36.0))
-          .left(px(340.0))
-          .w(px(172.0))
-          .p_1()
-          .rounded(px(8.0))
-          .border_1()
-          .border_color(move || palette(dark_mode.get()).border_normal)
-          .bg(move || palette(dark_mode.get()).surface_overlay)
-          .z_index(45)
-          .child(
-            button()
-              .test_id("new-tab-create-page")
-              .w_full()
-              .h(px(30.0))
-              .px_2()
-              .flex_row()
-              .items_center()
-              .gap_2()
-              .rounded(px(5.0))
-              .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-              .on_press(move || {
-                new_tab_menu_open.set(false);
-                np_c();
-              })
-              .child(
-                text("新建页面")
-                  .text_size(px(13.0))
-                  .text_color(move || palette(dark_mode.get()).text_primary),
-              ),
-          )
-          .child(
-            button()
-              .test_id("new-tab-open-existing")
-              .w_full()
-              .h(px(30.0))
-              .px_2()
-              .flex_row()
-              .items_center()
-              .gap_2()
-              .rounded(px(5.0))
-              .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-              .on_press(move || {
-                new_tab_menu_open.set(false);
-                os_c(None, true);
-              })
-              .child(
-                text("打开已有页面…")
-                  .text_size(px(13.0))
-                  .text_color(move || palette(dark_mode.get()).text_primary),
-              ),
-          )
+        app_chrome::render_new_tab_menu_popover(
+          new_tab_menu_open,
+          dark_mode,
+          np.clone(),
+          os.clone(),
+        )
       }
     }))
     // 4. Top-left Application Menu & About modal
@@ -4235,95 +3565,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let vt = v_transfer.clone();
       let rel = reload_transfer.clone();
       move || {
-        let cur_ws = active_workspace_id.get_untracked();
-        let dests: Vec<TransferDestination> = workspaces
-          .get_untracked()
-          .into_iter()
-          .filter(|w| w.id != cur_ws)
-          .map(|w| TransferDestination { id: w.id, name: w.name })
-          .collect();
-        let vt1 = vt.clone();
-        let vt2 = vt.clone();
-        let rel_c = rel.clone();
-        let src_ids = transfer_source_ids.get_untracked();
-        let copy_mode = transfer_copy_mode.get_untracked();
-        let state = TransferDialogState {
-          copy: copy_mode,
-          item_count: src_ids.len().max(1),
-          destinations: dests,
-          on_load_tree: Rc::new(move |dest_ws: Uuid| {
-            let orig = workspaces
-              .get_untracked()
-              .into_iter()
-              .find(|w| w.id == dest_ws)
-              .map(|w| w.origin)
-              .unwrap_or_else(|| DEFAULT_ORIGIN.to_string());
-            vt1
-              .list_views(&orig)
-              .into_iter()
-              .filter(|v| !v.is_deleted)
-              .map(|v| TransferDestinationNode::from(&v))
-              .collect()
-          }),
-          on_preview: Rc::new(move |_dest_ws: Uuid, _pick: DestinationPick| {
-            Ok(TransferPreviewReport {
-              documents: src_ids.len().max(1),
-              folders: 0,
-              images: 0,
-              dangling_links: 0,
-            })
-          }),
-          on_confirm: Rc::new(move |dest_ws: Uuid, pick: DestinationPick| {
-            let src_orig = active_origin.get_untracked();
-            let dest_orig = workspaces
-              .get_untracked()
-              .into_iter()
-              .find(|w| w.id == dest_ws)
-              .map(|w| w.origin)
-              .ok_or_else(|| "未找到目标工作区".to_string())?;
-            let src_views = vt2.list_views(&src_orig);
-            fn clone_subtree_to_dest(
-              vt: &VaultStore,
-              src_orig: &str,
-              dest_orig: &str,
-              dest_ws: Uuid,
-              src_views: &[mica_api_types::View],
-              vrow: &mica_api_types::View,
-              parent_id: Option<Uuid>,
-            ) {
-              let mut cloned = vrow.clone();
-              cloned.id = Uuid::new_v4();
-              cloned.workspace_id = dest_ws;
-              cloned.parent_view_id = parent_id;
-              if cloud_sync::is_page_view(&cloned) {
-                let new_obj = Uuid::new_v4();
-                let md = vt.load_markdown(src_orig, vrow.object_id).unwrap_or_default();
-                cloned.object_id = new_obj;
-                let _ = vt.save_markdown(dest_orig, new_obj, &md);
-                vt.record_doc_created(dest_orig, dest_ws, new_obj, mica_core::ActivitySource::Transfer, &md);
-                let _ = vt.save_view(dest_orig, &cloned);
-              } else {
-                cloned.object_id = cloned.id;
-                let _ = vt.save_view(dest_orig, &cloned);
-                for child in src_views.iter().filter(|c| !c.is_deleted && c.parent_view_id == Some(vrow.id)) {
-                  clone_subtree_to_dest(vt, src_orig, dest_orig, dest_ws, src_views, child, Some(cloned.id));
-                }
-              }
-            }
-            for sid in transfer_source_ids.get_untracked() {
-              if let Some(vrow) = src_views.iter().find(|r| r.id == sid || r.object_id == sid) {
-                clone_subtree_to_dest(&vt2, &src_orig, &dest_orig, dest_ws, &src_views, vrow, pick.parent_view_id);
-                if !copy_mode {
-                  let _ = vt2.trash_view_subtree(&src_orig, vrow.id);
-                }
-              }
-            }
-            rel_c();
-            transfer_modal_open.set(false);
-            Ok(())
-          }),
-          on_close: Rc::new(move || transfer_modal_open.set(false)),
-        };
+        let state = app_transfer_io::build_transfer_dialog_state(CrossWorkspaceTransferCtx {
+          vault: vt.clone(),
+          reload_tree: rel.clone(),
+          active_workspace_id,
+          active_origin,
+          workspaces,
+          transfer_source_ids,
+          transfer_copy_mode,
+          transfer_modal_open,
+        });
         transfer_dialog::transfer_dialog_modal(state, dark_mode)
       }
     }))
@@ -4437,51 +3688,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     // back into the document block via 3-way semantic merge).
     .child(when(move || embedded_board_edit.get().is_some(), {
       let br_m = br_embed.clone();
-      move || {
-        let Some(ed) = embedded_board_edit.get() else {
-          return view().into_element();
-        };
-        let bs = ed.session.clone();
-        let bs_close = ed.session.clone();
-        let base_json_persist = ed.base_json.clone();
-        let base_json_close = ed.base_json.clone();
-        let pos = ed.block_pos;
-        let br_persist = br_m.clone();
-        let br_close = br_m.clone();
-        view()
-          .test_id("embedded-board-modal")
-          .absolute()
-          .top(px(34.0))
-          .left(px(0.0))
-          .right(px(0.0))
-          .bottom(px(0.0))
-          .z_index(60)
-          .bg(move || palette(dark_mode.get()).surface_base)
-          .child(board_view::board_view_with_rev_and_close(
-            bs,
-            ed.rev,
-            dark_mode,
-            Rc::new(move |local_json: String| {
-              let merged = atomic_blocks::merge_embedded_board_json(
-                &base_json_persist,
-                &local_json,
-                &base_json_persist,
-              );
-              br_persist.update_block_source_at(pos, &merged);
-            }),
-            Some(Rc::new(move || {
-              let local_json = bs_close.borrow().export_compact_json();
-              let merged = atomic_blocks::merge_embedded_board_json(
-                &base_json_close,
-                &local_json,
-                &base_json_close,
-              );
-              br_close.update_block_source_at(pos, &merged);
-              embedded_board_edit.set(None);
-            })),
-          ))
-          .into_element()
-      }
+      move || app_chrome::render_embedded_board_modal(embedded_board_edit, br_m.clone(), dark_mode)
     }))
     // 12. Global dark-pill hover tooltip overlay (never clipped by overflow_hidden)
     .child(tooltip::tooltip_overlay(tooltip_host, dark_mode))
