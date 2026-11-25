@@ -4,6 +4,12 @@
 # LOCAL release train runs the same check: the in-app updater ships this exact
 # .exe to every user, and build success only proves it compiled.
 #
+# Optional `-UpgradeFrom <prev-setup.exe>` runs a full in-place upgrade smoke
+# in the same isolated directory & profile: installs the previous release,
+# boots it once to initialize `%APPDATA%\mica`, writes an upgrade sentinel,
+# shuts it down cleanly, overwrites it in place with `$Setup`, verifies the
+# upgraded version & 10 s survival, and proves user profile data survived.
+#
 # The local release train runs this on a machine someone uses every day, often
 # with their own Mica open, so the probe must not touch that install or its data
 # (#179):
@@ -17,9 +23,12 @@
 #   - Everything lives under one $root that is removed at the end.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 <setup.exe>
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -Setup <new.exe> -ExpectedVersion 0.15.1 -UpgradeFrom <prev.exe> -UpgradeFromVersion 0.15.0
 param(
   [Parameter(Mandatory = $true)][string]$Setup,
-  [string]$ExpectedVersion = ''
+  [string]$ExpectedVersion = '',
+  [string]$UpgradeFrom = '',
+  [string]$UpgradeFromVersion = ''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'wait-installer.ps1')
@@ -46,84 +55,170 @@ function Write-MicaLoaderDiagnostics {
   }
 }
 
+function Resolve-InstalledMicaExe {
+  param([string]$Directory)
+  foreach ($candidate in @('mica-rust.exe', 'mica.exe')) {
+    $path = Join-Path $Directory $candidate
+    if (Test-Path -LiteralPath $path) { return $path }
+  }
+  return (Join-Path $Directory 'mica-rust.exe')
+}
+
+function Assert-InstalledVersion {
+  param([string]$Executable, [string]$Expected, [string]$Label = 'Installed')
+  if (-not $Expected) { return }
+  $actualVersion = ((Get-Item -LiteralPath $Executable).VersionInfo.ProductVersion -split '\+')[0]
+  if ($actualVersion -ne $Expected) {
+    throw "$Label app version '$actualVersion' does not match expected '$Expected' ($Executable)"
+  }
+  Write-Host "$Label product version: $actualVersion"
+}
+
+function Invoke-MicaIsolatedLaunch {
+  param(
+    [string]$Executable,
+    [string]$InstallDir,
+    [System.Collections.IDictionary]$IsolatedEnv,
+    [string]$ProbePath,
+    [int]$SurviveSeconds = 10,
+    [string]$Label = 'Mica'
+  )
+  if (Test-Path -LiteralPath $ProbePath) {
+    Remove-Item -LiteralPath $ProbePath -Force
+  }
+  $previous = @{}
+  foreach ($name in $IsolatedEnv.Keys) {
+    $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+  }
+  $proc = $null
+  try {
+    try {
+      foreach ($name in $IsolatedEnv.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $IsolatedEnv[$name], 'Process')
+      }
+      $proc = Start-Process -FilePath $Executable -WorkingDirectory $InstallDir -WindowStyle Hidden -PassThru
+    } finally {
+      foreach ($name in $IsolatedEnv.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+      }
+    }
+
+    $firstFrameDeadline = (Get-Date).AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $ProbePath) -and (Get-Date) -lt $firstFrameDeadline) {
+      $proc.Refresh()
+      if ($proc.HasExited) {
+        Write-MicaLoaderDiagnostics -Directory $InstallDir -ExitCode $proc.ExitCode
+        throw "$Label exited before its first frame (exit code 0x$('{0:X8}' -f $proc.ExitCode))"
+      }
+      Start-Sleep -Milliseconds 250
+    }
+    if (-not (Test-Path -LiteralPath $ProbePath)) {
+      throw "$Label did not produce its first native frame within 30s"
+    }
+    if ($SurviveSeconds -gt 0) {
+      Start-Sleep -Seconds $SurviveSeconds
+      $proc.Refresh()
+      if ($proc.HasExited) {
+        Write-MicaLoaderDiagnostics -Directory $InstallDir -ExitCode $proc.ExitCode
+        throw "$Label exited within ${SurviveSeconds}s after its first frame (exit code 0x$('{0:X8}' -f $proc.ExitCode)) - install/launch smoke FAILED"
+      }
+    }
+    # Proves the isolation took effect: the app created its profile under the
+    # redirected APPDATA instead of the caller's real one.
+    $isolatedProfile = Join-Path $IsolatedEnv.APPDATA 'mica'
+    if (-not (Test-Path -LiteralPath $isolatedProfile)) {
+      throw "$Label did not create its profile under the isolated APPDATA ($isolatedProfile)"
+    }
+    Write-Host "$Label rendered its first frame and stayed alive for ${SurviveSeconds}s (pid $($proc.Id)) - OK"
+  } finally {
+    if ($proc -and -not $proc.HasExited) {
+      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+      $proc.WaitForExit(10000) | Out-Null
+    }
+  }
+}
+
 $root = Join-Path $env:TEMP ("mica-smoke-" + [guid]::NewGuid().ToString('N'))
 $installDir = Join-Path $root 'app'
 $profileDir = Join-Path $root 'profile'
-Write-Host "Silent-installing $Setup -> $installDir"
+$probe = Join-Path $root 'first-frame.marker'
+$isolated = [ordered]@{
+  APPDATA = Join-Path $profileDir 'roaming'
+  LOCALAPPDATA = Join-Path $profileDir 'local'
+  TEMP = Join-Path $profileDir 'temp'
+  TMP = Join-Path $profileDir 'temp'
+  MICA_STARTUP_PROBE_FILE = $probe
+}
+foreach ($dir in @($isolated.APPDATA, $isolated.LOCALAPPDATA, $isolated.TEMP)) {
+  New-Item -ItemType Directory -Force $dir | Out-Null
+}
+
 $inst = $null
-$app = $null
 try {
+  $upgradeSentinelPath = $null
+  $upgradeSentinelValue = $null
+  $prevStoreDbExisted = $false
+
+  if ($UpgradeFrom) {
+    Write-Host "Upgrade baseline: silent-installing $UpgradeFrom -> $installDir"
+    $inst = Start-Process -FilePath $UpgradeFrom `
+      -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SKIPRUN', '/MICASMOKE', "/DIR=$installDir" `
+      -WindowStyle Hidden -PassThru
+    $inst.WaitForExit(180000) | Out-Null
+    if (-not $inst.HasExited) {
+      throw "Baseline installer did not finish within 180s: $UpgradeFrom"
+    }
+    if ($inst.ExitCode -ne 0) {
+      throw "Baseline installer exited with code $($inst.ExitCode): $UpgradeFrom"
+    }
+    $prevExe = Resolve-InstalledMicaExe -Directory $installDir
+    if (-not (Test-Path -LiteralPath $prevExe)) {
+      throw "Baseline executable not found after install in $installDir"
+    }
+    Write-Host "Baseline installed OK: $prevExe"
+    Assert-InstalledVersion -Executable $prevExe -Expected $UpgradeFromVersion -Label 'Baseline'
+
+    Invoke-MicaIsolatedLaunch -Executable $prevExe -InstallDir $installDir `
+      -IsolatedEnv $isolated -ProbePath $probe -SurviveSeconds 2 -Label 'Baseline Mica'
+
+    $isolatedProfile = Join-Path $isolated.APPDATA 'mica'
+    $upgradeSentinelPath = Join-Path $isolatedProfile 'upgrade-sentinel.txt'
+    $upgradeSentinelValue = "mica-upgrade-sentinel-" + [guid]::NewGuid().ToString('N')
+    Set-Content -LiteralPath $upgradeSentinelPath -Value $upgradeSentinelValue -NoNewline
+    $prevStoreDb = Join-Path $isolatedProfile 'store.db'
+    $prevStoreDbExisted = Test-Path -LiteralPath $prevStoreDb
+    Write-Host "Baseline profile initialized; starting in-place upgrade with $Setup"
+  }
+
+  Write-Host "Silent-installing $Setup -> $installDir"
   $inst = Start-Process -FilePath $Setup `
     -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SKIPRUN', '/MICASMOKE', "/DIR=$installDir" `
     -WindowStyle Hidden -PassThru
   $exe = Join-Path $installDir 'mica-rust.exe'
   Wait-MicaInstaller -Installer $inst -Executable $exe
   Write-Host "Installed OK: $exe"
-  if ($ExpectedVersion) {
-    $actualVersion = ((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -split '\+')[0]
-    if ($actualVersion -ne $ExpectedVersion) {
-      throw "Installed app version '$actualVersion' does not match release '$ExpectedVersion'"
-    }
-    Write-Host "Installed product version: $actualVersion"
-  }
+  Assert-InstalledVersion -Executable $exe -Expected $ExpectedVersion -Label 'Installed'
 
-  $probe = Join-Path $root 'first-frame.marker'
-  $isolated = [ordered]@{
-    APPDATA = Join-Path $profileDir 'roaming'
-    LOCALAPPDATA = Join-Path $profileDir 'local'
-    TEMP = Join-Path $profileDir 'temp'
-    TMP = Join-Path $profileDir 'temp'
-    MICA_STARTUP_PROBE_FILE = $probe
-  }
-  $previous = @{}
-  foreach ($name in $isolated.Keys) {
-    $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-  }
-  foreach ($dir in @($isolated.APPDATA, $isolated.LOCALAPPDATA, $isolated.TEMP)) {
-    New-Item -ItemType Directory -Force $dir | Out-Null
-  }
-  # Only the app sees the isolated environment: the installer and uninstaller
-  # above and below run with the caller's own.
-  try {
-    foreach ($name in $isolated.Keys) {
-      [Environment]::SetEnvironmentVariable($name, $isolated[$name], 'Process')
+  Invoke-MicaIsolatedLaunch -Executable $exe -InstallDir $installDir `
+    -IsolatedEnv $isolated -ProbePath $probe -SurviveSeconds 10 -Label 'Mica'
+
+  if ($upgradeSentinelPath) {
+    if (-not (Test-Path -LiteralPath $upgradeSentinelPath)) {
+      throw "In-place upgrade removed isolated profile sentinel: $upgradeSentinelPath"
     }
-    $app = Start-Process -FilePath $exe -WorkingDirectory $installDir -WindowStyle Hidden -PassThru
-  } finally {
-    foreach ($name in $isolated.Keys) {
-      [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+    $afterValue = Get-Content -LiteralPath $upgradeSentinelPath -Raw
+    if ($afterValue -ne $upgradeSentinelValue) {
+      throw "In-place upgrade corrupted profile sentinel (expected '$upgradeSentinelValue', got '$afterValue')"
     }
-  }
-  $firstFrameDeadline = (Get-Date).AddSeconds(30)
-  while (-not (Test-Path -LiteralPath $probe) -and (Get-Date) -lt $firstFrameDeadline) {
-    $app.Refresh()
-    if ($app.HasExited) {
-      Write-MicaLoaderDiagnostics -Directory $installDir -ExitCode $app.ExitCode
-      throw "Mica exited before its first frame (exit code 0x$('{0:X8}' -f $app.ExitCode))"
+    if ($prevStoreDbExisted) {
+      $afterStoreDb = Join-Path (Join-Path $isolated.APPDATA 'mica') 'store.db'
+      if (-not (Test-Path -LiteralPath $afterStoreDb) -or (Get-Item -LiteralPath $afterStoreDb).Length -eq 0) {
+        throw "In-place upgrade lost or emptied previous store.db: $afterStoreDb"
+      }
     }
-    Start-Sleep -Milliseconds 250
+    Write-Host "In-place upgrade preserved isolated user profile & store.db - upgrade smoke OK"
   }
-  if (-not (Test-Path -LiteralPath $probe)) {
-    throw "Mica did not produce its first native frame within 30s"
-  }
-  Start-Sleep -Seconds 10
-  $app.Refresh()
-  if ($app.HasExited) {
-    Write-MicaLoaderDiagnostics -Directory $installDir -ExitCode $app.ExitCode
-    throw "Mica exited within 10s after its first frame (exit code 0x$('{0:X8}' -f $app.ExitCode)) - install/launch smoke FAILED"
-  }
-  # Proves the isolation took effect: the app created its profile under the
-  # redirected APPDATA instead of the caller's real one.
-  $isolatedProfile = Join-Path $isolated.APPDATA 'mica'
-  if (-not (Test-Path -LiteralPath $isolatedProfile)) {
-    throw "Mica did not create its profile under the isolated APPDATA ($isolatedProfile)"
-  }
-  Write-Host "Mica rendered its first frame and stayed alive for 10s (pid $($app.Id)) - smoke OK"
 } finally {
-  if ($app -and -not $app.HasExited) {
-    Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
-    $app.WaitForExit(10000) | Out-Null
-  }
   if ($inst -and -not $inst.HasExited) { Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue }
   $uninstaller = Join-Path $installDir 'unins000.exe'
   if (Test-Path $uninstaller) {

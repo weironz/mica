@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 smoke = Path('scripts/smoke-installer.ps1').read_text(encoding='utf-8')
+canary = Path('scripts/release-canary.sh').read_text(encoding='utf-8')
 iss = Path('clients/mica_rust/installer/mica.iss').read_text(encoding='utf-8')
 
 def section(text: str, name: str) -> str:
@@ -30,5 +31,11 @@ for line in entries(section(iss, 'Run')):
         assert 'not IsSmokeTest' in line and "not CmdLineParamExists('/SKIPRUN')" in line, \
             f'installer must not auto-launch during smoke install: {line}'
 assert 'mica-rust.exe' in smoke, 'smoke-installer.ps1 must check mica-rust.exe'
-print('smoke-installer isolation contract (pure Rust): passed')
+assert '$UpgradeFrom' in smoke and '$UpgradeFromVersion' in smoke, \
+    'smoke-installer.ps1 must support in-place upgrade smoke parameters'
+assert 'upgrade-sentinel.txt' in smoke and 'Remove-Item -LiteralPath $ProbePath' in smoke, \
+    'smoke-installer.ps1 must reset probe and verify profile data survives in-place upgrade'
+assert 'find_previous_windows_release' in canary and '-UpgradeFrom' in canary, \
+    'release-canary.sh must run in-place upgrade smoke from the previous published Windows release'
+print('smoke-installer isolation & in-place upgrade contract (pure Rust): passed')
 PY

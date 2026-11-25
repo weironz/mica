@@ -16,8 +16,7 @@
 
 ## 交付验证
 
-- 发布产物 canary（2026-11-01）：从 Release 下载校验、Windows 隔离安装启动、线上 `/api/health`
-  和固定入口已接入发布流程；仍需补上从上一版安装覆盖升级的自动验证。
+- 发布产物 canary（2026-11-25 更新）：从 Release 下载校验、Windows 隔离安装启动、线上 `/api/health`、固定入口，以及从上一版 Windows 安装包覆盖升级（`scripts/smoke-installer.ps1 -UpgradeFrom` + `scripts/release-canary.sh` 自动查找上一版校验并验证用户 profile/store.db 保留）已全部接入发布流程与契约测试；待下次正式发版在 GitHub Windows runner 首次实跑确认后搬入归档。
 
 ## yrs 输入兜底
 

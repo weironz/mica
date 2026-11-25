@@ -54,7 +54,21 @@ try {
   try { Wait-MicaInstaller -Installer $slow.Process -Executable $slow.Executable -TimeoutSeconds 1 }
   catch { $rejected = $_.Exception.Message -match 'did not finish' }
   if (-not $rejected) { throw 'Installer timeout was ignored' }
-  Write-Host 'PASS: complete install, nonzero exit, missing EXE and timeout'
+
+  # Verify smoke-installer.ps1 parses cleanly and exposes in-place upgrade parameters.
+  $smokePath = Join-Path $PSScriptRoot 'smoke-installer.ps1'
+  $parseErrors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($smokePath, [ref]$null, [ref]$parseErrors)
+  if ($parseErrors -and $parseErrors.Count -gt 0) {
+    throw "smoke-installer.ps1 syntax error: $($parseErrors[0].Message)"
+  }
+  $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+  foreach ($req in @('Setup', 'ExpectedVersion', 'UpgradeFrom', 'UpgradeFromVersion')) {
+    if ($paramNames -notcontains $req) {
+      throw "smoke-installer.ps1 missing required parameter -$req"
+    }
+  }
+  Write-Host 'PASS: complete install, nonzero exit, missing EXE, timeout and smoke-installer upgrade contract'
 } finally {
   foreach ($process in $processes) {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
