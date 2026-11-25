@@ -19,6 +19,7 @@ AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\{#AppName}
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+SetupIconFile=..\assets\app_icon.ico
 OutputDir=Output
 OutputBaseFilename=Mica-Setup-{#AppVersion}
 Compression=lzma2

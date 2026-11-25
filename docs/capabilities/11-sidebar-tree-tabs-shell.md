@@ -13,7 +13,7 @@
 ## 能力与交互规格
 
 ### 应用顶栏、应用菜单与多标签页
-- **`CAP-11-01` 无边框 34px 统一顶栏与 M 应用菜单**：桌面端采用隐藏系统原生标题栏的无边框 34px 顶栏，左上角为 M 图标级联菜单（`文件`/`视图`/`历史`/`帮助` + 关于弹窗与检查更新）与侧栏折叠按钮，避开 Windows/macOS 系统窗口控制按钮区。
+- **`CAP-11-01` 无边框 34px 统一顶栏、桌面应用图标与 M 应用菜单**：桌面端采用隐藏系统原生标题栏的无边框 34px 顶栏，左上角为 M 图标级联菜单（`文件`/`视图`/`历史`/`帮助` + 关于弹窗与检查更新）与侧栏折叠按钮，避开 Windows/macOS 系统窗口控制按钮区；Windows 可执行文件内嵌多尺寸（16–256px）整数资源 ID `1`（`RT_GROUP_ICON`）图标，保证任务栏、Alt+Tab、快捷方式与安装程序一致显示 Mica 标志。
 - **`CAP-11-02` 浏览器式多标签页**：支持单标签上限 50 步前进/后退历史、标签最大宽 `200px` 横向滚动、关闭 `×` 仅悬停或激活显示且单标签时隐藏、关闭后聚焦右邻、`+` 弹出「新建页面 / 打开已有页面…」、重启持久恢复 `openTabs`、快捷键 `Mod+N`/`Mod+T`/`Mod+W`/`Mod+Tab`/`Mod+Shift+Tab`。
 
 ### 侧边栏目录树与多选
@@ -36,6 +36,7 @@
 
 - **反例 1（page 当成容器或产生环）**：仅靠前端 UI 阻止还不够，必须在本地存储与服务端写锁内由 `mica_core::tree_rules` 最终兜底。
 - **反例 2（多选同时选了父文件夹和子页面导致重复操作）**：未先做 `independent_selection` 去重，批量移动或删除时二次操作已移除的子节点报错。
+- **反例 3（Windows 桌面端任务栏显示默认空白窗口图标）**：`nsh-platform-windows` 在注册 `WNDCLASSEXW` 时按整数资源 ID `1`（`MAKEINTRESOURCEW(1)`）查找可执行文件图标；若未嵌入 PE 图标资源或用了字符串资源名，任务栏与 Alt+Tab 会回退为 Windows 默认应用图标。
 
 ---
 
@@ -43,7 +44,7 @@
 
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
-| `CAP-11-01` / `02` 无边框顶栏、应用菜单与多标签 | P0 | 桌面/Web | ✅ | `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips` |
+| `CAP-11-01` / `02` 无边框顶栏、桌面图标、应用菜单与多标签 | P0 | 桌面/Web | ✅ | `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips` + `windows_app_icon` |
 | `CAP-11-03` / `04` 侧边栏几何、右键菜单与定位创建 | P0 | 全端 | ✅ | `storage::tests::views_enforce_folder_parent_and_purge` + `app_flows` |
 | `CAP-11-05` / `06` 30/40/30 拖拽排序与树多选 | P0 | 桌面/Web | ✅ | `tree_dnd::tests`（8 项全绿） + `storage::tests::reorder_views_renumbers_reparents_and_enforces_tree_rules` |
 | `CAP-11-07` / `08` 收藏区与 Emoji 选择器 | P1 | 全端 | ✅ | `emoji_picker::tests` |
@@ -54,3 +55,4 @@
 ## 演进记录
 
 - **2026-11-23**：沉淀应用外壳、多标签页、目录树 30/40/30 拖拽、多选与子树回收站规格。
+- **2026-11-25**：补齐 `clients/mica_rust` Windows PE 整数 ID `1` 图标资源嵌入（`build.rs` + `assets/app_icon.ico` + `mica.iss` `SetupIconFile`）及真机 Win32 `LoadIconW`/`LoadImageW` 回归测试。
