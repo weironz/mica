@@ -241,15 +241,7 @@ impl EditorSession {
 
   /// Export the live document body as Markdown via `mica_md`.
   pub fn export_markdown(&self, assets: &BTreeMap<String, String>) -> String {
-    if self.blocks.is_empty() {
-      return String::new();
-    }
-    mica_md::serialize_body(
-      &document_md_blocks(&self.blocks),
-      &mica_md::SerializeOptions {
-        assets: assets.clone(),
-      },
-    )
+    export_blocks_markdown(&self.blocks, assets)
   }
 
   /// Export the live document body as HTML via `mica_md`.
@@ -1863,9 +1855,7 @@ impl EditorSession {
     if root_changed {
       self.root_block_id = root;
     }
-    if !root_changed
-      && let Some(changed_ids) = self.doc.take_changed_block_ids()
-    {
+    if !root_changed && let Some(changed_ids) = self.doc.take_changed_block_ids() {
       // Fast path: remote update only modified block contents, not tree shape.
       let body_ids: Vec<String> = changed_ids
         .into_iter()
@@ -1903,10 +1893,7 @@ impl EditorSession {
             .iter()
             .enumerate()
             .map(|(i, b)| {
-              let txt = old_texts
-                .get(&i)
-                .cloned()
-                .unwrap_or_else(|| b.text.clone());
+              let txt = old_texts.get(&i).cloned().unwrap_or_else(|| b.text.clone());
               (b.id.clone(), txt)
             })
             .collect();
@@ -2434,4 +2421,18 @@ pub fn find_all_matches(
     }
   }
   out
+}
+
+/// Export a cloned slice of [`EditorBlock`]s as canonical Markdown via `mica_md`.
+/// Pure and `Send`-friendly so UI shells can serialize large documents off the UI thread.
+pub fn export_blocks_markdown(blocks: &[EditorBlock], assets: &BTreeMap<String, String>) -> String {
+  if blocks.is_empty() {
+    return String::new();
+  }
+  mica_md::serialize_body(
+    &document_md_blocks(blocks),
+    &mica_md::SerializeOptions {
+      assets: assets.clone(),
+    },
+  )
 }

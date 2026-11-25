@@ -13,7 +13,7 @@
 
 use std::{
   cell::RefCell,
-  collections::{BTreeMap, HashMap},
+  collections::{BTreeMap, HashMap, HashSet},
   rc::Rc,
 };
 
@@ -63,6 +63,12 @@ pub struct MicaDocumentBridge {
   cached_ids: RefCell<Vec<String>>,
   /// O(1) `block_id -> index` map rebuilt only when `structure_rev` changes.
   id_to_index: RefCell<HashMap<String, usize>>,
+  /// Per-block word counts for O(1) incremental updates on in-block typing.
+  block_word_counts: RefCell<Vec<mica_core::WordCount>>,
+  /// Cached total document word/char count kept in sync with `block_word_counts`.
+  total_word_count: std::cell::Cell<mica_core::WordCount>,
+  /// IDs of blocks currently in the outline so plain paragraph edits skip scanning.
+  heading_ids: RefCell<HashSet<String>>,
   /// Per-block fine-grained revision signals (`block_id -> Signal<u64>`).
   block_revs: RefCell<HashMap<String, Signal<u64>>>,
   on_persist: RefCell<Option<PersistCallback>>,
@@ -122,9 +128,11 @@ impl MicaDocumentBridge {
       .enumerate()
       .map(|(i, id)| (id.clone(), i))
       .collect();
-    let word_count = signal(compute_word_count_label(session.blocks()));
+    let (per_block_wc, total_wc) = compute_block_word_counts(session.blocks());
+    let word_count = signal(format_word_count_label(total_wc));
     let block_count = signal(session.blocks().len());
-    let outline = signal(compute_outline(session.blocks()));
+    let (ol_items, heading_ids) = compute_outline_with_ids(session.blocks());
+    let outline = signal(ol_items);
     let can_undo = signal(session.can_undo());
     let can_redo = signal(session.can_redo());
     let (ak, al, am) = compute_active_state(&session);
@@ -136,6 +144,9 @@ impl MicaDocumentBridge {
       session: RefCell::new(session),
       cached_ids: RefCell::new(ids),
       id_to_index: RefCell::new(id_to_index),
+      block_word_counts: RefCell::new(per_block_wc),
+      total_word_count: std::cell::Cell::new(total_wc),
+      heading_ids: RefCell::new(heading_ids),
       block_revs: RefCell::new(HashMap::new()),
       on_persist: RefCell::new(None),
       on_dirty: RefCell::new(None),
@@ -192,6 +203,16 @@ impl MicaDocumentBridge {
   pub fn take_pending_markdown(&self) -> Option<String> {
     if self.pending_persist.replace(false) {
       Some(self.export_markdown())
+    } else {
+      None
+    }
+  }
+
+  /// If edits are waiting to be persisted, clears the dirty flag and returns a
+  /// cloned block snapshot so Markdown serialization can run off the UI thread.
+  pub fn take_pending_export_blocks(&self) -> Option<Vec<EditorBlock>> {
+    if self.pending_persist.replace(false) {
+      Some(self.session.borrow().blocks().to_vec())
     } else {
       None
     }
@@ -356,9 +377,10 @@ impl MicaDocumentBridge {
     let ids: Vec<String> = next_session.blocks().iter().map(|b| b.id.clone()).collect();
     let fm = read_root_front_matter(next_session.doc(), next_session.root_block_id());
     let sel = next_session.selection().cloned();
-    let wc = compute_word_count_label(next_session.blocks());
+    let (per_block_wc, total_wc) = compute_block_word_counts(next_session.blocks());
+    let wc = format_word_count_label(total_wc);
     let bc = next_session.blocks().len();
-    let ol = compute_outline(next_session.blocks());
+    let (ol, next_heading_ids) = compute_outline_with_ids(next_session.blocks());
     let (ak, al, am) = compute_active_state(&next_session);
 
     *self.session.borrow_mut() = next_session;
@@ -371,6 +393,9 @@ impl MicaDocumentBridge {
       }
     }
     *self.cached_ids.borrow_mut() = ids;
+    *self.block_word_counts.borrow_mut() = per_block_wc;
+    self.total_word_count.set(total_wc);
+    *self.heading_ids.borrow_mut() = next_heading_ids;
     self.block_revs.borrow_mut().clear();
     self.pending_persist.set(false);
 
@@ -487,13 +512,67 @@ impl MicaDocumentBridge {
         }
       };
       let wc = if patch.content_changed {
-        Some(compute_word_count_label(blocks))
+        if structure_changed {
+          let (per_block_wc, total_wc) = compute_block_word_counts(blocks);
+          *self.block_word_counts.borrow_mut() = per_block_wc;
+          self.total_word_count.set(total_wc);
+          Some(format_word_count_label(total_wc))
+        } else {
+          let idx_map = self.id_to_index.borrow();
+          let mut per_block = self.block_word_counts.borrow_mut();
+          if per_block.len() != blocks.len() {
+            let (rebuilt, total_wc) = compute_block_word_counts(blocks);
+            *per_block = rebuilt;
+            self.total_word_count.set(total_wc);
+            Some(format_word_count_label(total_wc))
+          } else {
+            let mut total_wc = self.total_word_count.get();
+            for bp in &patch.dirty_blocks {
+              if let BlockPatch::Upsert { block, .. } = bp
+                && let Some(&idx) = idx_map.get(block.id.as_str())
+                && idx < blocks.len()
+              {
+                let old_wc = per_block[idx];
+                let new_wc = count_block_words(&blocks[idx]);
+                if new_wc != old_wc {
+                  total_wc.words = total_wc
+                    .words
+                    .saturating_sub(old_wc.words)
+                    .saturating_add(new_wc.words);
+                  total_wc.chars = total_wc
+                    .chars
+                    .saturating_sub(old_wc.chars)
+                    .saturating_add(new_wc.chars);
+                  per_block[idx] = new_wc;
+                }
+              }
+            }
+            self.total_word_count.set(total_wc);
+            Some(format_word_count_label(total_wc))
+          }
+        }
       } else {
         None
       };
       let bc = blocks.len();
       let ol = if patch.content_changed {
-        Some(compute_outline(blocks))
+        let needs_outline = structure_changed || {
+          let hids = self.heading_ids.borrow();
+          patch.dirty_blocks.iter().any(|bp| match bp {
+            BlockPatch::Upsert { block, .. } => {
+              block.kind == "heading" || hids.contains(block.id.as_str())
+            }
+            BlockPatch::Remove { block_id } => hids.contains(block_id.as_str()),
+            BlockPatch::Reorder { .. } => true,
+          })
+        };
+        if needs_outline {
+          let (items, next_hids) = compute_outline_with_ids(blocks);
+          *self.heading_ids.borrow_mut() = next_hids;
+          Some(items)
+        } else {
+          None
+        }
       } else {
         None
       };
@@ -1511,10 +1590,12 @@ fn read_root_front_matter(doc: &MicaDoc, root_id: &str) -> String {
     .unwrap_or_default()
 }
 
-fn compute_outline(blocks: &[EditorBlock]) -> Vec<OutlineItem> {
+fn compute_outline_with_ids(blocks: &[EditorBlock]) -> (Vec<OutlineItem>, HashSet<String>) {
   let mut items = Vec::new();
+  let mut ids = HashSet::new();
   for (idx, b) in blocks.iter().enumerate() {
     if b.kind == "heading" {
+      ids.insert(b.id.clone());
       let level = b.data.get("level").and_then(Value::as_u64).unwrap_or(1).clamp(1, 6);
       let label = b.text.trim();
       if !label.is_empty() {
@@ -1527,32 +1608,47 @@ fn compute_outline(blocks: &[EditorBlock]) -> Vec<OutlineItem> {
       }
     }
   }
-  items
+  (items, ids)
 }
 
-fn compute_word_count_label(blocks: &[EditorBlock]) -> String {
+fn count_block_words(b: &EditorBlock) -> mica_core::WordCount {
   let mut total = mica_core::WordCount::default();
-  for b in blocks {
-    let raw = b.text.trim();
-    if !raw.is_empty() {
-      total = total.saturating_add(mica_core::word_count::count_text(raw));
-    }
-    if b.kind == "table"
-      && let Some(rows) = b.data.get("rows").and_then(Value::as_array)
-    {
-      for row in rows {
-        if let Some(cells) = row.as_array() {
-          for cell in cells {
-            if let Some(s) = cell.as_str()
-              && !s.is_empty()
-            {
-              total = total.saturating_add(mica_core::word_count::count_text(s));
-            }
+  let raw = b.text.trim();
+  if !raw.is_empty() {
+    total = total.saturating_add(mica_core::word_count::count_text(raw));
+  }
+  if b.kind == "table"
+    && let Some(rows) = b.data.get("rows").and_then(Value::as_array)
+  {
+    for row in rows {
+      if let Some(cells) = row.as_array() {
+        for cell in cells {
+          if let Some(s) = cell.as_str()
+            && !s.is_empty()
+          {
+            total = total.saturating_add(mica_core::word_count::count_text(s));
           }
         }
       }
     }
   }
+  total
+}
+
+fn compute_block_word_counts(
+  blocks: &[EditorBlock],
+) -> (Vec<mica_core::WordCount>, mica_core::WordCount) {
+  let mut per_block = Vec::with_capacity(blocks.len());
+  let mut total = mica_core::WordCount::default();
+  for b in blocks {
+    let wc = count_block_words(b);
+    total = total.saturating_add(wc);
+    per_block.push(wc);
+  }
+  (per_block, total)
+}
+
+fn format_word_count_label(total: mica_core::WordCount) -> String {
   format!("{} 词 · {} 字", total.words, total.chars)
 }
 
@@ -2156,6 +2252,59 @@ mod tests {
         !has_strikethrough,
         "shell tildes inside copied code block must NEVER turn into strikethrough marks"
       );
+    });
+  }
+
+  #[test]
+  fn incremental_word_count_outline_and_offthread_export_match_full_recompute() {
+    with_runtime(|| {
+      let bridge = MicaDocumentBridge::from_markdown("# 标题一\n\n第一段测试\n\n## 二级\n\nhello world");
+      bridge.set_on_dirty(Rc::new(|| {}));
+
+      let assert_synced = |b: &MicaDocumentBridge| {
+        let (expected_wc, expected_ol) = b.with_blocks(|bs| {
+          let (_, tot) = compute_block_word_counts(bs);
+          let (ol, _) = compute_outline_with_ids(bs);
+          (format_word_count_label(tot), ol)
+        });
+        assert_eq!(b.word_count_signal().get_untracked(), expected_wc);
+        assert_eq!(b.outline_signal().get_untracked(), expected_ol);
+      };
+
+      assert_synced(&bridge);
+
+      // 1. Plain paragraph edit updates word count incrementally and keeps outline intact.
+      bridge.set_selection(DocSelection::caret(1, 5));
+      bridge.dispatch(EditorCommand::InsertText {
+        text: " 追加内容".into(),
+      });
+      assert_synced(&bridge);
+
+      // 2. Editing heading updates both word count and outline.
+      bridge.set_selection(DocSelection::caret(0, 3));
+      bridge.dispatch(EditorCommand::InsertText {
+        text: "修订".into(),
+      });
+      assert_synced(&bridge);
+      assert_eq!(bridge.outline_signal().get_untracked()[0].text, "标题一修订");
+
+      // 3. Converting heading -> paragraph removes it from outline cleanly.
+      bridge.set_selection(DocSelection::caret(2, 0));
+      bridge.dispatch(EditorCommand::TransformBlock {
+        kind: "paragraph".into(),
+        data: None,
+      });
+      assert_synced(&bridge);
+      assert_eq!(bridge.outline_signal().get_untracked().len(), 1);
+
+      // 4. take_pending_export_blocks matches export_markdown byte-for-byte.
+      let expected_md = bridge.export_markdown();
+      let cloned_blocks = bridge
+        .take_pending_export_blocks()
+        .expect("dirty flag should yield cloned blocks once");
+      assert!(bridge.take_pending_export_blocks().is_none());
+      let off_thread_md = mica_editor::export_blocks_markdown(&cloned_blocks, &BTreeMap::new());
+      assert_eq!(off_thread_md, expected_md);
     });
   }
 }

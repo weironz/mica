@@ -883,12 +883,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }));
     }
 
-    // Debounced background persist path for rapid interactive edits
+    // Debounced background persist path for rapid interactive edits:
+    // keep Markdown serialization and SQLite writes off the UI thread so large
+    // documents never cause frame-time spikes when the 300 ms debounce fires.
     {
       let br_d = bridge.clone();
       let vault_d = vault_p.clone();
       let docs_d = docs_p.clone();
-      let tree_d = tree_p.clone();
       let seqs_d = disk_save_seqs.clone();
       let cloud_d = schedule_cloud_patch;
       bridge.set_on_dirty(Rc::new(move || {
@@ -902,7 +903,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let br_a = br_d.clone();
         let vault_a = vault_d.clone();
         let docs_a = docs_d.clone();
-        let tree_a = tree_d.clone();
         let seqs_a = seqs_d.clone();
         let cloud_a = cloud_d.clone();
         spawn(async move {
@@ -913,19 +913,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           {
             return;
           }
-          let Some(md) = br_a.take_pending_markdown() else {
+          let Some(blocks) = br_a.take_pending_export_blocks() else {
             return;
           };
-          docs_a.borrow_mut().insert(doc_id, md.clone());
-          let next_bl = compute_backlinks_for(
-            &tree_a.borrow(),
-            &docs_a.borrow(),
-            Some(doc_id),
-            &active_title.get_untracked(),
-          );
-          if backlinks_sig.get_untracked() != next_bl {
-            backlinks_sig.set(next_bl);
-          }
           let write_seq = seqs_a
             .lock()
             .ok()
@@ -937,28 +927,35 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             .unwrap_or(0);
           let v_bg = (*vault_a).clone();
           let orig_bg = orig.clone();
-          let md_bg = md.clone();
           let seqs_bg = seqs_a.clone();
-          spawn(async move {
-            let _ = net::run_blocking(move || {
-              let still_latest = seqs_bg
-                .lock()
-                .ok()
-                .and_then(|map| map.get(&(orig_bg.clone(), doc_id)).copied())
-                .is_none_or(|cur| cur == write_seq);
-              if still_latest && !cloud_sync::is_cloud_origin(&orig_bg) {
-                let _ = v_bg.save_markdown_tracked(
-                  &orig_bg,
-                  ws_id,
-                  doc_id,
-                  &md_bg,
-                  mica_core::ActivitySource::Manual,
-                );
-              }
-            })
-            .await;
-          });
-          cloud_a(orig, ws_id, doc_id, md);
+          let md = net::run_blocking(move || {
+            let md = mica_editor::export_blocks_markdown(&blocks, &std::collections::BTreeMap::new());
+            let still_latest = seqs_bg
+              .lock()
+              .ok()
+              .and_then(|map| map.get(&(orig_bg.clone(), doc_id)).copied())
+              .is_none_or(|cur| cur == write_seq);
+            if still_latest && !cloud_sync::is_cloud_origin(&orig_bg) {
+              let _ = v_bg.save_markdown_tracked(
+                &orig_bg,
+                ws_id,
+                doc_id,
+                &md,
+                mica_core::ActivitySource::Manual,
+              );
+            }
+            md
+          })
+          .await;
+          let still_latest = seqs_a
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&(orig.clone(), doc_id)).copied())
+            .is_none_or(|cur| cur == write_seq);
+          if still_latest {
+            docs_a.borrow_mut().insert(doc_id, md.clone());
+            cloud_a(orig, ws_id, doc_id, md);
+          }
         });
       }));
     }

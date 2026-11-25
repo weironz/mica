@@ -48,7 +48,7 @@ pub use selection::{
   ActiveMarks, DocPosition, DocSelection, InlineSelectionRange, NormalizedSelection,
   active_marks_for_selection, inline_selection_ranges, reconcile_selection, word_range_at,
 };
-pub use session::{EditorSession, find_all_matches};
+pub use session::{EditorSession, export_blocks_markdown, find_all_matches};
 pub use table::{TableCell, TableModel, TableNavDirection, TableNavResult, TableOp};
 pub use utf16::{
   common_prefix_utf16, common_suffix_utf16, diff_edit_range, inserted_text_utf16,

@@ -265,11 +265,17 @@ try {
   # 1. Short document keystroke-to-screen latency
   $vks = @(0x4D, 0x49, 0x43, 0x41, 0x52, 0x55, 0x53, 0x54, 0x57, 0x58) # M I C A R U S T W X
   $shortSamples = New-Object System.Collections.Generic.List[double]
+  $shortOutliers = New-Object System.Collections.Generic.List[string]
   $shortMisses = 0
   for ($i = 0; $i -lt $Samples; $i++) {
     $vk = $vks[$i % $vks.Count]
     $ms = [MicaLatencyProbe]::MeasureKeystrokeMs($vk, $rx, $ry, $rw, $rh, 500)
-    if ($ms -ge 0) { $shortSamples.Add($ms) } else { $shortMisses++ }
+    if ($ms -ge 0) {
+      $shortSamples.Add($ms)
+      if ($ms -gt 120.0) { $shortOutliers.Add(("#{0} vk=0x{1:X2} {2}ms" -f $i, $vk, [Math]::Round($ms, 1))) }
+    } else {
+      $shortMisses++
+    }
     Start-Sleep -Milliseconds 90
   }
   $shortStats = Summarize-Ms $shortSamples.ToArray()
@@ -301,11 +307,17 @@ try {
   Start-Sleep -Milliseconds 250
 
   $longSamples = New-Object System.Collections.Generic.List[double]
+  $longOutliers = New-Object System.Collections.Generic.List[string]
   $longMisses = 0
   for ($i = 0; $i -lt $Samples; $i++) {
     $vk = $vks[$i % $vks.Count]
     $ms = [MicaLatencyProbe]::MeasureKeystrokeMs($vk, $rx, $ry, $rw, $rh, 500)
-    if ($ms -ge 0) { $longSamples.Add($ms) } else { $longMisses++ }
+    if ($ms -ge 0) {
+      $longSamples.Add($ms)
+      if ($ms -gt 120.0) { $longOutliers.Add(("#{0} vk=0x{1:X2} {2}ms" -f $i, $vk, [Math]::Round($ms, 1))) }
+    } else {
+      $longMisses++
+    }
     Start-Sleep -Milliseconds 90
   }
   $longStats = Summarize-Ms $longSamples.ToArray()
@@ -314,8 +326,8 @@ try {
     exe           = $exeFull
     cold_start_ms = $coldStartMs
     window_size   = "${winW}x${winH}"
-    short_doc     = [pscustomobject]@{ stats = $shortStats; timeouts = $shortMisses }
-    large_doc     = [pscustomobject]@{ blocks = $LargeBlocks; stats = $longStats; timeouts = $longMisses }
+    short_doc     = [pscustomobject]@{ stats = $shortStats; timeouts = $shortMisses; outliers = $shortOutliers.ToArray() }
+    large_doc     = [pscustomobject]@{ blocks = $LargeBlocks; stats = $longStats; timeouts = $longMisses; outliers = $longOutliers.ToArray() }
   }
 
   if ($Json) {
@@ -326,9 +338,11 @@ try {
     Write-Host ""
     Write-Host "=== [1/2] Short Document ($($shortStats.count)/$Samples detected, timeouts=$shortMisses) ==="
     Write-Host ("  key_to_screen   min={0} ms  p50={1} ms  p95={2} ms  p99={3} ms  max={4} ms" -f $shortStats.min, $shortStats.p50, $shortStats.p95, $shortStats.p99, $shortStats.max)
+    if ($shortOutliers.Count -gt 0) { Write-Host ("  outliers(>120ms): " + ($shortOutliers -join ", ")) }
     Write-Host ""
     Write-Host "=== [2/2] Large Document ($LargeBlocks pasted blocks, $($longStats.count)/$Samples detected, timeouts=$longMisses) ==="
     Write-Host ("  key_to_screen   min={0} ms  p50={1} ms  p95={2} ms  p99={3} ms  max={4} ms" -f $longStats.min, $longStats.p50, $longStats.p95, $longStats.p99, $longStats.max)
+    if ($longOutliers.Count -gt 0) { Write-Host ("  outliers(>120ms): " + ($longOutliers -join ", ")) }
   }
 } finally {
   if ($proc -and -not $proc.HasExited) {
