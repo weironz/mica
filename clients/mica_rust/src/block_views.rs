@@ -15,7 +15,11 @@
 //!   embedded boards (snug 20px auto-fit + draggable resize handles), and fullscreen
 //!   zoom lightbox modals for Mermaid diagrams and images.
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+  cell::{Cell, RefCell},
+  rc::Rc,
+  time::Duration,
+};
 
 use mica_editor::{
   DocPosition, DocSelection, EditorBlock,
@@ -113,13 +117,66 @@ pub struct BlockRenderEnv {
   pub sink_clear_rev: Signal<u64>,
   pub marquee_selected: Signal<Option<(usize, usize)>>,
   pub inline_math_edit: Signal<Option<crate::editor_positioning::InlineMathEdit>>,
+  /// Records `(page_x, page_y)` when an inner `text_box` / `code_text_box`
+  /// already handled the current `on_mouse_move` so the enclosing full-width
+  /// row handler never overwrites the exact character hit with approximate
+  /// margin coordinates.
+  pub inner_drag_hit: Rc<Cell<Option<(f32, f32)>>>,
+  /// `true` when the latest pointer-down originated from touch or stylus.
+  pub last_pointer_is_touch: Signal<bool>,
+  /// `true` when the active selection was started via touch (long-press /
+  /// touch double-tap), displaying teardrop handles and compact action bar.
+  pub touch_selection_active: Signal<bool>,
+  /// Multi-tap counter for touch pointers (Web `nsh.js` reports `clicks = 1`
+  /// for touch events).
+  pub touch_tap_tracker: Rc<RefCell<crate::touch_selection::TouchTapTracker>>,
 }
 
 fn is_non_prose_block(block: &EditorBlock) -> bool {
-  matches!(
-    effective_block_kind(block),
-    "board" | "mermaid" | "math" | "math_block" | "image" | "table" | "divider"
-  )
+  crate::touch_selection::is_atomic_selection_kind(effective_block_kind(block))
+}
+
+/// Computes the `(text_left, text_top)` origin of `block`'s text container in
+/// row-local coordinates when dragging across margins, list prefixes, quote
+/// borders, or code-block card padding where the inner text box did not fire.
+pub(crate) fn row_text_origin_offset(
+  block: &EditorBlock,
+  content_left: f32,
+  text_frame_origin: (f32, f32),
+) -> (f32, f32) {
+  let kind = effective_block_kind(block);
+  let li_inset = list_continuation_inset_px(block);
+  let indent = block.data.get("indent").and_then(Value::as_u64).unwrap_or(0).min(8) as f32;
+  match kind {
+    "code_block" => {
+      let line_numbers = block.data.get("lineNumbers").and_then(Value::as_bool).unwrap_or(false);
+      let ln_w = if line_numbers { 28.0 } else { 0.0 };
+      let has_title = block
+        .data
+        .get("title")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty());
+      let title_h = if has_title { 22.0 } else { 0.0 };
+      // `node-view-code-block` (`my_2` = 8px) + card (`px(14)`, `py(12)`) + optional line numbers/title
+      (content_left + li_inset + 14.0 + ln_w, 20.0 + title_h)
+    }
+    "quote" => {
+      let has_callout = block
+        .data
+        .get("alert")
+        .and_then(Value::as_str)
+        .and_then(CalloutKind::from_attr)
+        .is_some();
+      let top_extra = if has_callout { 36.0 } else { 8.0 };
+      (content_left + li_inset + 17.0, top_extra)
+    }
+    "bulleted_list" | "todo" => (content_left + indent * 24.0 + 26.0, text_frame_origin.1.max(2.0)),
+    "numbered_list" => (content_left + indent * 24.0 + 28.0, text_frame_origin.1.max(2.0)),
+    _ => (
+      content_left + li_inset + indent * 24.0 + text_frame_origin.0,
+      text_frame_origin.1,
+    ),
+  }
 }
 
 #[inline]
@@ -150,6 +207,8 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   let page_width = env.page_width;
   let dark_mode = env.dark_mode;
   let marquee_selected = env.marquee_selected;
+  let inner_drag_hit_row = env.inner_drag_hit.clone();
+  let touch_sel_row = env.touch_selection_active;
   let structure_rev = bridge.structure_rev_signal();
   let row_ref = element_ref();
   let row_width = signal(960.0_f32);
@@ -214,6 +273,7 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
       br_row_clear.clear_selection();
       marquee_selected.set(None);
       drag_anchor.set(None);
+      touch_sel_row.set(false);
       focused_code_row.set(None);
       focused_cell_row.set(None);
       table_sel_row.set(None);
@@ -244,6 +304,12 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
     // every block kind (prose, tables, dividers, code blocks, images, boards,
     // Mermaid, math) so upward/downward drag selection NEVER stalls!
     .on_mouse_move(move |e: &MouseEvent| {
+      let page_xy = (e.page_position.x.0, e.page_position.y.0);
+      if inner_drag_hit_row.take() == Some(page_xy) {
+        // Inner `text_box` / `code_text_box` already resolved the exact glyph
+        // for this pointer move; never overwrite it with outer margin math.
+        return;
+      }
       if e.pressed_button != Some(MouseButton::Left) || blank_marquee_guard.get_untracked() {
         return;
       }
@@ -296,23 +362,38 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         } else {
           rw.min(eff)
         };
-        let content_left = ((rw - col_w) * 0.5).max(0.0) + 24.0;
+        let col_left = ((rw - col_w) * 0.5).max(0.0);
+        let content_left = col_left + 24.0;
+        let content_right = (col_left + col_w - 24.0).max(content_left + 1.0);
+        let block_u16_len = utf16_len(&block.text);
         let off = {
           let cache = layouts_drag.borrow();
           if let Some(info) = cache.blocks.get(&block.id) {
-            let text_left = content_left + info.text_frame.origin.x.0;
-            let text_top = info.text_frame.origin.y.0;
+            let (text_left, text_top) = row_text_origin_offset(
+              &block,
+              content_left,
+              (info.text_frame.origin.x.0, info.text_frame.origin.y.0),
+            );
             let local_x = e.position.x.0 - text_left;
             let local_y = (e.position.y.0 - text_top).max(0.0);
-            if local_x <= 0.0 {
+            if e.position.x.0 <= text_left {
               offset_at_point(&info.lines, 0.0, local_y, &info.font, &|f, t| drag_measure(f, t))
+                .min(block_u16_len)
+            } else if e.position.x.0 >= content_right {
+              offset_at_point(&info.lines, f32::MAX * 0.25, local_y, &info.font, &|f, t| {
+                drag_measure(f, t)
+              })
+              .min(block_u16_len)
             } else {
-              offset_at_point(&info.lines, local_x, local_y, &info.font, &|f, t| drag_measure(f, t))
+              offset_at_point(&info.lines, local_x, local_y, &info.font, &|f, t| {
+                drag_measure(f, t)
+              })
+              .min(block_u16_len)
             }
           } else if idx < anchor.node {
             0
           } else {
-            utf16_len(&block.text)
+            block_u16_len
           }
         };
         DocPosition::new(idx, off)
@@ -486,12 +567,32 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     let caret_blink_on = env.caret_blink_on;
     let sink_clear_rev = env.sink_clear_rev;
     let inline_math_edit = env.inline_math_edit;
+    let inner_drag_hit_m = env.inner_drag_hit.clone();
+    let last_ptr_touch_down = env.last_pointer_is_touch;
+    let last_ptr_touch_lp = env.last_pointer_is_touch;
+    let touch_sel_down = env.touch_selection_active;
+    let touch_sel_lp = env.touch_selection_active;
+    let tap_tracker_down = env.touch_tap_tracker.clone();
+    let layouts_lp = layouts.clone();
+    let bid_lp = block_id.clone();
+    let font_lp = css_font.clone();
+    let text_lp = text_str.clone();
+    let br_lp = bridge.clone();
+    let drag_anchor_lp = env.drag_anchor;
+    let focused_code_lp = env.focused_code_block;
+    let focused_cell_lp = env.focused_table_cell;
+    let table_sel_lp = env.table_selection;
+    let table_drag_lp = env.table_drag_anchor;
+    let marquee_sel_lp = env.marquee_selected;
+    let blank_marquee_lp = env.body_blank_marquee_ready;
+    let marquee_origin_lp = env.marquee_origin_page;
     let marks_click = marks.clone();
     let layout_rev = signal(0u64);
     let kind_color = kind.clone();
     let measure: TextMeasureFn = Rc::new(text_measurer());
     let measure_sel = measure.clone();
     let measure_click = measure.clone();
+    let measure_lp = measure.clone();
     let measure_move = measure;
 
     let hit_offset = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
@@ -534,7 +635,17 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         marquee_origin_page.set(None);
 
         let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
-        let click_count = e.clicks.clamp(1, 3);
+        let is_touch = last_ptr_touch_down.get_untracked();
+        let click_count = if is_touch {
+          tap_tracker_down.borrow_mut().bump(
+            e.page_position.x.0,
+            e.page_position.y.0,
+            crate::touch_selection::now_ms(),
+          )
+        } else {
+          tap_tracker_down.borrow_mut().reset();
+          e.clicks.clamp(1, 3)
+        };
         let _ = last_click;
         let idx = live_index(at);
 
@@ -542,13 +653,15 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
           inline_math_edit.set(None);
           let end_u16 = utf16_len(&text_click);
           let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, end_u16));
-          drag_anchor_d.set(Some(sel.anchor_pos()));
+          drag_anchor_d.set(if is_touch { None } else { Some(sel.anchor_pos()) });
+          touch_sel_down.set(is_touch && !sel.is_collapsed());
           br_click.set_selection(sel);
         } else if click_count == 2 {
           inline_math_edit.set(None);
           let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
           let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
-          drag_anchor_d.set(Some(sel.anchor_pos()));
+          drag_anchor_d.set(if is_touch { None } else { Some(sel.anchor_pos()) });
+          touch_sel_down.set(is_touch && !sel.is_collapsed());
           br_click.set_selection(sel);
         } else {
           if let Some(m) = marks_click.iter().find(|m| {
@@ -566,10 +679,35 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
             inline_math_edit.set(None);
           }
           let pos = DocPosition::new(idx, off);
-          drag_anchor_d.set(Some(pos));
+          drag_anchor_d.set(if is_touch { None } else { Some(pos) });
+          touch_sel_down.set(false);
           br_click.set_selection(DocSelection::caret(idx, off));
         }
         br_click.request_focus();
+      })
+      .on_long_press(move |e: &PressEvent| {
+        // Mobile / touch long-press selects a 1-2 char CJK word or full Latin word
+        // and raises teardrop drag handles (never hijacking desktop mouse drag-select).
+        if !last_ptr_touch_lp.get_untracked() {
+          return;
+        }
+        focused_code_lp.set(None);
+        focused_cell_lp.set(None);
+        table_sel_lp.set(None);
+        table_drag_lp.set(None);
+        marquee_sel_lp.set(None);
+        blank_marquee_lp.set(false);
+        marquee_origin_lp.set(None);
+        drag_anchor_lp.set(None);
+
+        let off = hit_offset(&layouts_lp, &bid_lp, &font_lp, &measure_lp, e.position.x.0, e.position.y.0);
+        let idx = live_index(at);
+        let (ws, we) = crate::touch_selection::touch_word_bounds(&text_lp, off);
+        if we > ws {
+          let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
+          touch_sel_lp.set(true);
+          br_lp.set_selection(sel);
+        }
       })
       .on_mouse_move(move |e: &MouseEvent| {
         if e.pressed_button != Some(MouseButton::Left) || blank_marquee_ready.get_untracked() {
@@ -578,6 +716,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         let Some(anchor) = drag_anchor_m.get_untracked() else {
           return;
         };
+        inner_drag_hit_m.set(Some((e.page_position.x.0, e.page_position.y.0)));
         let idx = live_index(at);
         let off = hit_offset(&layouts_move, &bid_move, &font_move, &measure_move, e.position.x.0, e.position.y.0);
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
@@ -1233,7 +1372,18 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
     let measure: TextMeasureFn = Rc::new(text_measurer());
     let measure_sel = measure.clone();
     let measure_click = measure.clone();
+    let measure_lp = measure.clone();
     let measure_move = measure;
+    let inner_drag_hit_code = env.inner_drag_hit.clone();
+    let last_ptr_touch_code = env.last_pointer_is_touch;
+    let last_ptr_touch_code_lp = env.last_pointer_is_touch;
+    let touch_sel_code = env.touch_selection_active;
+    let touch_sel_code_lp = env.touch_selection_active;
+    let tap_tracker_code = env.touch_tap_tracker.clone();
+    let layouts_code_lp = layouts.clone();
+    let bid_code_lp = block_id.clone();
+    let text_code_lp = source.clone();
+    let br_code_lp = bridge.clone();
 
     let hit_code_offset = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
                                 bid: &str,
@@ -1279,23 +1429,57 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
 
         let off = hit_code_offset(&layouts_click, &bid_click, &measure_click, e.position.x.0, e.position.y.0);
-        let click_count = e.clicks.clamp(1, 3);
+        let is_touch = last_ptr_touch_code.get_untracked();
+        let click_count = if is_touch {
+          tap_tracker_code.borrow_mut().bump(
+            e.page_position.x.0,
+            e.page_position.y.0,
+            crate::touch_selection::now_ms(),
+          )
+        } else {
+          tap_tracker_code.borrow_mut().reset();
+          e.clicks.clamp(1, 3)
+        };
         let idx = live_index(at);
         if click_count == 3 {
           let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, text_u16_len));
-          drag_anchor.set(Some(sel.anchor_pos()));
+          drag_anchor.set(if is_touch { None } else { Some(sel.anchor_pos()) });
+          touch_sel_code.set(is_touch && !sel.is_collapsed());
           br_click.set_selection(sel);
         } else if click_count == 2 {
           let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
           let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
-          drag_anchor.set(Some(sel.anchor_pos()));
+          drag_anchor.set(if is_touch { None } else { Some(sel.anchor_pos()) });
+          touch_sel_code.set(is_touch && !sel.is_collapsed());
           br_click.set_selection(sel);
         } else {
           let pos = DocPosition::new(idx, off);
-          drag_anchor.set(Some(pos));
+          drag_anchor.set(if is_touch { None } else { Some(pos) });
+          touch_sel_code.set(false);
           br_click.set_selection(DocSelection::caret(idx, off));
         }
         br_click.request_focus();
+      })
+      .on_long_press(move |e: &PressEvent| {
+        if !last_ptr_touch_code_lp.get_untracked() {
+          return;
+        }
+        focused_code.set(None);
+        focused_cell.set(None);
+        table_sel.set(None);
+        table_drag.set(None);
+        marquee_selected.set(None);
+        blank_marquee_ready.set(false);
+        marquee_origin_page.set(None);
+        drag_anchor.set(None);
+        let off = hit_code_offset(&layouts_code_lp, &bid_code_lp, &measure_lp, e.position.x.0, e.position.y.0);
+        let idx = live_index(at);
+        let (ws, we) = crate::touch_selection::touch_word_bounds(&text_code_lp, off);
+        if we > ws {
+          let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
+          touch_sel_code_lp.set(true);
+          br_code_lp.set_selection(sel);
+        }
       })
       .on_press(move || {
         // Accessibility / headless test press fallback when `on_press_down` wasn't synthesized.
@@ -1315,6 +1499,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         let Some(anchor) = drag_anchor.get_untracked() else {
           return;
         };
+        inner_drag_hit_code.set(Some((e.page_position.x.0, e.page_position.y.0)));
         let idx = live_index(at);
         let off = hit_code_offset(&layouts_move, &bid_move, &measure_move, e.position.x.0, e.position.y.0);
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
@@ -1544,6 +1729,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
       }))
   };
 
+  let touch_sel_card = env.touch_selection_active;
+  let last_ptr_touch_card = env.last_pointer_is_touch;
   let br_card_down = bridge.clone();
   let mut code_row = view()
     .w_full()
@@ -1591,7 +1778,14 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         .bg(move || palette(dark_mode.get()).code_bg)
         .px(px(14.0))
         .py(px(12.0))
-        .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
+        .on_mouse_enter(move |_: &MouseEvent| {
+          if drag_anchor.get_untracked().is_none()
+            && table_drag.get_untracked().is_none()
+            && !blank_marquee_ready.get_untracked()
+          {
+            hovered.set(true);
+          }
+        })
         .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
         .on_press_down(move |e: &PressEvent| {
           focused_code.set(None);
@@ -1601,18 +1795,32 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           marquee_selected.set(None);
           blank_marquee_ready.set(false);
           marquee_origin_page.set(None);
+          touch_sel_card.set(false);
           sink_clear_rev.update(|v| *v = v.wrapping_add(1));
           let idx = live_index(at);
           let off = if e.position.x.0 < 14.0 { 0 } else { text_u16_len };
           let pos = DocPosition::new(idx, off);
-          drag_anchor.set(Some(pos));
+          drag_anchor.set(if last_ptr_touch_card.get_untracked() {
+            None
+          } else {
+            Some(pos)
+          });
           br_card_down.set_selection(DocSelection::caret(idx, off));
           br_card_down.request_focus();
         })
         .child(code_row)
-        // Floating top-right hover/active toolbar
+        // Floating top-right hover/active toolbar (suppressed during drag-selection
+        // so toolbar buttons never intercept DOM `elementFromPoint` hits mid-drag!)
         .child(when(
-          move || hovered.get() || is_caret_in_block.get() || lang_open.get() || ai_open.get() || more_open.get() || copied.get(),
+          move || {
+            drag_anchor.get().is_none()
+              && (hovered.get()
+                || is_caret_in_block.get()
+                || lang_open.get()
+                || ai_open.get()
+                || more_open.get()
+                || copied.get())
+          },
           move || {
             let lbl = lang_label.clone();
             view()
@@ -3441,6 +3649,22 @@ mod tests {
       blk.data = serde_json::json!({ "li": li });
       assert_eq!(list_continuation_inset_px(&blk), expected);
     }
+  }
+
+  #[test]
+  fn row_text_origin_offset_accounts_for_code_block_quote_and_list_padding() {
+    let mut code = EditorBlock::new("c0", "code_block", "fn main() {}");
+    assert_eq!(row_text_origin_offset(&code, 100.0, (0.0, 0.0)), (114.0, 20.0));
+
+    code.data = serde_json::json!({ "lineNumbers": true, "li": 0, "title": "demo.rs" });
+    assert_eq!(row_text_origin_offset(&code, 100.0, (0.0, 0.0)), (168.0, 42.0));
+
+    let quote = EditorBlock::new("q0", "quote", "cited");
+    assert_eq!(row_text_origin_offset(&quote, 100.0, (0.0, 0.0)), (117.0, 8.0));
+
+    let mut bullet = EditorBlock::new("l0", "bulleted_list", "item");
+    bullet.data = serde_json::json!({ "indent": 1 });
+    assert_eq!(row_text_origin_offset(&bullet, 100.0, (0.0, 2.0)), (150.0, 2.0));
   }
 
   #[test]

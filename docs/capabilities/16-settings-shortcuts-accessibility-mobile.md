@@ -43,7 +43,7 @@
 | `CAP-16-01` / `02` / `03` 9 标签设置中心（含使用统计）、外观持久化与色板 | P0 | 桌面/Web | ✅ | `settings_view::tests` + `usage_stats_view::tests` + `app_flows::regression_usage_statistics_dashboard_and_live_updates` + `storage::tests::prefs_round_trip_and_persist_to_json_file` |
 | `CAP-16-04` 快捷键体系与设置页清单 | P0 | 桌面/Web | ✅ | [docs/features/shortcuts.md](../features/shortcuts.md) + `editor_view.rs` + `lib.rs` |
 | `CAP-16-05` 移动端 `<768px` 抽屉与窄屏标签切换 | P1 | 移动端/窄屏 | ✅ | `responsive_shell.rs`（`<768px` 覆盖抽屉 + 遮罩 + `narrow-tab-switcher` + 自动隐藏页宽手柄）+ `app_flows::regression_narrow_viewport_drawers_and_touch_bar` |
-| `CAP-16-06` 触摸选区（CJK 1–2 字规则）与操作栏 | P1 | 移动端 | ✅ | `touch_selection::tests::touch_word_bounds_handles_cjk_latin_punctuation_and_emoji` + `app_flows::regression_narrow_viewport_drawers_and_touch_bar`（CJK 1–2 字/标点/代理对安全选词 + 窄屏紧凑触摸操作栏；原生水滴拖拽手柄随 iOS/Android 真机壳补齐） |
+| `CAP-16-06` 触摸选区（CJK 1–2 字规则）、水滴拖动手柄与操作栏 | P1 | 移动端/Web | ✅ | `touch_selection::tests`（CJK 1–2 字选词、触摸多击计数、跨段落/代码块/表格手柄命中）+ `app_flows::regression_narrow_viewport_drawers_and_touch_bar` + `on_long_press` / `touch-handle-start` / `touch-handle-end`（`TouchClaim::on_start().block_native(true)` 锁手势防滚动劫持） |
 | `CAP-16-07` 移动端流畅阅读与灯箱缩放 | P1 | 移动端 | 🟡 | 虚拟滚动与灯箱核心逻辑已复用，待 iOS/Android 实机打包验收 |
 
 ---

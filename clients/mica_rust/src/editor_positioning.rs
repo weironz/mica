@@ -195,9 +195,9 @@ pub fn schedule_bubble_anchor_update(
     let Some(pm) = paper_ref.measure().await else {
       return;
     };
-    let vw = pm.frame.size.width.0.max(360.0);
+    let vw = pm.frame.size.width.0.max(260.0);
     let vh = pm.frame.size.height.0.max(200.0);
-    const BUBBLE_W: f32 = 468.0;
+    let bubble_w: f32 = if vw < 640.0 { 236.0 } else { 468.0 };
     const BUBBLE_H: f32 = 40.0;
 
     let anchor_m = if let Some(tref) = text_ref {
@@ -225,7 +225,7 @@ pub fn schedule_bubble_anchor_update(
       return;
     };
 
-    let left = (sel_center_x - BUBBLE_W * 0.5).clamp(12.0, (vw - BUBBLE_W - 12.0).max(12.0));
+    let left = (sel_center_x - bubble_w * 0.5).clamp(12.0, (vw - bubble_w - 12.0).max(12.0));
     let above_top = sel_top - BUBBLE_H - 8.0;
     let below_top = sel_bottom + 8.0;
     let top = if above_top >= 8.0 {
@@ -234,6 +234,119 @@ pub fn schedule_bubble_anchor_update(
       below_top.clamp(8.0, (vh - BUBBLE_H - 8.0).max(8.0))
     };
     bubble_anchor.set((left, top));
+  });
+}
+
+/// Schedules an async measurement to place the start (left) and end (right)
+/// mobile teardrop selection handles at the exact visual edges of `sel` inside
+/// `paper_ref` (`CAP-16-06`).
+pub fn schedule_touch_handles_update(
+  bridge: &MicaDocumentBridge,
+  layouts: &Rc<RefCell<VisibleLayoutCache>>,
+  paper_ref: ElementRef,
+  sel: DocSelection,
+  anchors: Signal<crate::touch_selection::TouchHandleAnchors>,
+) {
+  if sel.is_collapsed() {
+    anchors.set(crate::touch_selection::TouchHandleAnchors::default());
+    return;
+  }
+  let start_p = sel.start_pos();
+  let end_p = sel.end_pos();
+
+  struct HandleEndpointRef {
+    row_ref: Option<ElementRef>,
+    text_ref: Option<ElementRef>,
+    local_pt: Option<(f32, f32)>,
+  }
+
+  let measure = text_measurer();
+  let endpoint_info = |pos: DocPosition, is_start: bool| -> Option<HandleEndpointRef> {
+    let bid = bridge.block_id_at(pos.node)?;
+    let cache = layouts.borrow();
+    let row_ref = cache.row_refs.get(&bid).map(|(_, r)| *r);
+    let text_ref = cache.text_refs.get(&bid).copied();
+    let b_len = bridge
+      .block_at(pos.node)
+      .map(|b| utf16_len(&b.text))
+      .unwrap_or(0);
+    let local_pt = cache.blocks.get(&bid).and_then(|info| {
+      let (s_u16, e_u16) = if start_p.node == end_p.node {
+        (start_p.offset, end_p.offset)
+      } else if is_start {
+        (start_p.offset, b_len.max(start_p.offset.saturating_add(1)))
+      } else {
+        (0, end_p.offset.max(1))
+      };
+      let rects = selection_rects_for_range(
+        &info.lines,
+        s_u16,
+        e_u16,
+        &info.font,
+        info.line_height,
+        &measure,
+      );
+      if is_start {
+        rects.first().map(|&(rx, ry, _, rh)| (rx, ry + rh))
+      } else {
+        rects.last().map(|&(rx, ry, rw, rh)| (rx + rw, ry + rh))
+      }
+    });
+    Some(HandleEndpointRef {
+      row_ref,
+      text_ref,
+      local_pt,
+    })
+  };
+
+  let start_ep = endpoint_info(start_p, true);
+  let end_ep = endpoint_info(end_p, false);
+
+  spawn(async move {
+    let Some(pm) = paper_ref.measure().await else {
+      return;
+    };
+    let vw = pm.frame.size.width.0.max(200.0);
+    let vh = pm.frame.size.height.0.max(120.0);
+
+    let resolve_ep = async |ep: Option<HandleEndpointRef>, is_start: bool| -> Option<(f32, f32)> {
+      let HandleEndpointRef {
+        row_ref,
+        text_ref,
+        local_pt,
+      } = ep?;
+      let (ex, ey) = if let Some(tref) = text_ref
+        && let Some(tm) = tref.measure().await
+      {
+        let bx = tm.page.x.0 - pm.page.x.0;
+        let by = tm.page.y.0 - pm.page.y.0;
+        match local_pt {
+          Some((lx, ly)) => (bx + lx, by + ly),
+          None if is_start => (bx, by + tm.frame.size.height.0.min(28.0)),
+          None => (bx + tm.frame.size.width.0, by + tm.frame.size.height.0),
+        }
+      } else if let Some(rref) = row_ref
+        && let Some(rm) = rref.measure().await
+      {
+        let bx = rm.page.x.0 - pm.page.x.0;
+        let by = rm.page.y.0 - pm.page.y.0;
+        if is_start {
+          (bx + 24.0, by + rm.frame.size.height.0)
+        } else {
+          (bx + (rm.frame.size.width.0 - 24.0).max(24.0), by + rm.frame.size.height.0)
+        }
+      } else {
+        return None;
+      };
+      if ey < -12.0 || ey > vh + 12.0 {
+        return None;
+      }
+      Some((ex.clamp(8.0, (vw - 8.0).max(8.0)), ey.clamp(0.0, vh)))
+    };
+
+    let start = resolve_ep(start_ep, true).await;
+    let end = resolve_ep(end_ep, false).await;
+    anchors.set(crate::touch_selection::TouchHandleAnchors { start, end });
   });
 }
 

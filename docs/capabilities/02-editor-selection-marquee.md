@@ -41,6 +41,7 @@
 - **反例 2（正文内框选失效）**：`starts_marquee_in_margin` 仅允许页边距且把 `content_bottom` 误传为整个视口高度 `vh`，导致底部和正文内空白处全部无法起框选。
 - **反例 3（点击空白处选中不释放）**：页边距 `on_press_down` 只清了 marquee 没调 `bridge.clear_selection()`，导致蓝色文本高亮和顶部菜单一直挂在屏幕上。
 - **反例 4（`nsh-core` 中 `PressDown` 不向父级冒泡导致正文内无法起框选）**：虽然子元素（短行右侧留白、空行、底部空白区）设置了 `body_blank_marquee_ready = true`，但 `PressDown` 不会冒泡到外层 `mica-rich-editor`，导致外层的 `marquee_origin` 始终为 `None`、行矩形也未快照，只能在正文外边缘起框选。根治方案：子元素及行外层容器统一写入 `marquee_origin_page = Some(e.page_position)`，外层通过 `effect` 自动快照可见块矩形，并在 `on_mouse_move` 中用 `e.position - (e.page_position - origin_page)` 零误差还原局部起点。
+- **反例 5（Web 端跨块拖选选不全且被代码块挡住中断）**：① 内层 `text_box`/`code_text_box` 算完精确字符命中后，同帧冒泡到外层 `row.on_mouse_move` 又用错位的 `text_frame.origin` 覆盖选区；② 拖选进入代码块时 `on_mouse_enter` 动态弹出右上角 `code-block-toolbar` 截断 Web `elementFromPoint` 命中；③ Web 端无 `setPointerCapture`，移出 `root` 后 `pointermove`/`mouseUp` 断流。根治方案：内层命中打 `inner_drag_hit` 帧内去重戳、外层 `row_text_origin_offset` 精确计入缩进与代码块内边距并贴齐右边界行尾、拖选期间抑制代码块悬浮工具栏、并在 `mica-rich-editor` 通过被动 `on_touch` 接收 `window` 级鼠标移出与松手事件持续驱动自动滚屏与释放。
 
 ---
 

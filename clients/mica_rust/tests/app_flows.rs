@@ -562,11 +562,14 @@ fn regression_narrow_viewport_drawers_and_touch_bar() {
     .wait_for_gone("id:mobile-left-drawer", std::time::Duration::from_millis(600))
     .unwrap();
 
-  // 3. Selecting text on narrow viewport mounts compact touch selection action bar (CAP-16-06).
+  // 3. Selecting text on narrow viewport mounts compact touch selection action bar
+  //    AND draggable start/end teardrop selection handles (CAP-16-06).
   app.press("id:editor-bottom-append-zone").unwrap();
   app.press_key("mod+a").unwrap();
   app.wait_for("id:touch-selection-bar").unwrap();
   app.wait_for("id:touch-sel-copy").unwrap();
+  app.wait_for("id:touch-handle-start").unwrap();
+  app.wait_for("id:touch-handle-end").unwrap();
 }
 
 #[test]

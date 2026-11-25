@@ -14,7 +14,11 @@
 //!   22-item `/` slash menu, floating selection bubble menu, `Ctrl+F` find bar,
 //!   and floating bottom-right word count badge.
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+  cell::{Cell, RefCell},
+  rc::Rc,
+  time::Duration,
+};
 
 use mica_editor::{
   DocPosition, DocSelection, EditorCommand, FindMatch, TableNavDirection, TableOp,
@@ -22,7 +26,7 @@ use mica_editor::{
 };
 use nsh_base::{ScrollbarMode, button, input, scrollbar};
 use nsh_core::{
-  SubmitBehavior,
+  PointerType, SubmitBehavior, TouchEvent, TouchPhase,
   color::Rgba,
   element::{
     ClipboardItem, ElementRef, ImageSrc, KeyOptions, Spawned, Svg, clipboard_string, element_ref,
@@ -42,12 +46,15 @@ use crate::{
   editor_bridge::{MicaDocumentBridge, ScrollMode},
   editor_positioning::{
     move_caret_vertical_preserving_x, schedule_bubble_anchor_update, schedule_ime_sink_pos_update,
-    schedule_slash_anchor_update,
+    schedule_slash_anchor_update, schedule_touch_handles_update,
   },
   editor_slash::{SlashItem, extract_slash_query, filter_slash_items},
   mica_icons,
   mica_theme::palette,
   text_geometry::VisibleLayoutCache,
+  touch_selection::{
+    TouchHandleAnchors, TouchHandlesProps, TouchTapTracker, touch_selection_handles_layer,
+  },
 };
 
 pub use crate::editor_bridge::OutlineItem;
@@ -157,6 +164,13 @@ pub fn editor_view(
   let body_blank_marquee_ready = signal(false);
   let marquee_origin_page: Signal<Option<(f32, f32)>> = signal(None);
   let last_click: Signal<(usize, u32, f64, u8)> = signal((0, 0, 0.0, 0));
+  let inner_drag_hit: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
+  let last_pointer_is_touch = signal(false);
+  let touch_selection_active = signal(false);
+  let touch_handle_dragging = signal(false);
+  let touch_handle_anchors: Signal<TouchHandleAnchors> = signal(TouchHandleAnchors::default());
+  let touch_tap_tracker = Rc::new(RefCell::new(TouchTapTracker::default()));
+  let paper_page_origin: Signal<(f32, f32)> = signal((0.0, 0.0));
 
   let list_ref = element_ref();
   let sink_ref = element_ref();
@@ -213,14 +227,24 @@ pub fn editor_view(
             &l_bub,
             pref_bub,
             pw_bub.get_untracked(),
-            s,
+            s.clone(),
             bubble_anchor,
           );
+          schedule_touch_handles_update(&b_bub, &l_bub, pref_bub, s, touch_handle_anchors);
         } else {
+          if touch_selection_active.get_untracked() && !touch_handle_dragging.get_untracked() {
+            touch_selection_active.set(false);
+          }
+          touch_handle_anchors.set(TouchHandleAnchors::default());
           // Keep hidden native IME proxy pinned beside the active caret so OS
           // CJK candidate windows open right next to where the user is typing.
           schedule_ime_sink_pos_update(&b_bub, &l_bub, pref_bub, s.focus_pos(), ime_sink_pos);
         }
+      } else {
+        if touch_selection_active.get_untracked() && !touch_handle_dragging.get_untracked() {
+          touch_selection_active.set(false);
+        }
+        touch_handle_anchors.set(TouchHandleAnchors::default());
       }
     });
   }
@@ -750,7 +774,8 @@ pub fn editor_view(
         if speed.abs() < 0.1 {
           return;
         }
-        let has_drag = drag_anchor.get_untracked().is_some();
+        let has_drag =
+          drag_anchor.get_untracked().is_some() || touch_handle_dragging.get_untracked();
         let has_marquee = m_t.is_active_untracked();
         if !has_drag && !has_marquee {
           autoscroll_speed.set(0.0);
@@ -987,6 +1012,10 @@ pub fn editor_view(
     sink_clear_rev,
     marquee_selected: marquee.selected_range,
     inline_math_edit,
+    inner_drag_hit,
+    last_pointer_is_touch,
+    touch_selection_active,
+    touch_tap_tracker,
   };
 
   let b_copy_path = bridge.clone();
@@ -1281,8 +1310,10 @@ pub fn editor_view(
         return;
       }
       if e.pressed_button != Some(MouseButton::Left) {
+        // Keep `drag_anchor` intact until an authoritative `MouseUp` or
+        // window-level `TouchPhase::End` arrives, preventing transient Web
+        // button/toolbar crossings from aborting an active selection drag.
         autoscroll_speed.set(0.0);
-        drag_anchor.set(None);
         return;
       }
       // When pointer drags UP into the 44px page header/toolbar above `mica-rich-editor`,
@@ -1629,7 +1660,10 @@ pub fn editor_view(
       let m_down = marquee.clone();
       let m_move = marquee.clone();
       let m_up = marquee.clone();
+      let m_touch = marquee.clone();
       let m_overlay = marquee.clone();
+      let layouts_handles = layouts.clone();
+      let br_handles = b_body.clone();
 
       let br_count = b_body.clone();
       let br_keys = b_body.clone();
@@ -1774,6 +1808,7 @@ pub fn editor_view(
             table_selection.set(None);
             table_drag_anchor.set(None);
             drag_anchor.set(None);
+            touch_selection_active.set(false);
             focused_code_block.set(None);
             focused_table_cell.set(None);
             sink_ref.blur();
@@ -1784,6 +1819,59 @@ pub fn editor_view(
               m_down.clear();
             }
             marquee_origin.set(None);
+          }
+        })
+        // Passive window-tracked pointer observer (never claims touches so
+        // native scrolling and clicks stay untouched):
+        // 1. Detects touch/pen vs mouse input for mobile long-press & double-tap
+        //    word selection (`CAP-16-06`).
+        // 2. Keeps Web mouse drag auto-scrolling and release cleanup alive even
+        //    when the cursor leaves the browser viewport (`nsh.js` listens to
+        //    `pointermove`/`pointerup` on `window` for `onTouch`!).
+        .on_touch(move |e: &TouchEvent| {
+          let Some(pt) = e.points.iter().find(|p| p.changed).or_else(|| e.points.first()) else {
+            return;
+          };
+          let is_touch_ptr = matches!(pt.pointer_type, PointerType::Touch | PointerType::Pen);
+          match e.phase {
+            TouchPhase::Start => {
+              last_pointer_is_touch.set(is_touch_ptr);
+              let pref = paper_ref;
+              spawn(async move {
+                if let Some(pm) = pref.measure().await {
+                  paper_page_origin.set((pm.page.x.0, pm.page.y.0));
+                }
+              });
+            }
+            TouchPhase::Move if !is_touch_ptr => {
+              if drag_anchor.get_untracked().is_some() {
+                let (ox, oy) = paper_page_origin.get_untracked();
+                let (_, vh) = paper_bounds.get_untracked();
+                let cy = pt.page.y.0 - oy;
+                autoscroll_last_xy.set((pt.page.x.0 - ox, cy));
+                autoscroll_speed.set(crate::editor_positioning::edge_autoscroll_speed(cy, vh));
+              }
+            }
+            TouchPhase::End | TouchPhase::Cancel if !is_touch_ptr => {
+              autoscroll_speed.set(0.0);
+              if drag_anchor.get_untracked().is_some() {
+                drag_anchor.set(None);
+                if has_text_selection.get_untracked() {
+                  bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
+                }
+              }
+              if marquee_origin.get_untracked().is_some()
+                || marquee_origin_page.get_untracked().is_some()
+              {
+                marquee_origin.set(None);
+                marquee_origin_page.set(None);
+                m_touch.end_drag();
+              }
+              in_margin_press.set(false);
+              body_blank_marquee_ready.set(false);
+              table_drag_anchor.set(None);
+            }
+            _ => {}
           }
         })
         .on_mouse_move(move |e: &MouseEvent| {
@@ -2073,6 +2161,7 @@ pub fn editor_view(
                       .on_focus(move || {
                         b_tf.clear_selection();
                         m_tc.clear();
+                        touch_selection_active.set(false);
                         table_selection.set(None);
                         focused_code_block.set(None);
                         focused_table_cell.set(None);
@@ -2189,8 +2278,27 @@ pub fn editor_view(
             .py(px(4.0))
             .z_index(16),
         )
+        .child(touch_selection_handles_layer(TouchHandlesProps {
+          bridge: br_handles,
+          layouts: layouts_handles,
+          paper_ref,
+          paper_bounds,
+          scroll_offset_y,
+          autoscroll_speed,
+          bubble_recalc_rev,
+          has_text_selection,
+          drag_anchor,
+          touch_selection_active,
+          touch_handle_dragging,
+          touch_handle_anchors,
+          dark_mode,
+        }))
         .child(when(
-          move || has_text_selection.get() && drag_anchor.get().is_none(),
+          move || {
+            has_text_selection.get()
+              && drag_anchor.get().is_none()
+              && !touch_handle_dragging.get()
+          },
           {
           let br_b = br_bubble.clone();
           let h_b = h_bub.clone();
@@ -2199,7 +2307,7 @@ pub fn editor_view(
             let h_c = h_b.clone();
             let narrow_sel = {
               let pw = paper_bounds.get().0;
-              pw > 0.0 && pw < 640.0
+              (pw > 0.0 && pw < 640.0) || touch_selection_active.get()
             };
             view()
               .absolute()
