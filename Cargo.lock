@@ -2214,6 +2214,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-bench"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "mica-api-types",
+ "mica-board",
+ "mica-client",
+ "mica-core",
+ "mica-editor",
+ "mica-md",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "mica-board"
 version = "0.1.0"
 dependencies = [

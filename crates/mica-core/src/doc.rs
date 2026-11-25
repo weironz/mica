@@ -119,6 +119,13 @@ impl MicaDoc {
     read_root(&meta, &txn)
   }
 
+  /// Whether a block with `id` currently exists in the `blocks` map (O(1) lookup).
+  pub fn has_block(&self, id: &str) -> bool {
+    let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+    let txn = self.doc.transact();
+    blocks_map.contains_key(&txn, id)
+  }
+
   /// Read the document back into a flat block list, in tree order (DFS from the
   /// root following `children`). Blocks unreachable from the root are appended
   /// afterwards so nothing is silently dropped.
@@ -659,9 +666,32 @@ fn array_get_string<T: ReadTxn>(txn: &T, arr: &ArrayRef, index: u32) -> Option<S
 }
 
 /// Find the parent block of `child_id` and the child's index within it.
-fn find_parent<T: ReadTxn>(txn: &T, blocks_map: &MapRef, child_id: &str) -> Option<(MapRef, u32)> {
+/// Probes `preferred_parent` (typically the document root) first so flat-block
+/// documents avoid scanning thousands of leaf blocks on delete/move/split/join.
+fn find_parent<T: ReadTxn>(
+  txn: &T,
+  blocks_map: &MapRef,
+  preferred_parent: Option<&str>,
+  child_id: &str,
+) -> Option<(MapRef, u32)> {
+  if let Some(root_id) = preferred_parent {
+    if !root_id.is_empty() {
+      if let Some(bm) = get_block_map(txn, blocks_map, root_id) {
+        if let Some(children) = get_children(txn, &bm) {
+          for (i, v) in children.iter(txn).enumerate() {
+            if out_string(v).as_deref() == Some(child_id) {
+              return Some((bm, i as u32));
+            }
+          }
+        }
+      }
+    }
+  }
   let keys: Vec<String> = blocks_map.keys(txn).map(|k| k.to_string()).collect();
   for key in keys {
+    if preferred_parent == Some(key.as_str()) {
+      continue;
+    }
     let bm = match get_block_map(txn, blocks_map, &key) {
       Some(m) => m,
       None => continue,
@@ -1011,13 +1041,15 @@ impl MicaDoc {
   /// entry is removed either way.
   pub fn delete_block(&mut self, id: &str, bring_children_to_parent: bool) {
     let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+    let meta = self.doc.get_or_insert_map(META);
     let mut txn = self.editor_transaction();
+    let root_id = read_root(&meta, &txn);
     let child_ids: Vec<String> = get_block_map(&txn, &blocks_map, id)
       .and_then(|bm| get_children(&txn, &bm))
       .map(|c| c.iter(&txn).filter_map(out_string).collect())
       .unwrap_or_default();
 
-    if let Some((parent, idx)) = find_parent(&txn, &blocks_map, id) {
+    if let Some((parent, idx)) = find_parent(&txn, &blocks_map, Some(root_id.as_str()), id) {
       if let Some(pchildren) = get_children(&txn, &parent) {
         pchildren.remove(&mut txn, idx);
         if bring_children_to_parent {
@@ -1033,8 +1065,10 @@ impl MicaDoc {
   /// Move a block to be a child of `new_parent` at `index`.
   pub fn move_block(&mut self, id: &str, new_parent: &str, index: usize) {
     let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+    let meta = self.doc.get_or_insert_map(META);
     let mut txn = self.editor_transaction();
-    if let Some((old, oidx)) = find_parent(&txn, &blocks_map, id) {
+    let root_id = read_root(&meta, &txn);
+    if let Some((old, oidx)) = find_parent(&txn, &blocks_map, Some(root_id.as_str()), id) {
       if let Some(oc) = get_children(&txn, &old) {
         oc.remove(&mut txn, oidx);
       }
@@ -1064,7 +1098,9 @@ impl MicaDoc {
   /// (`Text.split`/`join`) both do read-modify-write. (P2: researched, decided.)
   pub fn split_block(&mut self, id: &str, at: u32, new_id: &str, new_kind: &str) {
     let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+    let meta = self.doc.get_or_insert_map(META);
     let mut txn = self.editor_transaction();
+    let root_id = read_root(&meta, &txn);
     let orig = match self.read_block(&txn, &blocks_map, id) {
       Some(b) => b,
       None => return,
@@ -1094,7 +1130,7 @@ impl MicaDoc {
     };
     write_block(&mut txn, &blocks_map, &tail);
 
-    if let Some((parent, idx)) = find_parent(&txn, &blocks_map, id) {
+    if let Some((parent, idx)) = find_parent(&txn, &blocks_map, Some(root_id.as_str()), id) {
       if let Some(pc) = get_children(&txn, &parent) {
         pc.insert(&mut txn, idx + 1, new_id.to_string());
       }
@@ -1106,8 +1142,10 @@ impl MicaDoc {
   /// `id`. No-op if `id` has no previous sibling.
   pub fn join_into_prev(&mut self, id: &str) {
     let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+    let meta = self.doc.get_or_insert_map(META);
     let mut txn = self.editor_transaction();
-    let (parent, idx) = match find_parent(&txn, &blocks_map, id) {
+    let root_id = read_root(&meta, &txn);
+    let (parent, idx) = match find_parent(&txn, &blocks_map, Some(root_id.as_str()), id) {
       Some(x) => x,
       None => return,
     };

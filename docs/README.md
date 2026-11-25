@@ -149,6 +149,7 @@
 | [workspace-switch-latency.md](performance/workspace-switch-latency.md) | 工作区切换延迟 |
 | [mcp-performance.md](performance/mcp-performance.md) | MCP 性能与 token 优化(权威) |
 | [web-cold-start-2026-11-16.md](performance/web-cold-start-2026-11-16.md) | 网页端首次打开白屏：不是字体；启动画面、预加载与 Brotli 预压缩，首帧约快 30% |
+| [`benchmarks/README.md`](../benchmarks/README.md) | **纯 Rust L1+L2 性能基准与万篇压测套件**（`just bench` / `just bench-10k`，含 [2026-11-25 全栈 Rust 基线与优化实录](../benchmarks/baselines/2026-11-25-fullstack-rust-baseline.md)） |
 
 ## reviews — 代码评审与修复
 

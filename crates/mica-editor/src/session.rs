@@ -23,7 +23,7 @@ use crate::marks::{
   math_run_starting_at, range_has_mark, shift_marks, split_marks,
 };
 use crate::model::{
-  BlockSpec, ClipboardPayload, DocOp, EditorBlock, EditorEffect, block_data_eq,
+  BlockPatch, BlockSpec, ClipboardPayload, DocOp, EditorBlock, EditorEffect, block_data_eq,
   normalize_data_object,
 };
 use crate::paste::{
@@ -70,6 +70,9 @@ pub(crate) struct DispatchCtx {
   pub doc_mutated_directly: bool,
   /// True for `ApplyRemoteUpdate` (do not echo a local `crdt_update` back).
   pub is_remote: bool,
+  /// Precomputed incremental `dirty_blocks` for direct-doc commands (`Undo` /
+  /// `Redo` / `ApplyRemoteUpdate`), avoiding a whole-document clone + diff.
+  pub direct_dirty_blocks: Option<Vec<BlockPatch>>,
   pub clipboard_out: Option<ClipboardPayload>,
   pub effects: Vec<EditorEffect>,
   pub find_matches: Option<Vec<FindMatch>>,
@@ -94,13 +97,15 @@ pub struct EditorSession {
 impl EditorSession {
   /// Wrap an existing [`MicaDoc`] as the single authoritative document.
   /// Never writes to `doc` during construction.
-  pub fn from_doc(doc: MicaDoc) -> Self {
+  pub fn from_doc(mut doc: MicaDoc) -> Self {
     let root_id = {
       let r = doc.root_block_id();
       if r.is_empty() { "root".to_string() } else { r }
     };
     let blocks = read_body_blocks(&doc, &root_id);
     let selection = default_initial_selection(&blocks);
+    doc.track_changes();
+    let _ = doc.take_changed_block_ids();
     Self {
       doc,
       root_block_id: root_id,
@@ -277,7 +282,6 @@ impl EditorSession {
 
   /// Execute one [`EditorCommand`] against the session and return an [`EditorPatch`].
   pub fn dispatch(&mut self, cmd: EditorCommand) -> EditorPatch {
-    let prev_blocks = self.blocks.clone();
     let prev_sel = self.selection.clone();
     let before_hist_sel = HistorySelection::capture(&self.blocks, self.selection.as_ref());
     let sv_before = self.doc.state_vector();
@@ -370,10 +374,10 @@ impl EditorSession {
       EditorCommand::ApplyAiEdits { snapshot, preview } => {
         self.cmd_apply_ai_edits(&snapshot, &preview, &mut ctx);
       }
-      EditorCommand::Undo => self.cmd_undo_redo(false, &prev_blocks, &mut ctx),
-      EditorCommand::Redo => self.cmd_undo_redo(true, &prev_blocks, &mut ctx),
+      EditorCommand::Undo => self.cmd_undo_redo(false, &mut ctx),
+      EditorCommand::Redo => self.cmd_undo_redo(true, &mut ctx),
       EditorCommand::ApplyRemoteUpdate { update } => {
-        self.cmd_apply_remote_update(&update, &prev_blocks, &mut ctx);
+        self.cmd_apply_remote_update(&update, &mut ctx);
       }
       EditorCommand::ExportMarkdown { assets } => {
         ctx.exported_markdown = Some(self.export_markdown(&assets));
@@ -474,9 +478,18 @@ impl EditorSession {
           || HistorySelection::capture(after_blocks, after_sel.as_ref()),
         );
       }
+      // Drain our own local mutations from the change tracker so the next
+      // Undo / Redo / ApplyRemoteUpdate sees only the blocks IT touches.
+      let _ = self.doc.take_changed_block_ids();
     }
 
-    let dirty_blocks = diff_block_patches(&prev_blocks, &self.blocks);
+    let dirty_blocks = if let Some(direct) = ctx.direct_dirty_blocks.take() {
+      direct
+    } else if ctx.ops.is_empty() {
+      Vec::new()
+    } else {
+      patches_from_ops(&self.blocks, &ctx.ops, self.selection.as_ref())
+    };
     let content_changed = !dirty_blocks.is_empty();
     if content_changed {
       self.content_revision += 1;
@@ -572,8 +585,7 @@ impl EditorSession {
   }
 
   fn ensure_root_in_doc(&mut self) {
-    let existing = self.doc.to_blocks();
-    if existing.iter().any(|b| b.id == self.root_block_id) {
+    if self.doc.has_block(&self.root_block_id) {
       return;
     }
     let root = mica_core::Block {
@@ -1756,9 +1768,13 @@ impl EditorSession {
       return;
     }
 
-    let mut next_marks = crate::marks::remove_mark(&b.marks(), s, e, "link");
+    let prev_marks = b.marks();
+    let mut next_marks = crate::marks::remove_mark(&prev_marks, s, e, "link");
     if let Some(url) = href.filter(|u| !u.is_empty()) {
       next_marks = apply_mark(&next_marks, s, e, "link", Some(url), None);
+    }
+    if next_marks == prev_marks {
+      return;
     }
     let bm = &mut self.blocks[block_index];
     bm.set_marks(&next_marks);
@@ -1766,19 +1782,59 @@ impl EditorSession {
     ctx.typing_block = None;
   }
 
-  fn cmd_undo_redo(&mut self, redo: bool, prev_blocks: &[EditorBlock], ctx: &mut DispatchCtx) {
+  fn cmd_undo_redo(&mut self, redo: bool, ctx: &mut DispatchCtx) {
     self.prose_input.reset();
     ctx.doc_mutated_directly = true;
+    let _ = self.doc.take_changed_block_ids();
     let Some(restored_sel) = self.history.step(&mut self.doc, redo) else {
+      ctx.direct_dirty_blocks = Some(Vec::new());
       return;
     };
-    self.blocks = read_body_blocks(&self.doc, &self.root_block_id);
-    if self.blocks.is_empty() {
-      self
-        .blocks
-        .push(EditorBlock::new(self.gen_block_id(), "paragraph", ""));
+    if let Some(changed_ids) = self.doc.take_changed_block_ids() {
+      // Fast path: tree shape did not change — re-read only the touched blocks.
+      let body_ids: Vec<String> = changed_ids
+        .into_iter()
+        .filter(|id| id != &self.root_block_id)
+        .collect();
+      let mut patches = Vec::with_capacity(body_ids.len());
+      if !body_ids.is_empty() {
+        let updated = self.doc.blocks_by_id(&body_ids);
+        let mut ops = Vec::with_capacity(updated.len());
+        for core_block in &updated {
+          if let Some(idx) = self.blocks.iter().position(|b| b.id == core_block.id) {
+            let next = EditorBlock::from(core_block);
+            let old = &self.blocks[idx];
+            if old.kind != next.kind
+              || old.text != next.text
+              || !block_data_eq(&old.data, &next.data)
+            {
+              ops.push(DocOp::UpdateBlock {
+                block_id: next.id.clone(),
+                kind: (old.kind != next.kind).then(|| next.kind.clone()),
+                text: (old.text != next.text).then(|| next.text.clone()),
+                data: Some(next.data.clone()),
+              });
+              self.blocks[idx] = next.clone();
+              patches.push(BlockPatch::Upsert {
+                index: idx,
+                block: next,
+              });
+            }
+          }
+        }
+        ctx.ops = ops;
+      }
+      ctx.direct_dirty_blocks = Some(patches);
+    } else {
+      // Slow path: tree structure changed (split/merge/delete/paste/move).
+      let mut next_blocks = read_body_blocks(&self.doc, &self.root_block_id);
+      if next_blocks.is_empty() {
+        next_blocks.push(EditorBlock::new(self.gen_block_id(), "paragraph", ""));
+      }
+      let prev_blocks = std::mem::replace(&mut self.blocks, next_blocks);
+      ctx.ops = diff_block_ops(&self.root_block_id, &prev_blocks, &self.blocks);
+      ctx.direct_dirty_blocks = Some(diff_block_patches(&prev_blocks, &self.blocks));
     }
-    ctx.ops = diff_block_ops(&self.root_block_id, prev_blocks, &self.blocks);
     self.selection = restored_sel
       .restore(&self.blocks)
       .or_else(|| {
@@ -1790,32 +1846,87 @@ impl EditorSession {
       .or_else(|| default_initial_selection(&self.blocks));
   }
 
-  fn cmd_apply_remote_update(
-    &mut self,
-    update: &[u8],
-    prev_blocks: &[EditorBlock],
-    ctx: &mut DispatchCtx,
-  ) {
+  fn cmd_apply_remote_update(&mut self, update: &[u8], ctx: &mut DispatchCtx) {
     self.prose_input.reset();
     self.history.flush_typing_batch(&mut self.doc);
     ctx.doc_mutated_directly = true;
     ctx.is_remote = true;
 
+    let _ = self.doc.take_changed_block_ids();
+    if let Err(e) = self.doc.apply_update(update) {
+      ctx.error = Some(e.to_string());
+      ctx.direct_dirty_blocks = Some(Vec::new());
+      return;
+    }
+    let root = self.doc.root_block_id();
+    let root_changed = !root.is_empty() && root != self.root_block_id;
+    if root_changed {
+      self.root_block_id = root;
+    }
+    if !root_changed
+      && let Some(changed_ids) = self.doc.take_changed_block_ids()
+    {
+      // Fast path: remote update only modified block contents, not tree shape.
+      let body_ids: Vec<String> = changed_ids
+        .into_iter()
+        .filter(|id| id != &self.root_block_id)
+        .collect();
+      let mut patches = Vec::with_capacity(body_ids.len());
+      let mut old_texts: HashMap<usize, String> = HashMap::new();
+      if !body_ids.is_empty() {
+        let updated = self.doc.blocks_by_id(&body_ids);
+        for core_block in &updated {
+          if let Some(idx) = self.blocks.iter().position(|b| b.id == core_block.id) {
+            let next = EditorBlock::from(core_block);
+            let old = &self.blocks[idx];
+            if old.kind != next.kind
+              || old.text != next.text
+              || !block_data_eq(&old.data, &next.data)
+            {
+              old_texts.insert(idx, old.text.clone());
+              self.blocks[idx] = next.clone();
+              patches.push(BlockPatch::Upsert {
+                index: idx,
+                block: next,
+              });
+            }
+          }
+        }
+      }
+      if !old_texts.is_empty() {
+        let sel_touches_changed = self.selection.as_ref().is_some_and(|s| {
+          old_texts.contains_key(&s.anchor_pos().node) || old_texts.contains_key(&s.focus_node())
+        });
+        if sel_touches_changed {
+          let prev_pairs: Vec<(String, String)> = self
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+              let txt = old_texts
+                .get(&i)
+                .cloned()
+                .unwrap_or_else(|| b.text.clone());
+              (b.id.clone(), txt)
+            })
+            .collect();
+          self.selection = reconcile_selection(&prev_pairs, self.selection.as_ref(), &self.blocks)
+            .or_else(|| default_initial_selection(&self.blocks));
+        }
+      }
+      ctx.direct_dirty_blocks = Some(patches);
+      return;
+    }
+
+    let next_blocks = read_body_blocks(&self.doc, &self.root_block_id);
+    let prev_blocks = std::mem::replace(&mut self.blocks, next_blocks);
     let prev_pairs: Vec<(String, String)> = prev_blocks
       .iter()
       .map(|b| (b.id.clone(), b.text.clone()))
       .collect();
-    if let Err(e) = self.doc.apply_update(update) {
-      ctx.error = Some(e.to_string());
-      return;
-    }
-    let root = self.doc.root_block_id();
-    if !root.is_empty() {
-      self.root_block_id = root;
-    }
-    self.blocks = read_body_blocks(&self.doc, &self.root_block_id);
     self.selection = reconcile_selection(&prev_pairs, self.selection.as_ref(), &self.blocks)
       .or_else(|| default_initial_selection(&self.blocks));
+    ctx.direct_dirty_blocks = Some(diff_block_patches(&prev_blocks, &self.blocks));
   }
 
   // ── Find & Replace / AI Edits ────────────────────────────────────────────
@@ -2029,6 +2140,121 @@ impl EditorSession {
 }
 
 // ── Module-private helpers ───────────────────────────────────────────────────
+
+/// Derive incremental [`BlockPatch`]es directly from the emitted [`DocOp`]s in
+/// `O(|ops|)` time for pure in-place updates (avoiding whole-document clones
+/// and hash-map diffs on every keystroke).
+fn patches_from_ops(
+  blocks: &[EditorBlock],
+  ops: &[DocOp],
+  selection: Option<&DocSelection>,
+) -> Vec<BlockPatch> {
+  let mut order_changed = false;
+  for op in ops {
+    if matches!(
+      op,
+      DocOp::InsertBlock { .. } | DocOp::DeleteBlock { .. } | DocOp::MoveBlock { .. }
+    ) {
+      order_changed = true;
+      break;
+    }
+  }
+
+  // Fast path: in-place block updates only (typing, marks, links, todo toggle, etc.).
+  if !order_changed {
+    if ops.len() == 1
+      && let DocOp::UpdateBlock { block_id, .. } = &ops[0]
+    {
+      if let Some(sel) = selection {
+        let hint = sel.focus_node();
+        if let Some(b) = blocks.get(hint)
+          && b.id == *block_id
+        {
+          return vec![BlockPatch::Upsert {
+            index: hint,
+            block: b.clone(),
+          }];
+        }
+      }
+      if let Some(idx) = blocks.iter().position(|b| b.id == *block_id) {
+        return vec![BlockPatch::Upsert {
+          index: idx,
+          block: blocks[idx].clone(),
+        }];
+      }
+      return Vec::new();
+    }
+    let mut updated_ids: HashSet<&str> = HashSet::with_capacity(ops.len());
+    for op in ops {
+      if let DocOp::UpdateBlock { block_id, .. } = op {
+        updated_ids.insert(block_id.as_str());
+      }
+    }
+    let mut patches = Vec::with_capacity(updated_ids.len());
+    for (i, b) in blocks.iter().enumerate() {
+      if updated_ids.remove(b.id.as_str()) {
+        patches.push(BlockPatch::Upsert {
+          index: i,
+          block: b.clone(),
+        });
+        if updated_ids.is_empty() {
+          break;
+        }
+      }
+    }
+    return patches;
+  }
+
+  // Structural path: inserts, deletes, or moves.
+  let mut deleted_ids: Vec<&str> = Vec::new();
+  let mut deleted_seen: HashSet<&str> = HashSet::new();
+  let mut upserted_ids: HashSet<&str> = HashSet::new();
+  for op in ops {
+    match op {
+      DocOp::DeleteBlock { block_id } => {
+        if deleted_seen.insert(block_id.as_str()) {
+          deleted_ids.push(block_id.as_str());
+        }
+      }
+      DocOp::InsertBlock { block, .. } => {
+        upserted_ids.insert(block.id.as_str());
+      }
+      DocOp::UpdateBlock { block_id, .. } => {
+        upserted_ids.insert(block_id.as_str());
+      }
+      DocOp::MoveBlock { .. } => {}
+    }
+  }
+
+  let mut upserts = Vec::with_capacity(upserted_ids.len());
+  let mut order = Vec::with_capacity(blocks.len());
+  let mut live_deleted_readded: HashSet<&str> = HashSet::new();
+  for (i, b) in blocks.iter().enumerate() {
+    let id = b.id.as_str();
+    order.push(b.id.clone());
+    if deleted_seen.contains(id) {
+      live_deleted_readded.insert(id);
+    }
+    if upserted_ids.contains(id) {
+      upserts.push(BlockPatch::Upsert {
+        index: i,
+        block: b.clone(),
+      });
+    }
+  }
+
+  let mut patches = Vec::with_capacity(deleted_ids.len() + upserts.len() + 1);
+  for id in deleted_ids {
+    if !live_deleted_readded.contains(id) {
+      patches.push(BlockPatch::Remove {
+        block_id: id.to_string(),
+      });
+    }
+  }
+  patches.extend(upserts);
+  patches.push(BlockPatch::Reorder { order });
+  patches
+}
 
 pub(crate) fn read_body_blocks(doc: &MicaDoc, root_id: &str) -> Vec<EditorBlock> {
   let all = doc.to_blocks();

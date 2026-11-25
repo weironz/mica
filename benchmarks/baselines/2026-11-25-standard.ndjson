@@ -1,0 +1,25 @@
+{"data":{"blocks":2000,"bytes":308986,"ms":17.2525},"metric":"parse_markdown","suite":"large_doc","summary":"17.25 ms (2000 blocks, 301.7 KiB)"}
+{"data":{"blocks":2000,"ms":130.5367},"metric":"session_from_markdown (CRDT)","suite":"large_doc","summary":"130.54 ms (2000 blocks)"}
+{"data":{"max_us":310.8,"p50_us":70.5,"p95_us":76.10000000000001,"p99_us":84.2},"metric":"typing_insert_text (300 ops)","suite":"large_doc","summary":"p50=70.5 µs  p95=76.1 µs  p99=84.2 µs  max=310.8 µs"}
+{"data":{"redo_p50_us":1197.6000000000001,"redo_p99_us":1250.0,"undo_p50_us":1194.9,"undo_p99_us":2037.4999999999998},"metric":"typing_undo_redo (50 pairs)","suite":"large_doc","summary":"undo p50=1194.9 µs p99=2037.5 µs | redo p50=1197.6 µs p99=1250.0 µs"}
+{"data":{"p50_us":261.8,"p95_us":283.2,"p99_us":339.8},"metric":"split_block (Enter, 100 ops)","suite":"large_doc","summary":"p50=261.8 µs  p95=283.2 µs  p99=339.8 µs"}
+{"data":{"p50_us":384.0,"p95_us":418.1,"p99_us":423.3},"metric":"merge_block (Backspace, 100 ops)","suite":"large_doc","summary":"p50=384.0 µs  p95=418.1 µs  p99=423.3 µs"}
+{"data":{"redo_p50_us":25510.0,"redo_p99_us":26763.0,"undo_p50_us":25394.4,"undo_p99_us":26243.1},"metric":"undo / redo (50 pairs)","suite":"large_doc","summary":"undo p50=25394.4 µs p99=26243.1 µs | redo p50=25510.0 µs p99=26763.0 µs"}
+{"data":{"matches":1167,"ms":2.9374000000000002},"metric":"in_page_find_all ('Rust')","suite":"large_doc","summary":"2.94 ms (1167 matches)"}
+{"data":{"bytes":309906,"ms":18.3755},"metric":"export_markdown","suite":"large_doc","summary":"18.38 ms (302.6 KiB)"}
+{"data":{"bytes":415430,"ms":17.1872},"metric":"export_html","suite":"large_doc","summary":"17.19 ms (405.7 KiB)"}
+{"data":{"ops":20000,"ops_per_sec":66496.19259425253,"total_ms":300.76910000000004},"metric":"replay_throughput","suite":"crdt_trace","summary":"300.77 ms (66496 ops/s, 20000 ops)"}
+{"data":{"p50_us":7.8,"p95_us":53.699999999999996,"p99_us":70.0},"metric":"step_latency (overall)","suite":"crdt_trace","summary":"p50=7.80 µs  p95=53.70 µs  p99=70.00 µs"}
+{"data":{"early_p50_us":2.0,"late_p50_us":34.5},"metric":"early vs late (2000-op window)","suite":"crdt_trace","summary":"early p50=2.00 µs -> late p50=34.50 µs (drift 17.25x)"}
+{"data":{"decode_ms":2.0046999999999997,"encode_ms":0.2833,"hydrate_ms":0.1646,"overhead_ratio":2.964119450437152,"text_bytes":17614,"yrs_bytes":52210},"metric":"state_size & cold_decode","suite":"crdt_trace","summary":"text=17614 B  yrs=52210 B (2.96x) | encode=0.28 ms  decode=2.00 ms  hydrate=0.16 ms"}
+{"data":{"p50_us":15.299999999999999,"p95_us":20.1,"p99_us":22.5},"metric":"remote_crdt_merge (500 updates)","suite":"crdt_trace","summary":"p50=15.3 µs  p95=20.1 µs  p99=22.5 µs"}
+{"data":{"db_bytes":3555328,"docs":1000,"ms":687.7047},"metric":"sqlite_vault_bulk_ingest","suite":"knowledge_base","summary":"687.7 ms (1454 docs/s, store.db 3.39 MiB)"}
+{"data":{"all_live_rows":1100,"ms":6.288,"visible_rows":5},"metric":"cold_open_vault_and_tree","suite":"knowledge_base","summary":"6.29 ms (top_collapsed=5 rows, all_live=1100 rows)"}
+{"data":{"p50_us":119.3,"p95_us":146.5,"p99_us":171.29999999999998},"metric":"sqlite_random_doc_load (200 reads)","suite":"knowledge_base","summary":"p50=119.3 µs  p95=146.5 µs  p99=171.3 µs"}
+{"data":{"docs":1000,"hits":20,"ms":0.4421},"metric":"search_common_hit","suite":"knowledge_base","summary":"0.44 ms (20 hits across 1000 docs)"}
+{"data":{"docs":1000,"hits":1,"ms":2.9658},"metric":"search_rare_needle","suite":"knowledge_base","summary":"2.97 ms (1 hits across 1000 docs)"}
+{"data":{"docs":1000,"hits":0,"ms":3.1394},"metric":"search_worst_case_miss","suite":"knowledge_base","summary":"3.14 ms (0 hits across 1000 docs)"}
+{"data":{"edges":2000,"ms":1.1728},"metric":"build_backlink_graph","suite":"knowledge_base","summary":"1.17 ms (2000 edges)"}
+{"data":{"daily_points":30,"ms":10.3743,"total_docs":1000},"metric":"usage_stats_sql_aggregation","suite":"knowledge_base","summary":"10.37 ms (docs=1000, daily_points=30)"}
+{"data":{"layout_ms":2.1721000000000004,"load_ms":1.6418,"nodes":501},"metric":"board_load_and_auto_layout","suite":"whiteboard","summary":"load=1.64 ms  layout=2.17 ms (501 nodes)"}
+{"data":{"extract_ms":1.3332000000000002,"merge_ms":5.502199999999999,"svg_bytes":211902,"svg_ms":3.5404999999999998},"metric":"board_svg_merge_and_search_text","suite":"whiteboard","summary":"svg=3.54 ms (206.9 KiB)  merge=5.50 ms  text=1.33 ms (13823 B)"}

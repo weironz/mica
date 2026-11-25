@@ -5,9 +5,10 @@
 //! JSON replay via `--trace <path.json>`).
 //!
 //! Usage:
-//!   cargo run -p mica-client --release --example mica_bench
-//!   cargo run -p mica-client --release --example mica_bench -- --docs 10000 --trace-ops 50000
-//!   cargo run -p mica-client --release --example mica_bench -- --trace automerge-paper.json --json
+//!   just bench
+//!   just bench-10k
+//!   cargo run -p mica-bench --release -- --docs 10000 --trace-ops 50000
+//!   cargo run -p mica-bench --release -- --trace automerge-paper.json --json
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -299,6 +300,38 @@ fn run_suite_large_doc(cfg: &Config) {
       "p99_us": typing_stats.p99_us,
       "max_us": typing_stats.max_us,
     }),
+  );
+
+  // 3b. Typing Undo / Redo on 2k-block doc (50 flushed typing steps)
+  let mut typing_undo_samples = Vec::with_capacity(50);
+  let mut typing_redo_samples = Vec::with_capacity(50);
+  for i in 0..50 {
+    let _ = session.dispatch(EditorCommand::InsertText {
+      text: format!("{}", i % 10),
+    });
+    let _ = session.dispatch(EditorCommand::FlushHistoryBatch);
+  }
+  for _ in 0..50 {
+    let u0 = Instant::now();
+    black_box(session.dispatch(EditorCommand::Undo));
+    typing_undo_samples.push(u0.elapsed());
+  }
+  for _ in 0..50 {
+    let r0 = Instant::now();
+    black_box(session.dispatch(EditorCommand::Redo));
+    typing_redo_samples.push(r0.elapsed());
+  }
+  let tu = summarize(typing_undo_samples);
+  let tr = summarize(typing_redo_samples);
+  report_metric(
+    cfg.json_mode,
+    "large_doc",
+    "typing_undo_redo (50 pairs)",
+    &format!(
+      "undo p50={:.1} µs p99={:.1} µs | redo p50={:.1} µs p99={:.1} µs",
+      tu.p50_us, tu.p99_us, tr.p50_us, tr.p99_us
+    ),
+    json!({ "undo_p50_us": tu.p50_us, "undo_p99_us": tu.p99_us, "redo_p50_us": tr.p50_us, "redo_p99_us": tr.p99_us }),
   );
 
   // 4. Enter split + Backspace merge (100 pairs)

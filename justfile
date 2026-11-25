@@ -87,11 +87,11 @@ sdk-check:
 
 [doc("Run L1+L2 performance benchmark (2k-block doc, CRDT trace, 1k-page vault, 500-node board)")]
 bench *args:
-    cargo run -p mica-client --release --example mica_bench -- {{args}}
+    cargo run -p mica-bench --release -- {{args}}
 
 [doc("Heavy stress benchmark (10,000-page SQLite vault + 50,000-op CRDT trace)")]
 bench-10k:
-    cargo run -p mica-client --release --example mica_bench -- --docs 10000 --trace-ops 50000
+    cargo run -p mica-bench --release -- --docs 10000 --trace-ops 50000
 
 # ------------------------------------------------------- local artifacts
 

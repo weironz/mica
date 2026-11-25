@@ -1,0 +1,21 @@
+[package]
+name = "mica-bench"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "mica-bench"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+mica-api-types = { path = "../crates/api-types" }
+mica-board = { path = "../crates/mica-board" }
+mica-client = { path = "../crates/mica-client" }
+mica-core = { path = "../crates/mica-core", features = ["store"] }
+mica-editor = { path = "../crates/mica-editor" }
+mica-md = { path = "../crates/md-core" }
+serde_json.workspace = true
+uuid.workspace = true
