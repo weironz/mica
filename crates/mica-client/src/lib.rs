@@ -28,7 +28,9 @@ pub use cache_origin::{
   normalize_server_url, require_cloud_cache_origin,
 };
 pub use claim::{ClaimTracker, SessionClaim, WorldOrigin};
-pub use net::{UploadedFile, build_file_blob_url, download_url_bytes, parse_mica_blob_link, sha256_hex};
+pub use net::{
+  UploadedFile, build_file_blob_url, download_url_bytes, parse_mica_blob_link, sha256_hex,
+};
 pub use protocol::ApiEndpoints;
 pub use runtime::MicaClientRuntime;
 pub use search::{

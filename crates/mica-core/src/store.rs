@@ -1327,13 +1327,15 @@ impl LocalStore {
     self.conn.execute_batch(&format!("SAVEPOINT {name};"))?;
     match body() {
       Ok(()) => {
-        self.conn.execute_batch(&format!("RELEASE SAVEPOINT {name};"))?;
+        self
+          .conn
+          .execute_batch(&format!("RELEASE SAVEPOINT {name};"))?;
         Ok(())
       }
       Err(err) => {
-        let _ = self
-          .conn
-          .execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}; RELEASE SAVEPOINT {name};"));
+        let _ = self.conn.execute_batch(&format!(
+          "ROLLBACK TO SAVEPOINT {name}; RELEASE SAVEPOINT {name};"
+        ));
         Err(err)
       }
     }

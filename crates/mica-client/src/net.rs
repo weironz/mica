@@ -215,9 +215,9 @@ pub fn build_file_blob_url(
 ) -> String {
   let base = origin.trim().trim_end_matches('/');
   let fid = file_id.trim();
-  let clean_name = name
-    .map(str::trim)
-    .filter(|s| !s.is_empty() && !s.contains('/') && !s.contains('\\') && !s.contains('?') && !s.contains('#'));
+  let clean_name = name.map(str::trim).filter(|s| {
+    !s.is_empty() && !s.contains('/') && !s.contains('\\') && !s.contains('?') && !s.contains('#')
+  });
   match clean_name {
     Some(n) => format!(
       "{base}/api/workspaces/{workspace_id}/files/{fid}/blob/{}",
@@ -2924,7 +2924,10 @@ mod tests {
     let parsed = parse_mica_blob_link(&named, "https://mica.cloudcele.com").unwrap();
     assert_eq!(parsed.0, ws);
     assert_eq!(parsed.1, fid);
-    assert_eq!(parsed.2.as_deref(), Some("%E6%9E%B6%E6%9E%84%20%E5%9B%BE.png"));
+    assert_eq!(
+      parsed.2.as_deref(),
+      Some("%E6%9E%B6%E6%9E%84%20%E5%9B%BE.png")
+    );
 
     let bare = build_file_blob_url("https://mica.cloudcele.com", ws, fid, None);
     assert_eq!(

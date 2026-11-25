@@ -240,8 +240,7 @@ pub fn starts_marquee_in_margin(
   if local_x < content_left || local_x > content_right {
     return true;
   }
-  if local_x < content_left + MARQUEE_GUTTER_WIDTH
-    || local_x > content_right - MARQUEE_GUTTER_WIDTH
+  if local_x < content_left + MARQUEE_GUTTER_WIDTH || local_x > content_right - MARQUEE_GUTTER_WIDTH
   {
     return true;
   }
@@ -322,10 +321,18 @@ mod tests {
       Some((0, 2))
     );
 
-    assert!(starts_marquee_in_margin(50.0, 100.0, 1200.0, 200.0, 1000.0, 450.0));
-    assert!(!starts_marquee_in_margin(1190.0, 100.0, 1200.0, 200.0, 1000.0, 450.0));
-    assert!(!starts_marquee_in_margin(350.0, 100.0, 1200.0, 200.0, 1000.0, 450.0));
-    assert!(starts_marquee_in_margin(350.0, 480.0, 1200.0, 200.0, 1000.0, 450.0));
+    assert!(starts_marquee_in_margin(
+      50.0, 100.0, 1200.0, 200.0, 1000.0, 450.0
+    ));
+    assert!(!starts_marquee_in_margin(
+      1190.0, 100.0, 1200.0, 200.0, 1000.0, 450.0
+    ));
+    assert!(!starts_marquee_in_margin(
+      350.0, 100.0, 1200.0, 200.0, 1000.0, 450.0
+    ));
+    assert!(starts_marquee_in_margin(
+      350.0, 480.0, 1200.0, 200.0, 1000.0, 450.0
+    ));
   }
 
   #[test]

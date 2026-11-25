@@ -183,8 +183,8 @@ pub async fn fetch_request(
 /// strict CORS credential rules.
 #[cfg(target_arch = "wasm32")]
 pub async fn fetch_bytes(url: &str, timeout_secs: u64) -> Result<(Vec<u8>, String), String> {
-  use wasm_bindgen::closure::Closure;
   use wasm_bindgen::JsCast;
+  use wasm_bindgen::closure::Closure;
   use wasm_bindgen_futures::JsFuture;
   use web_sys::{AbortController, Request, RequestCredentials, RequestInit, Response};
 
@@ -275,8 +275,8 @@ pub async fn put_presigned_bytes(
   body: &[u8],
   timeout_secs: u64,
 ) -> Result<u16, String> {
-  use wasm_bindgen::closure::Closure;
   use wasm_bindgen::JsCast;
+  use wasm_bindgen::closure::Closure;
   use wasm_bindgen_futures::JsFuture;
   use web_sys::{AbortController, Headers, Request, RequestCredentials, RequestInit, Response};
 

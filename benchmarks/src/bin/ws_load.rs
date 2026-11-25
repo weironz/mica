@@ -175,10 +175,7 @@ fn http_to_ws(base: &str, path: &str) -> String {
   }
 }
 
-async fn ensure_auth_and_workspace(
-  http: &Client,
-  cfg: &Config,
-) -> Result<(String, Uuid), String> {
+async fn ensure_auth_and_workspace(http: &Client, cfg: &Config) -> Result<(String, Uuid), String> {
   let try_login = || async {
     http
       .post(format!("{}/api/auth/login", cfg.base))
@@ -321,7 +318,9 @@ async fn create_seeded_document(
         },
       );
     }
-    let delta = doc.encode_diff(&sv0).map_err(|e| format!("encode_diff: {e}"))?;
+    let delta = doc
+      .encode_diff(&sv0)
+      .map_err(|e| format!("encode_diff: {e}"))?;
     let _ = push_and_wait_ack(&mut ws, "seed-0", &delta).await?;
     bid
   };
@@ -332,12 +331,7 @@ async fn create_seeded_document(
 type WsStream =
   tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-async fn open_ws(
-  base: &str,
-  token: &str,
-  ws_id: Uuid,
-  doc_id: Uuid,
-) -> Result<WsStream, String> {
+async fn open_ws(base: &str, token: &str, ws_id: Uuid, doc_id: Uuid) -> Result<WsStream, String> {
   let url = http_to_ws(
     base,
     &format!("/ws/workspaces/{ws_id}/documents/{doc_id}?v=1"),
@@ -348,8 +342,7 @@ async fn open_ws(
     .map_err(|e| format!("ws request build: {e}"))?;
   req.headers_mut().insert(
     "Authorization",
-    HeaderValue::from_str(&format!("Bearer {token}"))
-      .map_err(|e| format!("auth header: {e}"))?,
+    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| format!("auth header: {e}"))?,
   );
   let (ws, _resp) = connect_async(req)
     .await
@@ -509,14 +502,22 @@ async fn run_room_concurrent(
       let mut errs = 0usize;
 
       let client_id = client_id_offset + peer_idx as u64 + 1;
-      let (ws, mut doc, _head) = match open_and_bootstrap(&base, &token, ws_id, doc_id, client_id).await {
-        Ok(x) => x,
-        Err(_) => {
-          start_barrier.wait().await;
-          done_barrier.wait().await;
-          return (ack_lats, bcast_lats, bcast_count, lags, 1usize, String::new());
-        }
-      };
+      let (ws, mut doc, _head) =
+        match open_and_bootstrap(&base, &token, ws_id, doc_id, client_id).await {
+          Ok(x) => x,
+          Err(_) => {
+            start_barrier.wait().await;
+            done_barrier.wait().await;
+            return (
+              ack_lats,
+              bcast_lats,
+              bcast_count,
+              lags,
+              1usize,
+              String::new(),
+            );
+          }
+        };
 
       let (mut sink, mut stream) = ws.split();
       start_barrier.wait().await;
@@ -671,9 +672,7 @@ async fn run_room_concurrent(
       texts.push(t);
     }
   }
-  let converged = !texts.is_empty()
-    && !texts[0].is_empty()
-    && texts.iter().all(|t| t == &texts[0]);
+  let converged = !texts.is_empty() && !texts[0].is_empty() && texts.iter().all(|t| t == &texts[0]);
 
   RoomBenchOutcome {
     ack_latencies: all_acks,
@@ -698,9 +697,10 @@ async fn run_reconnect_storm(
   // Phase 1: All peers bootstrap, then disconnect.
   let mut offline_replicas: Vec<(MicaDoc, i64, Vec<Vec<u8>>)> = Vec::with_capacity(peers);
   for i in 0..peers {
-    let (mut ws, mut doc, head) = open_and_bootstrap(&base, &token, ws_id, doc_id, 500_000 + i as u64)
-      .await
-      .expect("storm initial bootstrap");
+    let (mut ws, mut doc, head) =
+      open_and_bootstrap(&base, &token, ws_id, doc_id, 500_000 + i as u64)
+        .await
+        .expect("storm initial bootstrap");
     let _ = ws.close(None).await;
 
     // Accumulate offline edits locally while disconnected.
@@ -815,10 +815,9 @@ async fn run_reconnect_storm(
   let storm_total = t_storm.elapsed();
 
   // Verify server converged state contains EVERY offline peer's edits.
-  let (mut check_ws, server_doc, _head) =
-    open_and_bootstrap(&base, &token, ws_id, doc_id, 999_999)
-      .await
-      .expect("storm verify bootstrap");
+  let (mut check_ws, server_doc, _head) = open_and_bootstrap(&base, &token, ws_id, doc_id, 999_999)
+    .await
+    .expect("storm verify bootstrap");
   let _ = check_ws.close(None).await;
   let final_text = server_doc
     .to_blocks()
@@ -875,7 +874,10 @@ async fn scrape_key_metrics(http: &Client, base: &str) -> HashMap<String, String
 async fn main() {
   let cfg = parse_args();
   if !cfg.json_mode {
-    println!("Mica Real-Protocol WebSocket Collaboration Load Test ({})", cfg.base);
+    println!(
+      "Mica Real-Protocol WebSocket Collaboration Load Test ({})",
+      cfg.base
+    );
   }
   let http = Client::builder()
     .timeout(Duration::from_secs(30))
@@ -893,9 +895,10 @@ async fn main() {
       cfg.hot_peers, cfg.hot_pushes
     );
   }
-  let (hot_doc, hot_block) = create_seeded_document(&http, &cfg.base, &token, ws_id, "Hot Room Doc")
-    .await
-    .expect("seed hot room doc");
+  let (hot_doc, hot_block) =
+    create_seeded_document(&http, &cfg.base, &token, ws_id, "Hot Room Doc")
+      .await
+      .expect("seed hot room doc");
   let hot = run_room_concurrent(
     cfg.base.clone(),
     token.clone(),
@@ -1007,7 +1010,11 @@ async fn main() {
     "push_to_ack_latency",
     &format!(
       "p50={:.2} ms  p95={:.2} ms  p99={:.2} ms ({:.1} pushes/s, {} total pushes)",
-      m_ack.p50_ms, m_ack.p95_ms, m_ack.p99_ms, m_tput, multi_acks.len()
+      m_ack.p50_ms,
+      m_ack.p95_ms,
+      m_ack.p99_ms,
+      m_tput,
+      multi_acks.len()
     ),
     json!({
       "p50_ms": m_ack.p50_ms, "p95_ms": m_ack.p95_ms, "p99_ms": m_ack.p99_ms,
@@ -1020,8 +1027,13 @@ async fn main() {
     "broadcast_and_convergence",
     &format!(
       "p50={:.2} ms  p95={:.2} ms  p99={:.2} ms ({} fan-outs, lags={}, errs={}, all_converged={})",
-      m_bcast.p50_ms, m_bcast.p95_ms, m_bcast.p99_ms,
-      multi_bcast_count, multi_lags, multi_errs, all_rooms_converged
+      m_bcast.p50_ms,
+      m_bcast.p95_ms,
+      m_bcast.p99_ms,
+      multi_bcast_count,
+      multi_lags,
+      multi_errs,
+      all_rooms_converged
     ),
     json!({
       "p50_ms": m_bcast.p50_ms, "p95_ms": m_bcast.p95_ms, "p99_ms": m_bcast.p99_ms,
@@ -1059,8 +1071,11 @@ async fn main() {
     &format!(
       "total={:.1} ms | per-peer p50={:.2} ms  p95={:.2} ms  p99={:.2} ms (errs={}, all_edits_preserved={})",
       storm_total.as_secs_f64() * 1000.0,
-      s_stats.p50_ms, s_stats.p95_ms, s_stats.p99_ms,
-      storm_errs, storm_ok
+      s_stats.p50_ms,
+      s_stats.p95_ms,
+      s_stats.p99_ms,
+      storm_errs,
+      storm_ok
     ),
     json!({
       "total_ms": storm_total.as_secs_f64() * 1000.0,

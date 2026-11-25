@@ -193,7 +193,9 @@ fn generate_large_markdown(target_blocks: usize) -> String {
   while blocks < target_blocks {
     match blocks % 12 {
       0 => {
-        out.push_str(&format!("## 第 {section} 节：纯 Rust 三层架构与协同引擎\n\n"));
+        out.push_str(&format!(
+          "## 第 {section} 节：纯 Rust 三层架构与协同引擎\n\n"
+        ));
         section += 1;
         blocks += 1;
       }
@@ -231,7 +233,10 @@ fn generate_large_markdown(target_blocks: usize) -> String {
 
 fn run_suite_large_doc(cfg: &Config) {
   if !cfg.json_mode {
-    println!("\n=== [1/4] Large Mixed Document ({} target blocks) ===", cfg.blocks);
+    println!(
+      "\n=== [1/4] Large Mixed Document ({} target blocks) ===",
+      cfg.blocks
+    );
   }
   let md = generate_large_markdown(cfg.blocks);
   let bytes = md.len();
@@ -245,7 +250,10 @@ fn run_suite_large_doc(cfg: &Config) {
     cfg.json_mode,
     "large_doc",
     "parse_markdown",
-    &format!("{parse_ms:.2} ms ({block_count} blocks, {:.1} KiB)", bytes as f64 / 1024.0),
+    &format!(
+      "{parse_ms:.2} ms ({block_count} blocks, {:.1} KiB)",
+      bytes as f64 / 1024.0
+    ),
     json!({ "ms": parse_ms, "blocks": block_count, "bytes": bytes }),
   );
 
@@ -430,7 +438,10 @@ fn run_suite_large_doc(cfg: &Config) {
     cfg.json_mode,
     "large_doc",
     "export_markdown",
-    &format!("{exp_md_ms:.2} ms ({:.1} KiB)", exported_md.len() as f64 / 1024.0),
+    &format!(
+      "{exp_md_ms:.2} ms ({:.1} KiB)",
+      exported_md.len() as f64 / 1024.0
+    ),
     json!({ "ms": exp_md_ms, "bytes": exported_md.len() }),
   );
 
@@ -441,7 +452,10 @@ fn run_suite_large_doc(cfg: &Config) {
     cfg.json_mode,
     "large_doc",
     "export_html",
-    &format!("{exp_html_ms:.2} ms ({:.1} KiB)", html.len() as f64 / 1024.0),
+    &format!(
+      "{exp_html_ms:.2} ms ({:.1} KiB)",
+      html.len() as f64 / 1024.0
+    ),
     json!({ "ms": exp_html_ms, "bytes": html.len() }),
   );
 }
@@ -606,7 +620,11 @@ fn run_suite_crdt_trace(cfg: &Config) {
     cfg.json_mode,
     "crdt_trace",
     "replay_throughput",
-    &format!("{total_ms:.2} ms ({:.0} ops/s, {} ops)", ops_per_sec, patches.len()),
+    &format!(
+      "{total_ms:.2} ms ({:.0} ops/s, {} ops)",
+      ops_per_sec,
+      patches.len()
+    ),
     json!({ "total_ms": total_ms, "ops_per_sec": ops_per_sec, "ops": patches.len() }),
   );
   report_metric(
@@ -651,7 +669,8 @@ fn run_suite_crdt_trace(cfg: &Config) {
   );
 
   // Two-peer concurrent remote merge (500 alternating updates via EditorSession)
-  let mut peer_a = EditorSession::from_markdown_with_client_id("# 协同压测\n\n初始正文内容。", Some(10));
+  let mut peer_a =
+    EditorSession::from_markdown_with_client_id("# 协同压测\n\n初始正文内容。", Some(10));
   let mut peer_b = EditorSession::from_doc(
     MicaDoc::from_update_with_client_id(&peer_a.encode_state(), Some(20)).expect("clone peer B"),
   );
@@ -693,7 +712,10 @@ fn run_suite_crdt_trace(cfg: &Config) {
 
 fn run_suite_knowledge_base(cfg: &Config) {
   if !cfg.json_mode {
-    println!("\n=== [3/4] Synthetic Knowledge Base ({} pages + nested folders) ===", cfg.docs);
+    println!(
+      "\n=== [3/4] Synthetic Knowledge Base ({} pages + nested folders) ===",
+      cfg.docs
+    );
   }
   let tmp = TempDirGuard::create("mica_kb_bench");
   let db_path = tmp.path().join("store.db");
@@ -753,7 +775,9 @@ fn run_suite_knowledge_base(cfg: &Config) {
   {
     let vault = VaultStore::open_at(db_path_str).expect("open sqlite bench vault");
     for f in &views {
-      vault.save_view(DEFAULT_ORIGIN, f).expect("save folder view");
+      vault
+        .save_view(DEFAULT_ORIGIN, f)
+        .expect("save folder view");
     }
     for (i, &doc_id) in page_ids.iter().enumerate() {
       let parent = Some(folder_ids[rng.range(folder_ids.len())]);
@@ -783,7 +807,9 @@ fn run_suite_knowledge_base(cfg: &Config) {
         updated_at: now,
         state_bytes: None,
       };
-      vault.save_view(DEFAULT_ORIGIN, &page_view).expect("save page view");
+      vault
+        .save_view(DEFAULT_ORIGIN, &page_view)
+        .expect("save page view");
       vault
         .save_markdown(DEFAULT_ORIGIN, doc_id, &md)
         .expect("save markdown");
@@ -901,7 +927,11 @@ fn run_suite_knowledge_base(cfg: &Config) {
 
   // 6. Usage stats SQL aggregation (overview + 30d activity)
   let t_stats = Instant::now();
-  let ov = black_box(vault.usage_overview(DEFAULT_ORIGIN).expect("usage_overview"));
+  let ov = black_box(
+    vault
+      .usage_overview(DEFAULT_ORIGIN)
+      .expect("usage_overview"),
+  );
   let act = black_box(
     vault
       .usage_activity(DEFAULT_ORIGIN, "30d", 480, None, false)
@@ -925,7 +955,10 @@ fn run_suite_knowledge_base(cfg: &Config) {
 
 fn run_suite_whiteboard(cfg: &Config) {
   if !cfg.json_mode {
-    println!("\n=== [4/4] Infinite Whiteboard / Mindmap ({} nodes) ===", cfg.board_nodes);
+    println!(
+      "\n=== [4/4] Infinite Whiteboard / Mindmap ({} nodes) ===",
+      cfg.board_nodes
+    );
   }
   let mut md = String::from("# Mica 压测画布根节点\n");
   let branches = 10usize;

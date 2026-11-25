@@ -2006,16 +2006,16 @@ fn legacy_flutter_db_path() -> Option<PathBuf> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn early_rust_db_path() -> Option<PathBuf> {
-  Some(
-    desktop_local_data_dir()?
-      .join("mica")
-      .join("vault.sqlite"),
-  )
+  Some(desktop_local_data_dir()?.join("mica").join("vault.sqlite"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn legacy_flutter_prefs_path() -> Option<PathBuf> {
-  Some(desktop_roaming_config_dir()?.join("mica").join("prefs.json"))
+  Some(
+    desktop_roaming_config_dir()?
+      .join("mica")
+      .join("prefs.json"),
+  )
 }
 
 /// Pure, testable desktop SQLite vault path resolution:
