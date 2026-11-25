@@ -89,8 +89,16 @@
 - **L3 原生 UI 壳（NSH 1280×820 Release，`l3_frame_bench`）**：
   - 首帧挂载 `shell_mount_first_frame`：**`19.24 ms`**。
   - 短文档 vs 100+ 块虚拟列表连续打字（均含 `nsh-testing::Headless` 单步 ~100 ms 固定 settle 等待）：短文档 `p50=103.33 ms`，100 块文档 `p50=105.69 ms`，Enter 分块 `p50=106.67 ms`，Undo `p50=105.90 ms`，打开大纲 `103.61 ms`——扣除 harness 固定 settle 后单帧重绘计算仅约 `3~6 ms`，且 100 块文档相对短文档几乎零退化（`+2.36 ms`）。
-- **黑盒屏幕像素法（[desktop_latency.ps1](../desktop_latency.ps1)）**：
-  - 本次运行时当前 Windows 桌面处于锁屏/无交互式 DWM 合成状态（`GetForegroundWindow=0`，`PrintWindow` 为纯黑），脚本已自动识别并跳过屏幕像素采样；解锁屏幕后运行 `just bench-desktop` 即可采集真实 `BitBlt` 按键到像素延迟。
+- **黑盒屏幕像素法（[desktop_latency.ps1](../desktop_latency.ps1)，真实解锁 Windows 桌面 DWM `SendInput → BitBlt`，`1280×820` 窗口 / `819×574` 采样 ROI）**：
+  - 本次实测冷启动：**`279.1 ms`**（与 5 次冷启中位数 `281.5 ms` 基本一致）。
+  - 全部采样 `35/35` 命中、`0` 超时（含 GDI `BitBlt` + `GetDIBits` 全 ROI 轮询开销与 Windows DWM 合成帧等待）：
+
+| 场景 | 命中 / 超时 | `min` | `p50` | `p95` | `p99` | `max` |
+| --- | :---: | ---: | ---: | ---: | ---: | ---: |
+| **短文档连续打字** | `35/35` (`0`) | `19.70 ms` | **`68.74 ms`** | `84.72 ms` | `85.75 ms` | `85.75 ms` |
+| **1,000 块粘贴长文档打字** | `35/35` (`0`) | `19.27 ms` | **`70.21 ms`** | `417.21 ms` | `417.96 ms` | `417.96 ms` |
+
+  - **解读**：短文档与 1,000 块长文档的中位真屏幕延迟几乎一致（`68.74 ms` vs `70.21 ms`，仅 **`+1.47 ms`**，最优单帧 **`19.27 ms`**），说明虚拟列表与增量渲染在长文常态打字下没有退化；长文 35 次采样中出现 1–2 次 `~417 ms` 尾刺（推测与粘贴/热身后的 300 ms 防抖落盘周期触发主线程 `take_pending_markdown` + `compute_backlinks_for` 或偶发换行滚屏有关，已记录作为后续优化线索）。
 
 ---
 
