@@ -378,6 +378,53 @@ impl CloudConnector {
       .filter(|t| !t.is_empty())
   }
 
+  /// Configured normalized server base URL (empty in local-only mode).
+  pub fn base_url(&self) -> &str {
+    self.endpoints.base_url()
+  }
+
+  /// Apply rotated credentials produced by a peer single-flight refresh without
+  /// issuing a duplicate `POST /api/auth/refresh` request (which would trigger
+  /// server-side refresh-token reuse detection and revoke the session family).
+  pub fn apply_rotated_session(
+    &mut self,
+    access_token: String,
+    refresh_token: Option<String>,
+    user_id: Option<String>,
+    display_name: Option<String>,
+    email: Option<String>,
+  ) {
+    if !access_token.trim().is_empty() {
+      self.config.access_token = Some(access_token);
+    }
+    if let Some(rt) = refresh_token
+      && !rt.trim().is_empty()
+    {
+      self.refresh_token = Some(rt);
+    }
+    if let Some(uid) = user_id
+      && !uid.trim().is_empty()
+    {
+      self.user_id = Some(uid);
+    }
+    if let Some(name) = display_name
+      && !name.trim().is_empty()
+    {
+      self.display_name = Some(name);
+    }
+    if let Some(mail) = email
+      && !mail.trim().is_empty()
+    {
+      self.config.email = Some(mail);
+    }
+    let server = self.endpoints.base_url().to_string();
+    if !server.is_empty() {
+      self
+        .claims
+        .switch_account(WorldOrigin::Cloud { server_url: server });
+    }
+  }
+
   /// Return `true` when an error string indicates an HTTP 401 / missing auth
   /// condition where session refresh or re-authentication is required.
   pub fn is_unauthorized_error(err: &str) -> bool {

@@ -30,6 +30,7 @@ use mica_sync::{
 use nsh_core::prelude::{Owner, Signal, spawn, timer};
 use uuid::Uuid;
 
+use crate::cloud_sync;
 use crate::editor_bridge::MicaDocumentBridge;
 use crate::net::CloudConnector;
 use crate::storage::VaultStore;
@@ -82,6 +83,8 @@ struct DocSyncInner {
   idb_flushing: bool,
 }
 
+type SessionExpiredCallback = Rc<dyn Fn(String)>;
+
 /// Manages the active cloud document's real-time `/ws/` CRDT [`SyncEngine`].
 #[derive(Clone)]
 pub(crate) struct DocSyncController {
@@ -96,6 +99,10 @@ pub(crate) struct DocSyncController {
   presence_users: Signal<Vec<PresenceUser>>,
   sync_badge: Signal<String>,
   doc_loading: Signal<bool>,
+  doc_load_error: Signal<Option<String>>,
+  allow_local: bool,
+  account_email: Signal<String>,
+  on_session_expired: Rc<RefCell<Option<SessionExpiredCallback>>>,
 }
 
 impl DocSyncController {
@@ -110,6 +117,9 @@ impl DocSyncController {
     presence_users: Signal<Vec<PresenceUser>>,
     sync_badge: Signal<String>,
     doc_loading: Signal<bool>,
+    doc_load_error: Signal<Option<String>>,
+    allow_local: bool,
+    account_email: Signal<String>,
   ) -> Self {
     Self {
       owner: Owner::current(),
@@ -123,7 +133,15 @@ impl DocSyncController {
       presence_users,
       sync_badge,
       doc_loading,
+      doc_load_error,
+      allow_local,
+      account_email,
+      on_session_expired: Rc::new(RefCell::new(None)),
     }
+  }
+
+  pub(crate) fn set_on_session_expired(&self, cb: SessionExpiredCallback) {
+    *self.on_session_expired.borrow_mut() = Some(cb);
   }
 
   /// Return `true` when real-time `/ws/` CRDT sync owns `(cache_origin, ws_id, doc_id)`.
@@ -526,6 +544,7 @@ impl DocSyncController {
             && let Some(did) = doc_id
           {
             self.doc_loading.set(false);
+            self.doc_load_error.set(None);
             self.docs_store.borrow_mut().insert(did, self.bridge.export_markdown());
             self.update_badge(
               self.sync_phase.get_untracked(),
@@ -696,12 +715,20 @@ impl DocSyncController {
             }
             WsEvent::Closed(_code, reason) => {
               closed_reported = true;
+              let is_unauth = CloudConnector::is_unauthorized_error(&reason);
               ctrl.dispatch_engine_event(sgen, SyncEvent::SocketClosed { epoch, reason });
+              if is_unauth {
+                ctrl.refresh_after_ws_unauthorized(sgen, target.server_url.clone());
+              }
               break;
             }
             WsEvent::Error(reason) => {
               closed_reported = true;
+              let is_unauth = CloudConnector::is_unauthorized_error(&reason);
               ctrl.dispatch_engine_event(sgen, SyncEvent::SocketClosed { epoch, reason });
+              if is_unauth {
+                ctrl.refresh_after_ws_unauthorized(sgen, target.server_url.clone());
+              }
               break;
             }
           }
@@ -720,6 +747,33 @@ impl DocSyncController {
               },
             );
           }
+        }
+      });
+    });
+  }
+
+  fn refresh_after_ws_unauthorized(&self, sgen: u64, server_url: String) {
+    let ctrl = self.clone();
+    let email = self.account_email.get_untracked();
+    let allow_local = self.allow_local;
+    self.owner.run(move || {
+      spawn(async move {
+        let res = cloud_sync::refresh_shared_connector(
+          &ctrl.cloud_connector,
+          &ctrl.vault,
+          allow_local,
+          &server_url,
+          &email,
+        )
+        .await;
+        if ctrl.inner.borrow().session_gen != sgen {
+          return;
+        }
+        if let Err(err) = res
+          && CloudConnector::is_unauthorized_error(&err)
+          && let Some(cb) = ctrl.on_session_expired.borrow().clone()
+        {
+          cb(server_url);
         }
       });
     });
@@ -762,22 +816,39 @@ type ViewsChangedCallback = Rc<dyn Fn(String, String, Uuid)>;
 pub(crate) struct ViewsWsWatcher {
   owner: Owner,
   inner: Rc<RefCell<ViewsWatcherInner>>,
+  vault: Rc<VaultStore>,
   cloud_connector: Rc<RefCell<CloudConnector>>,
+  allow_local: bool,
+  account_email: Signal<String>,
   on_views_changed: Rc<RefCell<Option<ViewsChangedCallback>>>,
+  on_session_expired: Rc<RefCell<Option<SessionExpiredCallback>>>,
 }
 
 impl ViewsWsWatcher {
-  pub(crate) fn new(cloud_connector: Rc<RefCell<CloudConnector>>) -> Self {
+  pub(crate) fn new(
+    vault: Rc<VaultStore>,
+    cloud_connector: Rc<RefCell<CloudConnector>>,
+    allow_local: bool,
+    account_email: Signal<String>,
+  ) -> Self {
     Self {
       owner: Owner::current(),
       inner: Rc::new(RefCell::new(ViewsWatcherInner::default())),
+      vault,
       cloud_connector,
+      allow_local,
+      account_email,
       on_views_changed: Rc::new(RefCell::new(None)),
+      on_session_expired: Rc::new(RefCell::new(None)),
     }
   }
 
   pub(crate) fn set_on_views_changed(&self, cb: Rc<dyn Fn(String, String, Uuid)>) {
     *self.on_views_changed.borrow_mut() = Some(cb);
+  }
+
+  pub(crate) fn set_on_session_expired(&self, cb: SessionExpiredCallback) {
+    *self.on_session_expired.borrow_mut() = Some(cb);
   }
 
   /// Start watching `(server_url, cache_origin, ws_id)`. No-op if already watching.
@@ -844,6 +915,7 @@ impl ViewsWsWatcher {
     let watcher = self.clone();
     self.owner.run(move || {
       spawn(async move {
+        let mut saw_unauthorized = false;
         while let Some(ev) = rx.recv().await {
           if watcher.inner.borrow().watcher_gen != sgen {
             return;
@@ -857,12 +929,37 @@ impl ViewsWsWatcher {
                 watcher.schedule_refresh(sgen, server_url.clone(), cache_origin.clone(), ws_id);
               }
             }
-            WsEvent::Closed(_, _) | WsEvent::Error(_) => break,
+            WsEvent::Closed(_, reason) | WsEvent::Error(reason) => {
+              saw_unauthorized = CloudConnector::is_unauthorized_error(&reason);
+              break;
+            }
           }
         }
 
         if watcher.inner.borrow().watcher_gen != sgen {
           return;
+        }
+        if saw_unauthorized {
+          let email = watcher.account_email.get_untracked();
+          let res = cloud_sync::refresh_shared_connector(
+            &watcher.cloud_connector,
+            &watcher.vault,
+            watcher.allow_local,
+            &server_url,
+            &email,
+          )
+          .await;
+          if watcher.inner.borrow().watcher_gen != sgen {
+            return;
+          }
+          if let Err(err) = res
+            && CloudConnector::is_unauthorized_error(&err)
+          {
+            if let Some(cb) = watcher.on_session_expired.borrow().clone() {
+              cb(server_url);
+            }
+            return;
+          }
         }
         let delay_ms = {
           let mut inner = watcher.inner.borrow_mut();

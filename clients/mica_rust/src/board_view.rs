@@ -331,7 +331,17 @@ pub fn board_view_with_rev_and_close(
               }
             }
           })
-          .on_mouse_up(move |_: &MouseEvent| c_pup.finish_gesture_if_active())
+          .on_mouse_up(move |ev: &MouseEvent| {
+            let active = !matches!(c_pup.session.borrow().gesture(), GestureState::Idle);
+            if active {
+              c_pup.session.borrow_mut().dispatch(BoardCommand::PointerMove {
+                screen_x: f32::from(ev.position.x) as f64,
+                screen_y: f32::from(ev.position.y) as f64,
+                alt: ev.modifiers.alt,
+              });
+              c_pup.dispatch_and_handle(BoardCommand::PointerUp);
+            }
+          })
           .on_wheel(move |ev: &WheelEvent| {
             let dy = match ev.delta {
               WheelDelta::Points(pt) => f32::from(pt.y),

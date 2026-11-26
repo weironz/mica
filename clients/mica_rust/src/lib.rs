@@ -761,6 +761,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let doc_presence_users: Signal<Vec<mica_sync::PresenceUser>> = signal(Vec::new());
   let doc_sync_badge = signal(String::new());
   let doc_loading = signal(false);
+  let doc_load_error: Signal<Option<String>> = signal(None);
   let doc_sync = doc_sync_session::DocSyncController::new(
     vault.clone(),
     bridge.clone(),
@@ -771,8 +772,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     doc_presence_users,
     doc_sync_badge,
     doc_loading,
+    doc_load_error,
+    allow_local,
+    account_email,
   );
-  let views_watcher = doc_sync_session::ViewsWsWatcher::new(cloud_connector.clone());
+  let views_watcher = doc_sync_session::ViewsWsWatcher::new(
+    vault.clone(),
+    cloud_connector.clone(),
+    allow_local,
+    account_email,
+  );
+  type CloudExpiredSlot = Rc<RefCell<Option<Rc<dyn Fn(String)>>>>;
+  let on_cloud_expired_slot: CloudExpiredSlot = Rc::new(RefCell::new(None));
 
   {
     let ds_cb = doc_sync.clone();
@@ -1040,6 +1051,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let ref_snaps = refresh_snapshots.clone();
     let cc = cloud_connector.clone();
     let ds = doc_sync.clone();
+    let exp_slot = on_cloud_expired_slot.clone();
     Rc::new(move |doc_id: Uuid, title: String, record_history: bool, force_new_tab: bool| {
       br.flush_pending_persist();
       let orig = active_origin.get_untracked();
@@ -1049,14 +1061,22 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .get(&doc_id)
         .cloned()
         .or_else(|| v.load_markdown(&orig, doc_id));
-      let is_cloud_signed =
-        cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !ws_id.is_nil();
+      let is_cloud_orig = cloud_sync::is_cloud_origin(&orig) && !ws_id.is_nil();
+      let is_cloud_signed = is_cloud_orig && is_cloud_signed_in.get_untracked();
       let needs_remote_load = is_cloud_signed && cached_md.is_none();
-      let md = cached_md.unwrap_or_default();
-      if !needs_remote_load {
+      let md = cached_md.clone().unwrap_or_default();
+      if !needs_remote_load && cached_md.is_some() {
         docs.borrow_mut().insert(doc_id, md.clone());
       }
       doc_loading.set(needs_remote_load);
+      if is_cloud_orig && !is_cloud_signed && cached_md.is_none() {
+        doc_load_error.set(Some(
+          "云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。"
+            .to_string(),
+        ));
+      } else {
+        doc_load_error.set(None);
+      }
       br.load_markdown(&md);
       active_doc.set(Some(doc_id));
       active_doc_id_str.set(doc_id.to_string());
@@ -1111,8 +1131,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let fetch_epoch = doc_fetch_gen.get_untracked().wrapping_add(1);
         doc_fetch_gen.set(fetch_epoch);
         let dirty_snap = doc_dirty_gen.get_untracked();
-        let (cc_a, docs_a, v_a, br_a, tree_a, ds_a) =
-          (cc.clone(), docs.clone(), v.clone(), br.clone(), tree_ref.clone(), ds.clone());
+        let (cc_a, docs_a, v_a, br_a, tree_a, ds_a, exp_a) = (
+          cc.clone(),
+          docs.clone(),
+          v.clone(),
+          br.clone(),
+          tree_ref.clone(),
+          ds.clone(),
+          exp_slot.clone(),
+        );
         let email_req = account_email.get_untracked();
         spawn(async move {
           let mut conn = cc_a.borrow().clone();
@@ -1127,26 +1154,46 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             return;
           }
           doc_loading.set(false);
-          if let Ok((conn, remote_md, rot)) = res {
-            if rot.is_some() {
-              *cc_a.borrow_mut() = conn;
-              if allow_local {
-                cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+          match res {
+            Ok((conn, remote_md, rot)) => {
+              doc_load_error.set(None);
+              if rot.is_some() {
+                *cc_a.borrow_mut() = conn;
+                if allow_local {
+                  cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+                }
+              }
+              docs_a.borrow_mut().insert(doc_id, remote_md.clone());
+              if !ds_a.is_ready_for(&orig, ws_id, doc_id)
+                && doc_dirty_gen.get_untracked() == dirty_snap
+                && (needs_remote_load || remote_md != md)
+              {
+                br_a.load_markdown(&remote_md);
+              }
+              backlinks_sig.set(compute_backlinks_for(
+                &tree_a.borrow(),
+                &docs_a.borrow(),
+                Some(doc_id),
+                &title,
+              ));
+            }
+            Err(err) => {
+              if CloudConnector::is_unauthorized_error(&err) {
+                if let Some(cb) = exp_a.borrow().clone() {
+                  cb(srv_req);
+                }
+                if needs_remote_load {
+                  doc_load_error.set(Some(
+                    "云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。"
+                      .to_string(),
+                  ));
+                }
+              } else if needs_remote_load && !ds_a.is_ready_for(&orig, ws_id, doc_id) {
+                doc_load_error.set(Some(format!("无法从云端加载页面：{err}")));
+              } else {
+                cloud_status.set(format!("加载云端页面失败：{err}"));
               }
             }
-            docs_a.borrow_mut().insert(doc_id, remote_md.clone());
-            if !ds_a.is_ready_for(&orig, ws_id, doc_id)
-              && doc_dirty_gen.get_untracked() == dirty_snap
-              && (needs_remote_load || remote_md != md)
-            {
-              br_a.load_markdown(&remote_md);
-            }
-            backlinks_sig.set(compute_backlinks_for(
-              &tree_a.borrow(),
-              &docs_a.borrow(),
-              Some(doc_id),
-              &title,
-            ));
           }
         });
       } else {
@@ -1264,6 +1311,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     doc_fetch_gen,
     doc_save_gen,
     doc_loading,
+    doc_load_error,
     doc_sync: doc_sync.clone(),
     views_watcher: views_watcher.clone(),
     refresh_snapshots: refresh_snapshots.clone(),
@@ -1277,6 +1325,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     views_watcher.set_on_views_changed(Rc::new(move |srv: String, cache_orig: String, ws_id: Uuid| {
       cs_views.refresh_views_only(srv, cache_orig, ws_id);
     }));
+    let cs_exp = cloud_session.clone();
+    let on_expired: Rc<dyn Fn(String)> = Rc::new(move |srv: String| {
+      cs_exp.mark_cloud_session_expired(&srv, false);
+    });
+    *on_cloud_expired_slot.borrow_mut() = Some(on_expired.clone());
+    doc_sync.set_on_session_expired(on_expired.clone());
+    views_watcher.set_on_session_expired(on_expired);
   }
 
   let create_page_in_parent: Rc<dyn Fn(Option<Uuid>, String, String, bool)> = {
@@ -3468,33 +3523,89 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .child(
           view()
             .flex_1()
-            .relative()
+            .flex_col()
             .min_w(px(0.0))
             .min_h(px(0.0))
             .h_full()
             .overflow_hidden()
             .bg(move || palette(dark_mode.get()).surface_base)
-            .child(when(move || active_mode.get() == MODE_DOC, {
-              let br = bridge.clone();
-              let hdr = editor_header.clone();
-              move || editor_view::editor_view(br.clone(), hdr.clone(), dark_mode)
-            }))
-            .child(when(move || active_mode.get() == MODE_DOC && doc_loading.get(), move || {
-              app_chrome::render_doc_loading_skeleton(active_title, dark_mode)
-            }))
-            .child(when(move || active_mode.get() == MODE_BOARD, {
-              let bs = board_session.clone();
-              let pb = on_persist_board.clone();
+            .child(when(
+              move || cloud_sync::is_cloud_origin(&active_origin.get()) && !is_cloud_signed_in.get(),
               move || {
-                board_view::board_view_with_rev_and_close(
-                  bs.clone(),
-                  board_rev,
+                app_chrome::render_cloud_relogin_banner(
                   dark_mode,
-                  pb.clone(),
-                  Some(Rc::new(move || active_mode.set(MODE_DOC))),
+                  Rc::new(move || {
+                    let srv = server_url.get_untracked();
+                    if cloud_sync::is_cloud_origin(&srv) {
+                      selected_cloud_origin.set(srv);
+                    }
+                    world_switcher_open.set(true);
+                  }),
                 )
-              }
-            })),
+              },
+            ))
+            .child(
+              view()
+                .flex_1()
+                .relative()
+                .min_w(px(0.0))
+                .min_h(px(0.0))
+                .w_full()
+                .overflow_hidden()
+                .child(when(move || active_mode.get() == MODE_DOC, {
+                  let br = bridge.clone();
+                  let hdr = editor_header.clone();
+                  move || editor_view::editor_view(br.clone(), hdr.clone(), dark_mode)
+                }))
+                .child(when(
+                  move || active_mode.get() == MODE_DOC && doc_loading.get(),
+                  move || app_chrome::render_doc_loading_skeleton(active_title, dark_mode),
+                ))
+                .child(when(
+                  move || {
+                    active_mode.get() == MODE_DOC
+                      && !doc_loading.get()
+                      && doc_load_error.get().is_some()
+                  },
+                  {
+                    let retry_open = open_doc_internal.clone();
+                    move || {
+                      let retry_open = retry_open.clone();
+                      app_chrome::render_doc_load_error_overlay(
+                        active_title,
+                        doc_load_error,
+                        is_cloud_signed_in,
+                        dark_mode,
+                        Rc::new(move || {
+                          let srv = server_url.get_untracked();
+                          if cloud_sync::is_cloud_origin(&srv) {
+                            selected_cloud_origin.set(srv);
+                          }
+                          world_switcher_open.set(true);
+                        }),
+                        Rc::new(move || {
+                          if let Some(did) = active_doc.get_untracked() {
+                            retry_open(did, active_title.get_untracked(), false, false);
+                          }
+                        }),
+                      )
+                    }
+                  },
+                ))
+                .child(when(move || active_mode.get() == MODE_BOARD, {
+                  let bs = board_session.clone();
+                  let pb = on_persist_board.clone();
+                  move || {
+                    board_view::board_view_with_rev_and_close(
+                      bs.clone(),
+                      board_rev,
+                      dark_mode,
+                      pb.clone(),
+                      Some(Rc::new(move || active_mode.set(MODE_DOC))),
+                    )
+                  }
+                })),
+            ),
         )
         .child(when(move || !is_narrow.get() && right_panel_open.get(), {
           let rp = right_props.clone();

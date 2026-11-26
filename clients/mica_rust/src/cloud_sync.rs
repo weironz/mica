@@ -6,7 +6,10 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
 use mica_api_types::{View, Workspace};
 use mica_client::PageTreeModel;
@@ -85,8 +88,269 @@ pub struct CloudWorkspaceSnapshot {
   pub refreshed_tokens: Option<(String, String)>,
 }
 
+/// TTL for reusing a just-completed single-flight token rotation when a sibling
+/// async task cloned `CloudConnector` moments before the leader wrote back the
+/// rotated tokens. Prevents replaying an already-spent refresh token (which
+/// would trigger server-side reuse detection and revoke the entire session family).
+const COMPLETED_ROTATION_TTL_MS: u64 = 60_000;
+
+fn refresh_now_ms() -> u64 {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    js_sys::Date::now().max(0.0) as u64
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RotatedSession {
+  access_token: String,
+  refresh_token: Option<String>,
+  user_id: Option<String>,
+  display_name: Option<String>,
+  email: Option<String>,
+}
+
+impl RotatedSession {
+  fn from_connector(conn: &CloudConnector) -> Self {
+    Self {
+      access_token: conn.access_token().unwrap_or_default().to_string(),
+      refresh_token: conn.refresh_token().map(str::to_string),
+      user_id: conn.user_id().map(str::to_string),
+      display_name: conn.display_name().map(str::to_string),
+      email: conn.config().email.clone(),
+    }
+  }
+
+  fn apply_to(&self, conn: &mut CloudConnector) {
+    conn.apply_rotated_session(
+      self.access_token.clone(),
+      self.refresh_token.clone(),
+      self.user_id.clone(),
+      self.display_name.clone(),
+      self.email.clone(),
+    );
+  }
+
+  fn token_pair(&self) -> (String, String) {
+    (
+      self.access_token.clone(),
+      self.refresh_token.clone().unwrap_or_default(),
+    )
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RefreshKey {
+  server_url: String,
+  token_key: String,
+}
+
+impl RefreshKey {
+  fn from_connector(conn: &CloudConnector) -> Self {
+    let server_url = canonicalize_cloud_url(conn.base_url());
+    let token_key = match conn.refresh_token() {
+      Some(rt) => rt.to_string(),
+      None => format!("__cookie__:{}", conn.access_token().unwrap_or("")),
+    };
+    Self {
+      server_url,
+      token_key,
+    }
+  }
+}
+
+#[derive(Default)]
+struct WaiterSlot {
+  result: Option<Result<RotatedSession, String>>,
+  waker: Option<Waker>,
+}
+
+struct WaiterFuture {
+  slot: Rc<RefCell<WaiterSlot>>,
+}
+
+impl Future for WaiterFuture {
+  type Output = Result<RotatedSession, String>;
+
+  fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    let mut slot = self.slot.borrow_mut();
+    if let Some(res) = slot.result.take() {
+      return Poll::Ready(res);
+    }
+    slot.waker = Some(cx.waker().clone());
+    Poll::Pending
+  }
+}
+
+#[derive(Default)]
+struct RefreshGate {
+  in_flight: HashMap<RefreshKey, Vec<Rc<RefCell<WaiterSlot>>>>,
+  completed: HashMap<RefreshKey, (u64, RotatedSession)>,
+}
+
+enum RefreshAcquire {
+  Cached(RotatedSession),
+  Wait(WaiterFuture),
+  Leader(InFlightGuard),
+}
+
+struct InFlightGuard {
+  gate: Rc<RefCell<RefreshGate>>,
+  key: RefreshKey,
+  finished: bool,
+}
+
+impl InFlightGuard {
+  fn complete(mut self, result: Result<RotatedSession, String>) {
+    self.finished = true;
+    let waiters = {
+      let mut g = self.gate.borrow_mut();
+      if let Ok(ref rot) = result {
+        g.completed.insert(self.key.clone(), (refresh_now_ms(), rot.clone()));
+      }
+      g.in_flight.remove(&self.key).unwrap_or_default()
+    };
+    for slot in waiters {
+      let mut s = slot.borrow_mut();
+      s.result = Some(result.clone());
+      if let Some(w) = s.waker.take() {
+        w.wake();
+      }
+    }
+  }
+}
+
+impl Drop for InFlightGuard {
+  fn drop(&mut self) {
+    if self.finished {
+      return;
+    }
+    let waiters = {
+      let mut g = self.gate.borrow_mut();
+      g.in_flight.remove(&self.key).unwrap_or_default()
+    };
+    for slot in waiters {
+      let mut s = slot.borrow_mut();
+      s.result = Some(Err("token refresh cancelled".to_string()));
+      if let Some(w) = s.waker.take() {
+        w.wake();
+      }
+    }
+  }
+}
+
+impl RefreshGate {
+  fn acquire(gate: &Rc<RefCell<Self>>, key: RefreshKey, now_ms: u64) -> RefreshAcquire {
+    let mut g = gate.borrow_mut();
+    g.completed
+      .retain(|_, (ts, _)| now_ms.saturating_sub(*ts) <= COMPLETED_ROTATION_TTL_MS);
+    if let Some((_, cached)) = g.completed.get(&key) {
+      return RefreshAcquire::Cached(cached.clone());
+    }
+    if let Some(waiters) = g.in_flight.get_mut(&key) {
+      let slot = Rc::new(RefCell::new(WaiterSlot::default()));
+      waiters.push(Rc::clone(&slot));
+      return RefreshAcquire::Wait(WaiterFuture { slot });
+    }
+    g.in_flight.insert(key.clone(), Vec::new());
+    RefreshAcquire::Leader(InFlightGuard {
+      gate: Rc::clone(gate),
+      key,
+      finished: false,
+    })
+  }
+
+  fn clear_server(&mut self, server_url: &str) {
+    let norm = canonicalize_cloud_url(server_url);
+    self.completed.retain(|k, _| k.server_url != norm);
+  }
+}
+
+thread_local! {
+  static REFRESH_GATE: Rc<RefCell<RefreshGate>> = Rc::new(RefCell::new(RefreshGate::default()));
+}
+
+/// Clear any cached single-flight token rotations for `server_url` (called on
+/// explicit login, logout, or session expiry so tokens never leak across accounts).
+pub fn clear_refresh_gate_for_server(server_url: &str) {
+  REFRESH_GATE.with(|gate| gate.borrow_mut().clear_server(server_url));
+}
+
+/// Single-flight `POST /api/auth/refresh` deduplicated per `(server_url, refresh_token)`.
+///
+/// Guarantees that concurrent 401 bursts (e.g. multiple image downloads + document
+/// fetch + usage stats + WebSocket reconnect) send AT MOST ONE refresh request for
+/// a given refresh token, preventing server-side reuse detection from revoking the
+/// active login family.
+pub async fn refresh_session_single_flight(
+  conn: &mut CloudConnector,
+) -> Result<(String, String), String> {
+  let key = RefreshKey::from_connector(conn);
+  let gate = REFRESH_GATE.with(Rc::clone);
+  match RefreshGate::acquire(&gate, key, refresh_now_ms()) {
+    RefreshAcquire::Cached(rot) => {
+      rot.apply_to(conn);
+      Ok(rot.token_pair())
+    }
+    RefreshAcquire::Wait(fut) => {
+      let rot = fut.await?;
+      rot.apply_to(conn);
+      Ok(rot.token_pair())
+    }
+    RefreshAcquire::Leader(guard) => match conn.refresh_session().await {
+      Ok(()) => {
+        let rot = RotatedSession::from_connector(conn);
+        let pair = rot.token_pair();
+        guard.complete(Ok(rot));
+        Ok(pair)
+      }
+      Err(err) => {
+        guard.complete(Err(err.clone()));
+        Err(err)
+      }
+    },
+  }
+}
+
+/// Refresh a shared `CloudConnector` via single-flight deduplication and persist
+/// rotated tokens into `vault` on desktop.
+pub async fn refresh_shared_connector(
+  cloud_connector: &Rc<RefCell<CloudConnector>>,
+  vault: &VaultStore,
+  allow_local: bool,
+  server_url: &str,
+  email: &str,
+) -> Result<(String, String), String> {
+  let mut conn = cloud_connector.borrow().clone();
+  let stale_access = conn.access_token().map(str::to_string);
+  let stale_server = canonicalize_cloud_url(conn.base_url());
+  let rotated = refresh_session_single_flight(&mut conn).await?;
+  {
+    let mut current = cloud_connector.borrow_mut();
+    // Ownership check after `.await`: only commit if the active connector still
+    // points to the same server and hasn't already been replaced by a newer login.
+    if canonicalize_cloud_url(current.base_url()) == stale_server
+      && current.access_token().map(str::to_string) == stale_access
+    {
+      *current = conn;
+    }
+  }
+  if allow_local {
+    persist_refreshed_tokens(vault, server_url, email, Some(rotated.clone()));
+  }
+  Ok(rotated)
+}
+
 /// Execute async `op` against `conn`; if the server responds with HTTP 401 and
-/// a refresh token (or Web `HttpOnly` cookie) is available, rotate once and retry.
+/// a refresh token (or Web `HttpOnly` cookie) is available, rotate once via the
+/// single-flight refresh coordinator and retry.
 pub async fn with_auto_refresh<T, F, Fut>(
   conn: &mut CloudConnector,
   op: F,
@@ -101,11 +365,7 @@ where
       if CloudConnector::is_unauthorized_error(&err)
         && (conn.refresh_token().is_some() || cfg!(target_arch = "wasm32")) =>
     {
-      conn.refresh_session().await?;
-      let rotated = (
-        conn.access_token().unwrap_or_default().to_string(),
-        conn.refresh_token().unwrap_or_default().to_string(),
-      );
+      let rotated = refresh_session_single_flight(conn).await?;
       let val = op(conn.clone()).await?;
       Ok((val, Some(rotated)))
     }
@@ -331,6 +591,7 @@ pub(crate) struct CloudSessionHandles {
   pub doc_fetch_gen: Signal<u64>,
   pub doc_save_gen: Signal<u64>,
   pub doc_loading: Signal<bool>,
+  pub doc_load_error: Signal<Option<String>>,
   pub doc_sync: DocSyncController,
   pub views_watcher: ViewsWsWatcher,
   pub refresh_snapshots: Rc<dyn Fn(Uuid)>,
@@ -340,6 +601,59 @@ pub(crate) struct CloudSessionHandles {
 }
 
 impl CloudSessionHandles {
+  /// Handle an unrecoverable cloud 401 (refresh token expired or revoked) with
+  /// ownership verification so a stale request from a previous server/account
+  /// can never terminate a newly signed-in session (`async-review-checklist.md` §1).
+  pub(crate) fn mark_cloud_session_expired(&self, target_server_url: &str, open_prompt: bool) {
+    let cur_srv = canonicalize_cloud_url(&self.server_url.get_untracked());
+    let target_norm = canonicalize_cloud_url(target_server_url);
+    if !target_norm.is_empty() && !cur_srv.is_empty() && cur_srv != target_norm {
+      return;
+    }
+    let origin_to_clear = if !target_norm.is_empty() {
+      target_norm
+    } else {
+      cur_srv
+    };
+    if !origin_to_clear.is_empty() {
+      clear_refresh_gate_for_server(&origin_to_clear);
+      let _ = self.vault.clear_server_credential(&origin_to_clear);
+      let mut creds = self.signed_in_origins_sig.get_untracked();
+      creds.retain(|(o, _)| canonicalize_cloud_url(o) != origin_to_clear);
+      self.signed_in_origins_sig.set(creds);
+    }
+    self.doc_sync.close();
+    self.views_watcher.stop();
+    self.is_cloud_signed_in.set(false);
+    self.doc_loading.set(false);
+    self.world_error.set("登录已过期，请重新登录".to_string());
+    self.cloud_status.set("云端登录已过期，请重新登录".to_string());
+
+    // Never leave an uncached cloud page looking like a blank empty document.
+    if is_cloud_origin(&self.active_origin.get_untracked())
+      && let Some(did) = self.active_doc.get_untracked()
+    {
+      let has_local_body = self.docs_store.borrow().contains_key(&did)
+        || self
+          .vault
+          .load_markdown(&self.active_origin.get_untracked(), did)
+          .is_some();
+      if !has_local_body {
+        self.doc_load_error.set(Some(
+          "云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。"
+            .to_string(),
+        ));
+      }
+    }
+
+    if !self.allow_local {
+      self.world_can_close.set(false);
+      self.world_switcher_open.set(true);
+    } else if open_prompt {
+      self.world_switcher_open.set(true);
+    }
+  }
+
   /// Fire a background cloud mutation with transparent 401 token refresh and
   /// ownership verification before reporting status or persisting rotated tokens.
   pub(crate) fn spawn_cloud_op<F, Fut>(&self, label: &'static str, op: F)
@@ -368,7 +682,13 @@ impl CloudSessionHandles {
           }
         }
         Ok(_) => {}
-        Err(err) => h.cloud_status.set(format!("{label}失败：{err}")),
+        Err(err) => {
+          if CloudConnector::is_unauthorized_error(&err) {
+            h.mark_cloud_session_expired(&srv_url, false);
+          } else {
+            h.cloud_status.set(format!("{label}失败：{err}"));
+          }
+        }
       }
     });
   }
@@ -465,6 +785,14 @@ impl CloudSessionHandles {
         .set(self.favorites.borrow().contains(&doc_id));
       (self.refresh_snapshots)(doc_id);
       self.doc_loading.set(is_cloud_signed && cached_md.is_none());
+      if is_cloud && !is_cloud_signed && cached_md.is_none() {
+        self.doc_load_error.set(Some(
+          "云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。"
+            .to_string(),
+        ));
+      } else {
+        self.doc_load_error.set(None);
+      }
       self.bridge.load_markdown(&active_md);
       self.open_tabs.set(vec![OpenTab::single(doc_id, title)]);
       self.active_tab_idx.set(0);
@@ -483,6 +811,7 @@ impl CloudSessionHandles {
     } else {
       self.doc_sync.close();
       self.doc_loading.set(false);
+      self.doc_load_error.set(None);
       self.active_doc.set(None);
       self.active_doc_id_str.set(String::new());
       self.active_title.set("暂无页面".to_string());
@@ -624,7 +953,11 @@ impl CloudSessionHandles {
           h.cloud_status.set(format!("已同步云端工作区：{ws_name}"));
         }
         Err(err) => {
-          h.cloud_status.set(format!("同步云端工作区失败：{err}"));
+          if CloudConnector::is_unauthorized_error(&err) {
+            h.mark_cloud_session_expired(&srv_url, false);
+          } else {
+            h.cloud_status.set(format!("同步云端工作区失败：{err}"));
+          }
         }
       }
     });
@@ -641,6 +974,8 @@ impl CloudSessionHandles {
   ) {
     let server_url = mica_client::normalize_server_url(&raw_server_url)
       .unwrap_or_else(|_| canonicalize_cloud_url(&raw_server_url));
+    clear_refresh_gate_for_server(&server_url);
+    self.doc_load_error.set(None);
     let Ok(cache_origin) = mica_client::cloud_cache_origin(&server_url, &payload.account_id) else {
       self.cloud_status.set("云端账户标识无效，无法建立隔离缓存".to_string());
       self.world_error.set("云端账户标识无效，请重新登录".to_string());
@@ -896,7 +1231,7 @@ impl CloudSessionHandles {
         .with_user_id(uid_req)
         .with_refresh_token((!refresh.trim().is_empty()).then_some(refresh));
         if conn.access_token().is_none() {
-          conn.refresh_session().await?;
+          let _ = refresh_session_single_flight(&mut conn).await?;
         }
         let boot = fetch_cloud_bootstrap(&mut conn, preferred_ws).await?;
         Ok::<_, String>((conn, boot))
@@ -909,19 +1244,7 @@ impl CloudSessionHandles {
         Ok((conn, boot)) => h.apply_bootstrap(origin, email, conn, boot),
         Err(err) => {
           if CloudConnector::is_unauthorized_error(&err) {
-            let _ = h.vault.clear_server_credential(&origin);
-            let mut creds = h.signed_in_origins_sig.get_untracked();
-            creds.retain(|(o, _)| o != &origin);
-            h.signed_in_origins_sig.set(creds);
-            h.is_cloud_signed_in.set(false);
-            h.world_error.set("登录已过期，请重新登录".to_string());
-            h.cloud_status.set("云端登录已过期，请重新登录".to_string());
-            if !h.allow_local {
-              h.world_can_close.set(false);
-              h.world_switcher_open.set(true);
-            } else if interactive {
-              h.world_switcher_open.set(true);
-            }
+            h.mark_cloud_session_expired(&origin, interactive);
           } else {
             h.cloud_status.set(format!("连接云端失败：{err}"));
             if interactive || (!h.allow_local && !h.is_cloud_signed_in.get_untracked()) {
@@ -1027,9 +1350,11 @@ impl CloudSessionHandles {
         };
         let prev_server = h.server_url.get_untracked();
         if is_cloud_origin(&prev_server) {
+          clear_refresh_gate_for_server(&prev_server);
           let _ = h.vault.clear_server_credential(&prev_server);
         }
         if is_cloud_origin(&web_origin) {
+          clear_refresh_gate_for_server(&web_origin);
           let _ = h.vault.clear_server_credential(&web_origin);
         }
         let mut creds = h.signed_in_origins_sig.get_untracked();
@@ -1057,6 +1382,8 @@ impl CloudSessionHandles {
       return;
     }
 
+    clear_refresh_gate_for_server(&self.server_url.get_untracked());
+    self.doc_load_error.set(None);
     let _ = self.vault.set_active_origin(DEFAULT_ORIGIN);
     *self.cloud_connector.borrow_mut() = CloudConnector::new(CloudConfig {
       server_url: self.server_url.get_untracked(),
@@ -1607,5 +1934,199 @@ mod tests {
     assert!(!is_cloud_origin(""));
     assert!(is_cloud_origin("https://mica.cloudcele.com"));
     assert!(is_cloud_origin("http://127.0.0.1:8080"));
+  }
+
+  #[test]
+  fn refresh_gate_deduplicates_in_flight_caches_rotation_and_wakes_on_cancel() {
+    use std::task::{RawWaker, RawWakerVTable};
+    fn noop_waker() -> Waker {
+      unsafe fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+      }
+      unsafe fn noop(_: *const ()) {}
+      static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+      unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+
+    let gate = Rc::new(RefCell::new(RefreshGate::default()));
+    let key = RefreshKey {
+      server_url: "https://mica.example.com".to_string(),
+      token_key: "rt_1".to_string(),
+    };
+
+    // 1. First caller becomes leader; second becomes waiter.
+    let leader = match RefreshGate::acquire(&gate, key.clone(), 1000) {
+      RefreshAcquire::Leader(g) => g,
+      _ => panic!("first caller must be leader"),
+    };
+    let mut waiter = match RefreshGate::acquire(&gate, key.clone(), 1005) {
+      RefreshAcquire::Wait(f) => f,
+      _ => panic!("concurrent caller must wait"),
+    };
+    let w = noop_waker();
+    let mut cx = Context::from_waker(&w);
+    assert!(Pin::new(&mut waiter).poll(&mut cx).is_pending());
+
+    // Leader completes -> waiter receives rotated tokens & subsequent stale caller hits cache.
+    let rot = RotatedSession {
+      access_token: "jwt_2".to_string(),
+      refresh_token: Some("rt_2".to_string()),
+      user_id: Some("u1".to_string()),
+      display_name: Some("Will".to_string()),
+      email: Some("w@example.com".to_string()),
+    };
+    leader.complete(Ok(rot.clone()));
+    match Pin::new(&mut waiter).poll(&mut cx) {
+      Poll::Ready(Ok(got)) => assert_eq!(got, rot),
+      other => panic!("expected Ready(Ok), got {other:?}"),
+    }
+    match RefreshGate::acquire(&gate, key.clone(), 1050) {
+      RefreshAcquire::Cached(got) => assert_eq!(got, rot),
+      _ => panic!("late sibling with stale rt_1 must hit completed cache"),
+    }
+
+    // 2. Explicit clear_server drops cached rotation.
+    gate.borrow_mut().clear_server("https://mica.example.com/");
+    let leader2 = match RefreshGate::acquire(&gate, key.clone(), 2000) {
+      RefreshAcquire::Leader(g) => g,
+      _ => panic!("cleared server must acquire fresh leader"),
+    };
+    let mut waiter2 = match RefreshGate::acquire(&gate, key.clone(), 2001) {
+      RefreshAcquire::Wait(f) => f,
+      _ => panic!("second waiter must wait"),
+    };
+
+    // 3. RAII Drop guard: dropping leader mid-flight wakes waiters with Err (no hang).
+    drop(leader2);
+    match Pin::new(&mut waiter2).poll(&mut cx) {
+      Poll::Ready(Err(msg)) => assert!(msg.contains("cancelled"), "msg={msg}"),
+      other => panic!("expected Ready(Err(cancelled)), got {other:?}"),
+    }
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn concurrent_401_burst_issues_single_refresh_without_triggering_reuse_revocation() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+      Arc,
+      atomic::{AtomicUsize, Ordering},
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock auth server");
+    let addr = listener.local_addr().unwrap();
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let refresh_calls_srv = Arc::clone(&refresh_calls);
+
+    let server_thread = std::thread::spawn(move || {
+      // Handle 6 initial 401s + 1 refresh + 6 retried 200s = 13 requests max.
+      for _ in 0..20 {
+        let Ok((mut stream, _)) = listener.accept() else {
+          break;
+        };
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap_or(0);
+        if n == 0 {
+          continue;
+        }
+        let req = String::from_utf8_lossy(&buf[..n]);
+        let first_line = req.lines().next().unwrap_or("");
+        let (status, body) = if first_line.starts_with("POST /api/auth/refresh") {
+          let prev = refresh_calls_srv.fetch_add(1, Ordering::SeqCst);
+          if prev == 0 {
+            // Delay slightly so all concurrent 401 callers pile onto the in-flight slot.
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            (
+              "200 OK",
+              r#"{"access_token":"jwt-fresh","token_type":"Bearer","expires_at":"2099-01-01T00:00:00Z","refresh_token":"rt-fresh","user":{"id":"00000000-0000-4000-8000-000000000001","email":"u@mica.dev","display_name":"Will","created_at":"2026-01-01T00:00:00Z"}}"#,
+            )
+          } else {
+            // Strict server-side single-use refresh token reuse detection!
+            ("401 Unauthorized", r#"{"error":"refresh token reused - family revoked"}"#)
+          }
+        } else if req.to_ascii_lowercase().contains("authorization: bearer jwt-fresh") {
+          ("200 OK", r#"{"markdown":"fresh content"}"#)
+        } else {
+          ("401 Unauthorized", r#"{"error":"access token expired"}"#)
+        };
+        let resp = format!(
+          "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+      }
+    });
+
+    let base_url = format!("http://{addr}");
+    clear_refresh_gate_for_server(&base_url);
+    let stale_conn = CloudConnector::new(CloudConfig {
+      server_url: base_url.clone(),
+      access_token: Some("jwt-expired".to_string()),
+      email: Some("u@mica.dev".to_string()),
+    })
+    .with_refresh_token(Some("rt-single-use".to_string()));
+
+    let ws_id = Uuid::new_v4();
+    let doc_id = Uuid::new_v4();
+
+    type FetchOutcome = Result<(String, Option<(String, String)>), String>;
+    type FetchFuture = Pin<Box<dyn Future<Output = FetchOutcome>>>;
+
+    // Drive 6 concurrent `with_auto_refresh` tasks on a minimal single-threaded
+    // executor (matching NSH's UI async runtime).
+    let mut futs: Vec<FetchFuture> = (0..6)
+      .map(|_| {
+        let mut c = stale_conn.clone();
+        Box::pin(async move {
+          with_auto_refresh(&mut c, move |cc| async move {
+            cc.fetch_document_markdown(ws_id, doc_id).await
+          })
+          .await
+        }) as FetchFuture
+      })
+      .collect();
+
+    use std::task::{RawWaker, RawWakerVTable};
+    fn noop_waker() -> Waker {
+      unsafe fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+      }
+      unsafe fn noop(_: *const ()) {}
+      static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+      unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut results: Vec<Option<FetchOutcome>> = (0..futs.len()).map(|_| None).collect();
+    let start = std::time::Instant::now();
+    while results.iter().any(Option::is_none) {
+      assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "concurrent single-flight refresh timed out"
+      );
+      for (i, fut) in futs.iter_mut().enumerate() {
+        if results[i].is_none()
+          && let Poll::Ready(res) = fut.as_mut().poll(&mut cx)
+        {
+          results[i] = Some(res);
+        }
+      }
+      std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    assert_eq!(
+      refresh_calls.load(Ordering::SeqCst),
+      1,
+      "6 concurrent 401s must trigger EXACTLY ONE POST /api/auth/refresh"
+    );
+    for (idx, res) in results.into_iter().enumerate() {
+      let (md, rot) = res.unwrap().unwrap_or_else(|e| panic!("task {idx} failed: {e}"));
+      assert_eq!(md, "fresh content");
+      assert_eq!(rot, Some(("jwt-fresh".to_string(), "rt-fresh".to_string())));
+    }
+    clear_refresh_gate_for_server(&base_url);
+    drop(server_thread);
   }
 }

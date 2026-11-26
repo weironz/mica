@@ -416,6 +416,160 @@ pub(crate) fn render_doc_loading_skeleton(
     )
 }
 
+/// Slim top warning banner displayed above cloud workspaces when the saved
+/// session has expired, preventing silent offline staleness.
+pub(crate) fn render_cloud_relogin_banner(
+  dark_mode: Signal<bool>,
+  on_relogin: Rc<dyn Fn()>,
+) -> impl IntoElement {
+  view()
+    .test_id("cloud-relogin-banner")
+    .w_full()
+    .h(px(36.0))
+    .px_4()
+    .flex_row()
+    .items_center()
+    .justify_between()
+    .gap_3()
+    .bg(move || palette(dark_mode.get()).warning_wash)
+    .border_b_1()
+    .border_color(move || palette(dark_mode.get()).border_normal)
+    .child(
+      text("云端登录已过期 — 当前仅显示本地缓存，无法同步或加载未缓存的云端页面（云端数据安全无损）")
+        .flex_1()
+        .text_size(px(12.5))
+        .text_color(move || palette(dark_mode.get()).warning)
+        .truncate(),
+    )
+    .child(
+      button()
+        .test_id("cloud-relogin-btn")
+        .h(px(24.0))
+        .px_3()
+        .rounded(px(5.0))
+        .bg(move || palette(dark_mode.get()).accent)
+        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
+        .on_press(move || on_relogin())
+        .child(
+          text("重新登录")
+            .text_size(px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(move || palette(dark_mode.get()).on_primary),
+        ),
+    )
+}
+
+/// Full-pane error/relogin card shown when an uncached cloud page cannot be
+/// fetched, so an expired session or network failure never masquerades as a
+/// blank empty document.
+pub(crate) fn render_doc_load_error_overlay(
+  active_title: Signal<String>,
+  doc_load_error: Signal<Option<String>>,
+  is_cloud_signed_in: Signal<bool>,
+  dark_mode: Signal<bool>,
+  on_relogin: Rc<dyn Fn()>,
+  on_retry: Rc<dyn Fn()>,
+) -> impl IntoElement {
+  view()
+    .test_id("doc-load-error-overlay")
+    .absolute()
+    .top(px(0.0))
+    .left(px(0.0))
+    .right(px(0.0))
+    .bottom(px(0.0))
+    .bg(move || palette(dark_mode.get()).surface_base)
+    .items_center()
+    .justify_center()
+    .px(px(32.0))
+    .child(
+      view()
+        .flex_col()
+        .w_full()
+        .max_w(px(460.0))
+        .p_6()
+        .gap_3()
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(move || palette(dark_mode.get()).border_normal)
+        .bg(move || palette(dark_mode.get()).surface_raised)
+        .child(
+          text(move || {
+            let t = active_title.get();
+            if t.trim().is_empty() {
+              "暂无法加载云端页面".to_string()
+            } else {
+              format!("暂无法加载「{t}」")
+            }
+          })
+          .text_size(px(16.0))
+          .font_weight(FontWeight::SEMIBOLD)
+          .text_color(move || palette(dark_mode.get()).text_primary),
+        )
+        .child(
+          text(move || {
+            doc_load_error
+              .get()
+              .unwrap_or_else(|| "云端登录已过期，请重新登录后加载该页面内容。".to_string())
+          })
+          .text_size(px(13.0))
+          .text_color(move || palette(dark_mode.get()).text_muted),
+        )
+        .child(
+          view()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .pt_2()
+            .child(when(
+              move || !is_cloud_signed_in.get(),
+              {
+                let relogin = on_relogin.clone();
+                move || {
+                  let relogin = relogin.clone();
+                  button()
+                    .test_id("doc-error-relogin-btn")
+                    .h(px(32.0))
+                    .px_4()
+                    .rounded(px(6.0))
+                    .bg(move || palette(dark_mode.get()).accent)
+                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
+                    .on_press(move || relogin())
+                    .child(
+                      text("重新登录云端")
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(move || palette(dark_mode.get()).on_primary),
+                    )
+                }
+              },
+            ))
+            .child(when(
+              move || is_cloud_signed_in.get(),
+              {
+                let retry = on_retry.clone();
+                move || {
+                  let retry = retry.clone();
+                  button()
+                    .test_id("doc-error-retry-btn")
+                    .h(px(32.0))
+                    .px_4()
+                    .rounded(px(6.0))
+                    .bg(move || palette(dark_mode.get()).accent)
+                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
+                    .on_press(move || retry())
+                    .child(
+                      text("重试加载")
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(move || palette(dark_mode.get()).on_primary),
+                    )
+                }
+              },
+            )),
+        ),
+    )
+}
+
 /// New-Tab `+` 2-item popup menu (`新建页面` / `打开已有页面…`).
 pub(crate) fn render_new_tab_menu_popover(
   new_tab_menu_open: Signal<bool>,
