@@ -4,7 +4,7 @@
 
 #define AppName "Mica"
 #ifndef AppVersion
-  #define AppVersion "0.15.2"
+  #define AppVersion "0.15.3"
 #endif
 #define AppPublisher "weironz"
 #define AppExe "mica-rust.exe"
