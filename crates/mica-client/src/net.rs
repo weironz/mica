@@ -322,10 +322,7 @@ fn parse_transfer_views_report(raw: &str) -> Result<TransferViewsReport, String>
       .get("removed_source")
       .and_then(Value::as_bool)
       .unwrap_or(false),
-    dry_run: val
-      .get("dry_run")
-      .and_then(Value::as_bool)
-      .unwrap_or(false),
+    dry_run: val.get("dry_run").and_then(Value::as_bool).unwrap_or(false),
   })
 }
 
@@ -940,7 +937,7 @@ impl CloudConnector {
     Ok(())
   }
 
-    /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
+  /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
   pub async fn reorder_views(
     &self,
     workspace_id: Uuid,
