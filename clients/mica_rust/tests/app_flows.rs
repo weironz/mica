@@ -1229,3 +1229,78 @@ fn regression_board_inspector_never_collapses_empty_after_edit_and_drag() {
     );
   }
 }
+
+#[nsh_core::prelude::component]
+fn ShareToggleRegressionHarness() -> impl nsh_core::prelude::IntoElement {
+  use std::rc::Rc;
+  use nsh_core::prelude::*;
+
+  let app_owner = Owner::current();
+  let open = signal(true);
+  let loading = signal(false);
+  let busy = signal(false);
+  let shared = signal(false);
+  let token: Signal<Option<String>> = signal(None);
+  let origin = signal("https://mica.example.com".to_string());
+  let error: Signal<Option<String>> = signal(None);
+  let dark_mode = signal(false);
+
+  let state = mica_rust::share_dialog::ShareDialogState {
+    open,
+    loading,
+    busy,
+    shared,
+    token,
+    origin,
+    error,
+    on_toggle_public: Rc::new(move |enable: bool| {
+      busy.set(true);
+      error.set(None);
+      app_owner.run(move || {
+        spawn(async move {
+          // Yield across reactive flushes so any transient `dynamic(...)` owner
+          // teardown triggered by `busy.set(true)` would cancel an un-owned task.
+          nsh_core::prelude::next_frame().await;
+          nsh_core::prelude::next_frame().await;
+          if enable {
+            shared.set(true);
+            token.set(Some("tok_live_123".to_string()));
+          } else {
+            shared.set(false);
+            token.set(None);
+          }
+          busy.set(false);
+        });
+      });
+    }),
+    on_close: Rc::new(move || open.set(false)),
+  };
+
+  view()
+    .flex_1()
+    .relative()
+    .child(mica_rust::share_dialog::share_dialog_modal(state, dark_mode))
+}
+
+#[test]
+fn regression_share_dialog_public_toggle_survives_busy_rebuild_and_reveals_url() {
+  let mut config = EngineConfig::new(Root::of::<ShareToggleRegressionHarness>());
+  config.viewport = size(px(800.0), px(600.0));
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("公开访问").unwrap();
+  // Enable public sharing: setting `busy = true` rebuilds the dynamic body; the
+  // spawned async request must NOT be cancelled by that rebuild.
+  app.press("id:share-public-toggle").unwrap();
+  app.wait_for("text:https://mica.example.com/s/tok_live_123").unwrap();
+
+  // Copy button inside the dynamic body must also flip cleanly to `已复制`.
+  app.press("id:share-copy-btn").unwrap();
+  app.wait_for("已复制").unwrap();
+
+  // Disable public sharing again: URL box must disappear cleanly (toggle is not stuck busy).
+  app.press("id:share-public-toggle").unwrap();
+  app
+    .wait_for_gone("id:share-url-box", std::time::Duration::from_millis(500))
+    .unwrap();
+}

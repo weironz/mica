@@ -58,6 +58,7 @@ pub fn share_dialog_modal(state: ShareDialogState, dark_mode: Signal<bool>) -> i
   when(
     move || open_sig.get(),
     move || {
+      let modal_owner = Owner::current();
       let st_bg = state.clone();
       let st_close_x = state.clone();
       let st_close_btn = state.clone();
@@ -145,24 +146,11 @@ pub fn share_dialog_modal(state: ShareDialogState, dark_mode: Signal<bool>) -> i
                       .into_element();
                   }
 
-                  if let Some(err) = st_body.error.get() {
-                    return view()
-                      .test_id("share-dialog-error")
-                      .h(px(80.0))
-                      .items_center()
-                      .justify_center()
-                      .child(
-                        text(format!("加载失败: {err}"))
-                          .text_size(px(13.0))
-                          .text_color(p.danger),
-                      )
-                      .into_element();
-                  }
-
                   let is_shared = st_body.shared.get();
                   let is_busy = st_body.busy.get();
                   let token_opt = st_body.token.get();
                   let origin = st_body.origin.get();
+                  let error_opt = st_body.error.get();
                   let on_toggle = st_body.on_toggle_public.clone();
 
                   let mut content = view().w_full().gap_3();
@@ -255,11 +243,15 @@ pub fn share_dialog_modal(state: ShareDialogState, dark_mode: Signal<bool>) -> i
                                 let next_gen = copy_gen.get_untracked().wrapping_add(1);
                                 copy_gen.set(next_gen);
                                 copied.set(true);
-                                drop(set_timeout(COPY_DONE_DURATION, move || {
-                                  if copy_gen.get_untracked() == next_gen {
-                                    copied.set(false);
-                                  }
-                                }));
+                                // Run under `modal_owner` so rebuilding this `dynamic(...)`
+                                // body for `copied = true` does not cancel the reset timer.
+                                modal_owner.run(move || {
+                                  drop(set_timeout(COPY_DONE_DURATION, move || {
+                                    if copy_gen.get_untracked() == next_gen {
+                                      copied.set(false);
+                                    }
+                                  }));
+                                });
                               })
                               .child(if is_copied {
                                 mica_icons::check_icon(p.success_hex)
@@ -282,6 +274,23 @@ pub fn share_dialog_modal(state: ShareDialogState, dark_mode: Signal<bool>) -> i
                               ),
                           ),
                       );
+                  }
+
+                  if let Some(err) = error_opt {
+                    content = content.child(
+                      view()
+                        .test_id("share-dialog-error")
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .rounded(px(6.0))
+                        .bg(p.danger_wash)
+                        .child(
+                          text(format!("操作失败：{err}"))
+                            .text_size(px(12.0))
+                            .text_color(p.danger),
+                        ),
+                    );
                   }
 
                   content.into_element()

@@ -2422,30 +2422,60 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_save_snapshot: on_save_snapshot.clone(),
     on_share: {
       let cc = cloud_connector.clone();
+      let v = vault.clone();
       let share_fetch_gen = signal(0u64);
       Rc::new(move || {
         share_error.set(None);
+        share_busy.set(false);
+        share_enabled.set(false);
+        share_token.set(None);
         share_modal_open.set(true);
-        if let Some(doc_id) = active_doc.get_untracked()
-          && is_cloud_signed_in.get_untracked()
-        {
+        let orig = active_origin.get_untracked();
+        if !cloud_sync::is_cloud_origin(&orig) || !is_cloud_signed_in.get_untracked() {
+          share_loading.set(false);
+          share_error.set(Some("公开分享仅支持云端工作区，请先登录云端账号。".to_string()));
+          return;
+        }
+        if let Some(doc_id) = active_doc.get_untracked() {
           let ws_id = active_workspace_id.get_untracked();
-          let conn = cc.borrow().clone();
+          let srv_req = server_url.get_untracked();
+          let email_req = account_email.get_untracked();
+          let cc_a = cc.clone();
+          let v_a = v.clone();
           let epoch = share_fetch_gen.get_untracked().wrapping_add(1);
           share_fetch_gen.set(epoch);
           share_loading.set(true);
-          spawn(async move {
-            let res = conn.get_share(ws_id, doc_id).await;
-            if share_fetch_gen.get_untracked() != epoch
-              || active_doc.get_untracked() != Some(doc_id)
-            {
-              return;
-            }
-            share_loading.set(false);
-            if let Ok(st) = res {
-              share_enabled.set(st.shared);
-              share_token.set(st.token);
-            }
+          app_owner.run(move || {
+            spawn(async move {
+              let mut conn = cc_a.borrow().clone();
+              let res = cloud_sync::with_auto_refresh(&mut conn, move |c| async move {
+                c.get_share(ws_id, doc_id).await
+              })
+              .await
+              .map(|(st, rot)| (conn, st, rot));
+              if share_fetch_gen.get_untracked() != epoch {
+                return;
+              }
+              share_loading.set(false);
+              if active_origin.get_untracked() != orig || active_doc.get_untracked() != Some(doc_id)
+              {
+                return;
+              }
+              match res {
+                Ok((conn, st, rot)) => {
+                  if rot.is_some() {
+                    *cc_a.borrow_mut() = conn;
+                    if allow_local {
+                      cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+                    }
+                  }
+                  share_enabled.set(st.shared);
+                  share_token.set(st.token);
+                  share_error.set(None);
+                }
+                Err(e) => share_error.set(Some(e)),
+              }
+            });
           });
         }
       })
@@ -2577,20 +2607,22 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       check_gen.set(epoch);
       cloud_status.set(format!("正在检测服务器：{url}…"));
       let url_req = url.clone();
-      spawn(async move {
-        let connector = CloudConnector::new(CloudConfig {
-          server_url: url_req,
-          access_token: None,
-          email: None,
+      app_owner.run(move || {
+        spawn(async move {
+          let connector = CloudConnector::new(CloudConfig {
+            server_url: url_req,
+            access_token: None,
+            email: None,
+          });
+          let res = connector.check_health().await;
+          if check_gen.get_untracked() != epoch {
+            return;
+          }
+          match res {
+            Ok(ver) => cloud_status.set(format!("连接正常：{url}（{ver}）")),
+            Err(err) => cloud_status.set(format!("离线 / 无法连接：{err}")),
+          }
         });
-        let res = connector.check_health().await;
-        if check_gen.get_untracked() != epoch {
-          return;
-        }
-        match res {
-          Ok(ver) => cloud_status.set(format!("连接正常：{url}（{ver}）")),
-          Err(err) => cloud_status.set(format!("离线 / 无法连接：{err}")),
-        }
       });
     }),
     on_cloud_login: do_cloud_login.clone(),
@@ -2611,15 +2643,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let conn = cc.borrow().clone();
         let phase = conn.sync_phase_label();
         cloud_status.set("正在检查同步连接…".to_string());
-        spawn(async move {
-          let res = conn.check_health().await;
-          if check_gen.get_untracked() != epoch {
-            return;
-          }
-          match res {
-            Ok(ver) => cloud_status.set(format!("同步就绪（{phase} · 服务器 {ver}）")),
-            Err(err) => cloud_status.set(format!("同步检查失败：{err}")),
-          }
+        app_owner.run(move || {
+          spawn(async move {
+            let res = conn.check_health().await;
+            if check_gen.get_untracked() != epoch {
+              return;
+            }
+            match res {
+              Ok(ver) => cloud_status.set(format!("同步就绪（{phase} · 服务器 {ver}）")),
+              Err(err) => cloud_status.set(format!("同步检查失败：{err}")),
+            }
+          });
         });
       })
     },
@@ -3036,17 +3070,19 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     probe_gen.set(epoch);
     world_health_status.set("checking".to_string());
     let origin_req = origin.clone();
-    spawn(async move {
-      let conn = CloudConnector::new(CloudConfig {
-        server_url: origin_req,
-        access_token: None,
-        email: None,
+    app_owner.run(move || {
+      spawn(async move {
+        let conn = CloudConnector::new(CloudConfig {
+          server_url: origin_req,
+          access_token: None,
+          email: None,
+        });
+        let ok = conn.check_health().await.is_ok();
+        if probe_gen.get_untracked() != epoch {
+          return;
+        }
+        world_health_status.set(if ok { "reachable" } else { "unreachable" }.to_string());
       });
-      let ok = conn.check_health().await.is_ok();
-      if probe_gen.get_untracked() != epoch {
-        return;
-      }
-      world_health_status.set(if ok { "reachable" } else { "unreachable" }.to_string());
     });
   });
   {
@@ -3197,38 +3233,68 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     error: share_error,
     on_toggle_public: {
       let cc = cloud_connector.clone();
+      let v = vault.clone();
       let toggle_gen = signal(0u64);
       Rc::new(move |enable: bool| {
+        let orig = active_origin.get_untracked();
+        if !cloud_sync::is_cloud_origin(&orig) || !is_cloud_signed_in.get_untracked() {
+          share_error.set(Some("公开分享仅支持云端工作区，请先登录云端账号。".to_string()));
+          return;
+        }
         let Some(doc_id) = active_doc.get_untracked() else {
           return;
         };
         let ws = active_workspace_id.get_untracked();
+        let srv_req = server_url.get_untracked();
+        let email_req = account_email.get_untracked();
+        let cc_a = cc.clone();
+        let v_a = v.clone();
         let epoch = toggle_gen.get_untracked().wrapping_add(1);
         toggle_gen.set(epoch);
         share_busy.set(true);
-        let conn = cc.borrow().clone();
-        spawn(async move {
-          let res = if enable {
-            conn.create_share(ws, doc_id).await
-          } else {
-            conn.delete_share(ws, doc_id).await.map(|_| net::ShareState {
-              shared: false,
-              token: None,
-              url: None,
+        share_error.set(None);
+        // Spawn under `app_owner` (not the transient `dynamic(...)` button owner),
+        // because setting `share_busy = true` immediately rebuilds the dialog body
+        // and would otherwise cancel this task before the HTTP request completes.
+        app_owner.run(move || {
+          spawn(async move {
+            let mut conn = cc_a.borrow().clone();
+            let res = cloud_sync::with_auto_refresh(&mut conn, move |c| async move {
+              if enable {
+                c.create_share(ws, doc_id).await
+              } else {
+                c.delete_share(ws, doc_id).await.map(|_| net::ShareState {
+                  shared: false,
+                  token: None,
+                  url: None,
+                })
+              }
             })
-          };
-          if toggle_gen.get_untracked() != epoch || active_doc.get_untracked() != Some(doc_id) {
-            return;
-          }
-          match res {
-            Ok(st) => {
-              share_enabled.set(st.shared);
-              share_token.set(st.token);
-              share_error.set(None);
+            .await
+            .map(|(st, rot)| (conn, st, rot));
+            if toggle_gen.get_untracked() != epoch {
+              return;
             }
-            Err(e) => share_error.set(Some(e)),
-          }
-          share_busy.set(false);
+            share_busy.set(false);
+            if active_origin.get_untracked() != orig || active_doc.get_untracked() != Some(doc_id)
+            {
+              return;
+            }
+            match res {
+              Ok((conn, st, rot)) => {
+                if rot.is_some() {
+                  *cc_a.borrow_mut() = conn;
+                  if allow_local {
+                    cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+                  }
+                }
+                share_enabled.set(st.shared);
+                share_token.set(st.token);
+                share_error.set(None);
+              }
+              Err(e) => share_error.set(Some(e)),
+            }
+          });
         });
       })
     },
@@ -3258,21 +3324,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         global_ai_streaming.set(true);
         global_ai_error.set(None);
         let conn = cc.borrow().clone();
-        spawn(async move {
-          let res = conn
-            .stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt)
-            .await;
-          if ai_gen.get_untracked() != epoch {
-            return;
-          }
-          match res {
-            Ok(out) => {
-              global_ai_output.set(out);
-              global_ai_done.set(true);
+        app_owner.run(move || {
+          spawn(async move {
+            let res = conn
+              .stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt)
+              .await;
+            if ai_gen.get_untracked() != epoch {
+              return;
             }
-            Err(e) => global_ai_error.set(Some(e)),
-          }
-          global_ai_streaming.set(false);
+            match res {
+              Ok(out) => {
+                global_ai_output.set(out);
+                global_ai_done.set(true);
+              }
+              Err(e) => global_ai_error.set(Some(e)),
+            }
+            global_ai_streaming.set(false);
+          });
         });
       })
     },
@@ -3311,21 +3379,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         inline_ai_error.set(None);
         let full = if ctx.is_empty() { prompt } else { format!("{prompt}\n\n原文：\n{ctx}") };
         let conn = cc.borrow().clone();
-        spawn(async move {
-          let res = conn.stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full).await;
-          if ai_gen.get_untracked() != epoch {
-            return;
-          }
-          match res {
-            Ok(out) => {
-              inline_ai_output.set(out);
-              inline_ai_phase.set(InlineAiPhase::Succeeded);
+        app_owner.run(move || {
+          spawn(async move {
+            let res = conn.stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full).await;
+            if ai_gen.get_untracked() != epoch {
+              return;
             }
-            Err(e) => {
-              inline_ai_error.set(Some(e));
-              inline_ai_phase.set(InlineAiPhase::Failed);
+            match res {
+              Ok(out) => {
+                inline_ai_output.set(out);
+                inline_ai_phase.set(InlineAiPhase::Succeeded);
+              }
+              Err(e) => {
+                inline_ai_error.set(Some(e));
+                inline_ai_phase.set(InlineAiPhase::Failed);
+              }
             }
-          }
+          });
         });
       })
     },
@@ -3411,27 +3481,30 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         }
         let mut conn = cs.cloud_connector.borrow().clone();
         let cs_done = cs.clone();
-        spawn(async move {
-          let res = cloud_sync::with_auto_refresh(&mut conn, move |c| {
-            let (email, role) = (email.clone(), role.clone());
-            async move { c.invite_member(cur_ws, &email, &role).await }
-          })
-          .await;
-          if active_origin.get_untracked() != orig || active_workspace_id.get_untracked() != cur_ws {
-            return;
-          }
-          match res {
-            Ok(_) => {
-              ws_invite_status.set(Some(("邀请已发送".to_string(), false)));
-              cs_done.load_workspace_settings(
-                ws_settings_gen,
-                ws_storage_usage,
-                ws_members,
-                ws_pending_invitations,
-              );
+        app_owner.run(move || {
+          spawn(async move {
+            let res = cloud_sync::with_auto_refresh(&mut conn, move |c| {
+              let (email, role) = (email.clone(), role.clone());
+              async move { c.invite_member(cur_ws, &email, &role).await }
+            })
+            .await;
+            if active_origin.get_untracked() != orig || active_workspace_id.get_untracked() != cur_ws
+            {
+              return;
             }
-            Err(e) => ws_invite_status.set(Some((format!("邀请失败：{e}"), true))),
-          }
+            match res {
+              Ok(_) => {
+                ws_invite_status.set(Some(("邀请已发送".to_string(), false)));
+                cs_done.load_workspace_settings(
+                  ws_settings_gen,
+                  ws_storage_usage,
+                  ws_members,
+                  ws_pending_invitations,
+                );
+              }
+              Err(e) => ws_invite_status.set(Some((format!("邀请失败：{e}"), true))),
+            }
+          });
         });
       })
     },
