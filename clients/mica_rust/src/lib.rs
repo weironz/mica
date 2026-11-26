@@ -2858,6 +2858,26 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       world_health_status.set(if ok { "reachable" } else { "unreachable" }.to_string());
     });
   });
+  {
+    let probe = on_probe_server.clone();
+    effect(move || {
+      if world_switcher_open.get() {
+        let sel = selected_cloud_origin.get_untracked();
+        let origin = if !sel.trim().is_empty() {
+          sel
+        } else {
+          known_servers_sig
+            .get_untracked()
+            .first()
+            .cloned()
+            .unwrap_or_default()
+        };
+        if !origin.trim().is_empty() {
+          probe(origin);
+        }
+      }
+    });
+  }
 
   let world_state = WorldSwitcherState {
     open: world_switcher_open,
@@ -3451,9 +3471,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   });
 
   cloud_session.restore_startup_session();
-  if !allow_local {
-    on_probe_server(selected_cloud_origin.get_untracked());
-  }
 
   view()
     .flex_1()
