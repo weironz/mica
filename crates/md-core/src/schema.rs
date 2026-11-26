@@ -65,6 +65,8 @@ pub mod marks {
   pub const ITALIC: &str = "italic";
   /// Strikethrough.
   pub const STRIKE: &str = "strike";
+  /// Inline highlight (`==text==` / `<mark>`).
+  pub const HIGHLIGHT: &str = "highlight";
   /// Inline code.
   pub const CODE: &str = "code";
   /// Link, including zero-width labels.
@@ -80,7 +82,7 @@ pub mod marks {
 
   /// Every mark type.
   pub const ALL: &[&str] = &[
-    BOLD, ITALIC, STRIKE, CODE, LINK, IMAGE, MATH, HTML, FOOTNOTE,
+    BOLD, ITALIC, STRIKE, HIGHLIGHT, CODE, LINK, IMAGE, MATH, HTML, FOOTNOTE,
   ];
 }
 

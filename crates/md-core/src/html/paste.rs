@@ -344,7 +344,7 @@ fn image(alt: &str, src: &str) -> String {
 
 /// Wrap inline content in emphasis markers, keeping leading/trailing
 /// whitespace OUTSIDE the markers — CommonMark rejects `** x **`.
-fn wrap_marks(inner: &str, bold: bool, italic: bool, strike: bool) -> String {
+fn wrap_marks(inner: &str, bold: bool, italic: bool, strike: bool, highlight: bool) -> String {
   let core = inner.trim_matches(is_trim_ws);
   if core.is_empty() {
     return inner.to_string();
@@ -352,7 +352,12 @@ fn wrap_marks(inner: &str, bold: bool, italic: bool, strike: bool) -> String {
   let lead = &inner[..inner.len() - inner.trim_start_matches(is_trim_ws).len()];
   let trail = &inner[inner.trim_end_matches(is_trim_ws).len()..];
   let (mut open, mut close) = (String::new(), String::new());
-  for (on, marker) in [(bold, "**"), (italic, "*"), (strike, "~~")] {
+  for (on, marker) in [
+    (bold, "**"),
+    (italic, "*"),
+    (strike, "~~"),
+    (highlight, "=="),
+  ] {
     if on {
       open.push_str(marker);
       close.insert_str(0, marker);
@@ -434,14 +439,16 @@ fn rendered_math_source(e: &HtmlNode) -> Option<String> {
   None
 }
 
-/// Bold / italic / strike implied by an element's tag AND its inline style —
-/// Google Docs / Word emit styled `<span>`s (`font-weight:700`), not `<b>`.
-fn inline_marks(e: &HtmlNode, no_italic: bool) -> (bool, bool, bool) {
-  let (mut bold, mut italic, mut strike) = match e.tag() {
-    "b" | "strong" => (true, false, false),
-    "i" | "em" => (false, true, false),
-    "s" | "del" | "strike" => (false, false, true),
-    _ => (false, false, false),
+/// Bold / italic / strike / highlight implied by an element's tag AND its
+/// inline style — Google Docs / Word emit styled `<span>`s (`font-weight:700`),
+/// not `<b>`.
+fn inline_marks(e: &HtmlNode, no_italic: bool) -> (bool, bool, bool, bool) {
+  let (mut bold, mut italic, mut strike, highlight) = match e.tag() {
+    "b" | "strong" => (true, false, false, false),
+    "i" | "em" => (false, true, false, false),
+    "s" | "del" | "strike" => (false, false, true, false),
+    "mark" => (false, false, false, true),
+    _ => (false, false, false, false),
   };
   let style = e.attr("style").unwrap_or("").to_lowercase();
   if let Some(weight) = style_value(&style, "font-weight") {
@@ -466,7 +473,7 @@ fn inline_marks(e: &HtmlNode, no_italic: bool) -> (bool, bool, bool) {
   if no_italic {
     italic = false;
   }
-  (bold, italic, strike)
+  (bold, italic, strike, highlight)
 }
 
 /// The value after `name\s*:\s*` at the first occurrence of `name` that has
@@ -1226,13 +1233,13 @@ impl Converter {
       }
       "code" => sb.push_str(&inline_code(&child.text())),
       _ => {
-        let (bold, italic, strike) = inline_marks(child, self.no_italic);
-        if !bold && !italic && !strike {
+        let (bold, italic, strike, highlight) = inline_marks(child, self.no_italic);
+        if !bold && !italic && !strike && !highlight {
           self.gather(child, sb);
         } else {
           let mut inner = String::new();
           self.gather(child, &mut inner);
-          sb.push_str(&wrap_marks(&inner, bold, italic, strike));
+          sb.push_str(&wrap_marks(&inner, bold, italic, strike, highlight));
         }
       }
     }

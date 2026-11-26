@@ -49,4 +49,5 @@ baseline for P4 — see docs/architecture/editor-engine.md Milestone 8.
   (crates/md-core;原 crates/markdown 处的 Dart 镜像 `_flanking`/`_isCjk`
   已随单一实现专项删除,2026-10);回归
   `crates/markdown/tests/cjk_emphasis.rs` + `cjk_emphasis_and_fence_test.dart`。
+- **行内高亮 `==高亮==`**(2026-11-26):支持 Obsidian / Typora / Bear 事实标准的单语义荧光笔高亮,解析为 `highlight` mark,HTML / 剪贴板导出为 `<mark>`,粘贴 `<mark>` 还原为 `==...==`。要求精确双等号(`n == 2`)且内侧非空白,因此 `a == b`、`===`、`=x=` 与行内代码内的 `==` 保持字面量,对官方 641 例零回归;调研与三层实现见 [docs/features/inline-highlight-and-color-policy.md](../features/inline-highlight-and-color-policy.md),回归 `crates/markdown/tests/highlight.rs`。
 - 脚注、YAML front matter、Pandoc `$…$`/`$$…$$` 数学约定(见 CLAUDE.md #4)。

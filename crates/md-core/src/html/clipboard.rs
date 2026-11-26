@@ -357,6 +357,11 @@ fn span(units: &[u16], lo: usize, hi: usize, marks: &[&crate::inline::InlineMark
             out.push_str(&body);
             out.push_str("</s>");
           }
+          "highlight" => {
+            out.push_str("<mark>");
+            out.push_str(&body);
+            out.push_str("</mark>");
+          }
           "link" => {
             out.push_str("<a href=\"");
             out.push_str(&attr(safe_url(mark.href.as_deref().unwrap_or(""), false)));

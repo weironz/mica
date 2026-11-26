@@ -134,7 +134,7 @@ pub enum EditorCommand {
   /// Move caret / update selection (paint-only; does not bump `content_revision`).
   SetSelection { selection: Option<DocSelection> },
   /// Toggle an inline mark across the current selection (`bold`, `italic`,
-  /// `code`, `strike`, `link`, `math`).
+  /// `code`, `strike`, `highlight`, `link`, `math`).
   ToggleMark {
     kind: String,
     #[serde(default)]

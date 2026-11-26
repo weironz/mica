@@ -1222,6 +1222,7 @@ pub(crate) struct InlineRun {
   bold: bool,
   italic: bool,
   strike: bool,
+  highlight: bool,
   underline: bool,
   code: bool,
   link: bool,
@@ -1265,6 +1266,7 @@ pub(crate) fn build_inline_runs(
         bold: false,
         italic: false,
         strike: false,
+        highlight: false,
         underline: true,
         code: false,
         link: false,
@@ -1284,6 +1286,7 @@ pub(crate) fn build_inline_runs(
       bold: false,
       italic: false,
       strike: false,
+      highlight: false,
       underline: false,
       code: false,
       link: false,
@@ -1296,6 +1299,7 @@ pub(crate) fn build_inline_runs(
           "bold" => r.bold = true,
           "italic" => r.italic = true,
           "strike" => r.strike = true,
+          "highlight" => r.highlight = true,
           "underline" => r.underline = true,
           "code" => r.code = true,
           "link" => r.link = true,
@@ -1315,6 +1319,7 @@ pub(crate) fn build_inline_runs(
       bold: false,
       italic: false,
       strike: false,
+      highlight: false,
       underline: true,
       code: false,
       link: false,
@@ -1344,12 +1349,17 @@ pub(crate) fn render_inline_span(run: InlineRun, font_px: f32, dark_mode: Signal
       .text_size(px((font_px - 1.5).max(12.0)))
       .text_color(move || palette(dark_mode.get()).inline_code_ink)
       .bg(move || palette(dark_mode.get()).inline_code_bg);
-  } else if run.link {
-    t = t.text_color(move || palette(dark_mode.get()).accent);
   } else if run.math {
     t = t
       .text_color(move || palette(dark_mode.get()).accent)
       .bg(move || palette(dark_mode.get()).accent_soft);
+  } else {
+    if run.link {
+      t = t.text_color(move || palette(dark_mode.get()).accent);
+    }
+    if run.highlight {
+      t = t.bg(move || palette(dark_mode.get()).highlight_bg);
+    }
   }
   t
 }
@@ -3687,5 +3697,23 @@ mod tests {
       raster.height,
       &svg[..svg.len().min(600)]
     );
+  }
+
+  #[test]
+  fn build_inline_runs_marks_highlight_and_combinations() {
+    let marks = vec![
+      EditorMark::new(2, 6, "highlight"),
+      EditorMark::new(2, 4, "bold"),
+    ];
+    let runs = build_inline_runs("这是核心重点内容", &marks, None);
+    assert_eq!(runs.len(), 4);
+    assert_eq!(runs[0].text, "这是");
+    assert!(!runs[0].highlight);
+    assert_eq!(runs[1].text, "核心");
+    assert!(runs[1].highlight && runs[1].bold);
+    assert_eq!(runs[2].text, "重点");
+    assert!(runs[2].highlight && !runs[2].bold);
+    assert_eq!(runs[3].text, "内容");
+    assert!(!runs[3].highlight);
   }
 }

@@ -1340,6 +1340,8 @@ fn shortcuts_tab(dm: Signal<bool>) -> impl IntoElement {
   const FMT_ROWS: &[(&str, &str)] = &[
     ("Ctrl + B", "加粗"),
     ("Ctrl + I", "斜体"),
+    ("Ctrl + Shift + S", "删除线"),
+    ("Ctrl + Shift + H", "高亮"),
     ("Ctrl + E", "行内代码"),
     ("Ctrl + K", "链接"),
     ("Ctrl + Alt + 1…6", "一至六级标题"),

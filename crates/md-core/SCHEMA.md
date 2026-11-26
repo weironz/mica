@@ -53,7 +53,7 @@ The parser emits a root block of kind `paragraph` (Mica's convention is
 
 ## Mark types (`Mark::kind`)
 
-`bold`, `italic`, `strike`, `code`, `link` (`href`, optional `title`;
+`bold`, `italic`, `strike`, `highlight`, `code`, `link` (`href`, optional `title`;
 zero-width labels allowed), `image` (inline image), `math`, `html` (raw inline
 HTML), `footnote` (a reference).
 

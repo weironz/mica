@@ -197,13 +197,26 @@ fn match_inline_rule(block: &EditorBlock, caret: u32) -> Option<InputRuleMatch> 
     matched = Some((m_start, i_start, i_end, "link", Some(href)));
   }
 
-  // 2. Two-char wrappers: `**bold**`, `~~strike~~`.
+  // 2. Two-char wrappers: `**bold**`, `~~strike~~`, `==highlight==`.
   if matched.is_none() && caret >= 4 {
-    for (delim, kind) in [("**", "bold"), ("~~", "strike")] {
+    for (delim, kind) in [("**", "bold"), ("~~", "strike"), ("==", "highlight")] {
       if let Some(prefix_without_close) = before.strip_suffix(delim) {
+        if delim == "==" && prefix_without_close.ends_with('=') {
+          continue;
+        }
         if let Some(open_byte) = prefix_without_close.rfind(delim) {
+          if delim == "==" && before[..open_byte].ends_with('=') {
+            continue;
+          }
           let inner = &prefix_without_close[open_byte + delim.len()..];
-          if !inner.is_empty() && !inner.trim().is_empty() {
+          let valid_inner = if delim == "==" {
+            !inner.is_empty()
+              && !inner.starts_with(char::is_whitespace)
+              && !inner.ends_with(char::is_whitespace)
+          } else {
+            !inner.is_empty() && !inner.trim().is_empty()
+          };
+          if valid_inner {
             let match_start = utf16_len(&before[..open_byte]);
             let inner_start = match_start + 2;
             let inner_end = caret - 2;

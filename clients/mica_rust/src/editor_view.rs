@@ -667,6 +667,7 @@ pub fn editor_view(
         ("mod+i", false, EditorKeyAction::ToggleMark("italic")),
         ("mod+e", false, EditorKeyAction::ToggleMark("code")),
         ("mod+shift+s", false, EditorKeyAction::ToggleMark("strike")),
+        ("mod+shift+h", false, EditorKeyAction::ToggleMark("highlight")),
         ("mod+k", false, EditorKeyAction::OpenLink),
         ("escape", false, EditorKeyAction::Escape),
       ];
@@ -1040,6 +1041,7 @@ pub fn editor_view(
   let b_bold = bridge.clone();
   let b_italic = bridge.clone();
   let b_strike = bridge.clone();
+  let b_highlight = bridge.clone();
   let b_code = bridge.clone();
   let b_link_btn = bridge.clone();
   let b_list = bridge.clone();
@@ -1085,6 +1087,7 @@ pub fn editor_view(
     let b_bold = b_bold.clone();
     let b_italic = b_italic.clone();
     let b_strike = b_strike.clone();
+    let b_highlight = b_highlight.clone();
     let b_code = b_code.clone();
     let b_link_btn = b_link_btn.clone();
     let b_list = b_list.clone();
@@ -1106,6 +1109,7 @@ pub fn editor_view(
       let b_bold = b_bold.clone();
       let b_italic = b_italic.clone();
       let b_strike = b_strike.clone();
+      let b_highlight = b_highlight.clone();
       let b_code = b_code.clone();
       let b_link_btn = b_link_btn.clone();
       let b_list = b_list.clone();
@@ -1190,11 +1194,19 @@ pub fn editor_view(
         ))
         .child(toolbar_btn_active(
           "ed-strike",
-          "删除线",
+          "删除线 (Ctrl+Shift+S)",
           dark_mode,
           computed(move || active_marks.get().iter().any(|m| m == "strike")),
           move || b_strike.toggle_mark("strike"),
           mica_icons::strikethrough_icon,
+        ))
+        .child(toolbar_btn_active(
+          "ed-highlight",
+          "高亮 (Ctrl+Shift+H)",
+          dark_mode,
+          computed(move || active_marks.get().iter().any(|m| m == "highlight")),
+          move || b_highlight.toggle_mark("highlight"),
+          mica_icons::highlight_icon,
         ))
         .child(toolbar_btn_active(
           "ed-code",
@@ -3559,6 +3571,7 @@ fn bubble_menu_view(
     let b_bold = bridge.clone();
     let b_italic = bridge.clone();
     let b_strike = bridge.clone();
+    let b_highlight = bridge.clone();
     let b_code = bridge.clone();
     let b_link = bridge.clone();
     let b_h1 = bridge.clone();
@@ -3606,6 +3619,14 @@ fn bubble_menu_view(
         computed(move || active_marks.get().iter().any(|m| m == "strike")),
         move || b_strike.toggle_mark("strike"),
         mica_icons::strikethrough_icon,
+      ))
+      .child(bubble_btn(
+        "bubble-highlight",
+        "高亮",
+        dark_mode,
+        computed(move || active_marks.get().iter().any(|m| m == "highlight")),
+        move || b_highlight.toggle_mark("highlight"),
+        mica_icons::highlight_icon,
       ))
       .child(bubble_btn(
         "bubble-code",

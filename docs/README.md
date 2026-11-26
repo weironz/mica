@@ -91,6 +91,7 @@
 | [mermaid.md](features/mermaid.md) | Mermaid 图表渲染（纯 Rust `merman` 引擎、三端链路、主题/CSS 内联与门禁） |
 | [whiteboard.md](features/whiteboard.md) | 无限画板与思维导图架构 RFC（方案 C：Rust `mica-board`、CRDT Schema、WS 双通道、Markdown/SVG 导出与探针结论） |
 | [usage-statistics.md](features/usage-statistics.md) | 使用统计与 Prometheus 可观测性设计（Issue #191），附交互原型 [usage-statistics-demo.html](features/usage-statistics-demo.html) |
+| [inline-highlight-and-color-policy.md](features/inline-highlight-and-color-policy.md) | 行内高亮（`==高亮==` / `<mark>`）与颜色策略调研（为什么不做 Notion 式任意字体/背景色调色盘及三层实现） |
 | [design-adoption.md](features/design-adoption.md) | 设计稿(`design/` 01–19)采纳记录 |
 
 ## plans — 规划与路线图

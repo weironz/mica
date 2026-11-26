@@ -461,6 +461,7 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       "bold" => format!("<strong>{body}</strong>"),
       "italic" => format!("<em>{body}</em>"),
       "strike" => format!("<del>{body}</del>"),
+      "highlight" => format!("<mark>{body}</mark>"),
       "link" => match &m.title {
         Some(t) => format!(
           "<a href=\"{}\" title=\"{}\">{body}</a>",

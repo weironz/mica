@@ -1528,6 +1528,64 @@ pub(crate) fn parse_inline_memo(
       i += n;
       continue;
     }
+    // Highlight: ==...== (Mica / Obsidian / Typora / Bear dialect extension).
+    // Only an exact run of two `=` opens/closes, with non-whitespace inner
+    // edges so prose comparisons like `a == b` and `===` stay literal.
+    if chars[i] == '=' {
+      let mut n = 0;
+      while i + n < chars.len() && chars[i + n] == '=' {
+        n += 1;
+      }
+      if n == 2 && chars.get(i + 2).is_some_and(|c| !c.is_whitespace()) {
+        let mut j = i + 2;
+        let mut close = None;
+        while j < chars.len() {
+          if chars[j] == '`'
+            && let Some(after) = scans.code_span_close(&chars, j)
+          {
+            j = after;
+            continue;
+          }
+          if chars[j] == '\\' && j + 1 < chars.len() {
+            j += 2;
+            continue;
+          }
+          if chars[j] == '=' {
+            let mut m = 0;
+            while j + m < chars.len() && chars[j + m] == '=' {
+              m += 1;
+            }
+            if m == 2 && j > i + 2 && !chars[j - 1].is_whitespace() {
+              close = Some(j);
+              break;
+            }
+            j += m;
+          } else {
+            j += 1;
+          }
+        }
+        if let Some(end) = close {
+          let inner: String = chars[i + 2..end].iter().collect();
+          push_inner(
+            &inner,
+            "highlight",
+            None,
+            defs,
+            &mut out,
+            &mut out_len,
+            &mut marks,
+          );
+          i = end + 2;
+          continue;
+        }
+      }
+      for _ in 0..n {
+        out.push('=');
+      }
+      out_len += n;
+      i += n;
+      continue;
+    }
     // Inline code: an N-backtick run closes only on a run of exactly N;
     // line endings become spaces; one leading+trailing space strips when
     // both exist and the content isn't all spaces. No escapes inside.
@@ -1996,7 +2054,14 @@ pub(crate) fn escape_inline(text: &str) -> String {
       out.push_str("&amp;");
       continue;
     }
-    if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<' | '$') {
+    if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<' | '$')
+      || (c == '='
+        && chars.get(i + 1) == Some(&'=')
+        && (i == 0 || chars[i - 1] != '=')
+        && chars
+          .get(i + 2)
+          .is_some_and(|&next| next != '=' && !next.is_whitespace()))
+    {
       out.push('\\');
     }
     out.push(c);
@@ -2162,6 +2227,7 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
       "bold" => format!("**{body}**"),
       "italic" => format!("*{body}*"),
       "strike" => format!("~~{body}~~"),
+      "highlight" => format!("=={body}=="),
       "link" => {
         let href = m.href.as_deref().unwrap_or("");
         let plain = String::from_utf16_lossy(&units[s..e]);

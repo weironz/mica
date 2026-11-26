@@ -183,6 +183,14 @@ pub fn strikethrough_icon(color: &str) -> Svg {
   )
 }
 
+pub fn highlight_icon(color: &str) -> Svg {
+  stroked(
+    17.0,
+    color,
+    r##"<path d="M4 16H16M6.2 12.8L4.8 14.2L8.2 14.2L15.4 7.0L12.0 3.6L4.8 10.8L6.2 12.8Z"/><path d="M10.4 5.2L13.8 8.6"/>"##,
+  )
+}
+
 pub fn code_icon(color: &str) -> Svg {
   stroked(17.0, color, r##"<path d="M7.5 6.5L4 10L7.5 13.5M12.5 6.5L16 10L12.5 13.5"/>"##)
 }

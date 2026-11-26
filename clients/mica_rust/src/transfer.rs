@@ -221,6 +221,12 @@ pub fn wrap_standalone_html(title: &str, html_body: &str) -> String {
       padding: 0.15em 0.35em;
       border-radius: 4px;
     }}
+    mark {{
+      background: #FEF08A;
+      color: inherit;
+      padding: 0.05em 0.2em;
+      border-radius: 3px;
+    }}
     pre {{
       background: #F7F6F3;
       border: 1px solid #E9E9E7;

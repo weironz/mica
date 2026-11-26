@@ -191,7 +191,10 @@ pub fn unwrap_nested_fences(md: &str) -> String {
 pub fn single_line_paste_keeps_marks<'a>(mark_kinds: impl IntoIterator<Item = &'a str>) -> bool {
   let mut any = false;
   for kind in mark_kinds {
-    if !matches!(kind, "code" | "bold" | "strike" | "link" | "math") {
+    if !matches!(
+      kind,
+      "code" | "bold" | "strike" | "highlight" | "link" | "math"
+    ) {
       return false;
     }
     any = true;

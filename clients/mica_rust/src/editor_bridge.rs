@@ -1798,6 +1798,9 @@ fn compute_active_state(session: &EditorSession) -> (String, u64, Vec<String>) {
   if active.has("strike") {
     marks.push("strike".to_owned());
   }
+  if active.has("highlight") {
+    marks.push("highlight".to_owned());
+  }
   if active.has("code") {
     marks.push("code".to_owned());
   }

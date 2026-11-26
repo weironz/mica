@@ -15,7 +15,7 @@ pub struct EditorMark {
   pub start: u32,
   /// Exclusive UTF-16 end offset.
   pub end: u32,
-  /// Mark type (`bold`, `italic`, `code`, `strike`, `link`, `math`, `footnote`, `html`, `image`).
+  /// Mark type (`bold`, `italic`, `code`, `strike`, `highlight`, `link`, `math`, `footnote`, `html`, `image`).
   #[serde(rename = "type")]
   pub kind: String,
   /// Optional destination for `link` / `image` / `footnote`.

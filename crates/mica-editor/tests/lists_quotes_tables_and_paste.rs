@@ -481,6 +481,37 @@ fn input_rules_cover_all_heading_levels_reject_h7_and_support_inline_styles() {
     Some(InputRuleMatch::InlineMark { ref text, ref marks, .. })
       if text == "a em" && marks.iter().any(|m| m.kind == "italic")
   ));
+  assert!(matches!(
+    match_input_rule(&blk("a ==重点=="), 8),
+    Some(InputRuleMatch::InlineMark { ref text, ref marks, .. })
+      if text == "a 重点" && marks.iter().any(|m| m.kind == "highlight")
+  ));
+  // Prose comparisons `a == b ==` and triple equals `===x===` must NOT trigger highlight.
+  assert!(match_input_rule(&blk("a == b =="), 9).is_none());
+  assert!(match_input_rule(&blk("===x==="), 7).is_none());
+}
+
+#[test]
+fn highlight_toggle_paste_and_markdown_roundtrip_work_end_to_end() {
+  let mut s = EditorSession::from_markdown("这是重点内容");
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::from_positions(
+      mica_editor::DocPosition::new(0, 2),
+      mica_editor::DocPosition::new(0, 4),
+    )),
+  });
+  s.dispatch(EditorCommand::ToggleMark {
+    kind: "highlight".into(),
+    href: None,
+  });
+  assert!(s.active_marks().has("highlight"));
+  assert_eq!(s.export_markdown(&Default::default()), "这是==重点==内容");
+
+  // Single-line plain-text paste of `==重点==` keeps the highlight mark.
+  let pasted = mica_editor::paste::single_line_paste_inline("注意 ==核心==");
+  let (text, marks) = pasted.expect("highlight single-line paste should parse");
+  assert_eq!(text, "注意 核心");
+  assert!(marks.iter().any(|m| m.kind == "highlight"));
 }
 
 #[test]

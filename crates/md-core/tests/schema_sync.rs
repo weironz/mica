@@ -51,6 +51,7 @@ const EXTRA: &[&str] = &[
   "$$\nx^2\n$$\n",
   "---\ntags: [a]\n---\nbody\n",
   "a $x$ b\n",
+  "a ==marked== b\n",
   "<span>html</span>\n",
 ];
 

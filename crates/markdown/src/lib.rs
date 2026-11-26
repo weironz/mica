@@ -235,6 +235,7 @@ pub fn static_page_css(width_px: u32) -> String {
      code{{background:#f6f8fa;padding:.15em .35em;border-radius:4px;\
      font-family:'Cascadia Code','Consolas','Courier New',monospace;}}\n\
      pre code{{background:none;padding:0;}}\n\
+     mark{{background:#fef08a;color:inherit;padding:.05em .2em;border-radius:3px;}}\n\
      blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
      blockquote.markdown-alert{{padding:.4rem 1rem;color:inherit;border-left-width:4px;}}\n\
      .markdown-alert-title{{display:flex;align-items:center;font-weight:600;\
