@@ -129,6 +129,9 @@ impl RotatedSession {
   }
 
   fn apply_to(&self, conn: &mut CloudConnector) {
+    if self.access_token.trim().is_empty() {
+      conn.clear_access_token();
+    }
     conn.apply_rotated_session(
       self.access_token.clone(),
       self.refresh_token.clone(),
@@ -304,18 +307,46 @@ pub async fn refresh_session_single_flight(
       rot.apply_to(conn);
       Ok(rot.token_pair())
     }
-    RefreshAcquire::Leader(guard) => match conn.refresh_session().await {
-      Ok(()) => {
-        let rot = RotatedSession::from_connector(conn);
-        let pair = rot.token_pair();
-        guard.complete(Ok(rot));
-        Ok(pair)
+    RefreshAcquire::Leader(guard) => {
+      #[cfg(target_arch = "wasm32")]
+      let refresh_res = {
+        let before_ms = crate::web_runtime::web_last_refresh_ms();
+        let lock_name = format!("mica_auth_refresh:{}", canonicalize_cloud_url(conn.base_url()));
+        let mut conn_owned = conn.clone();
+        let locked = crate::web_runtime::with_cross_tab_lock(&lock_name, move || async move {
+          if crate::web_runtime::web_last_refresh_ms() > before_ms {
+            // A sibling browser tab rotated the shared HttpOnly session cookies
+            // while we waited for the lock. Drop our expired in-memory Bearer
+            // token so retries use the fresh HttpOnly cookie instead of replaying
+            // the spent refresh cookie.
+            conn_owned.clear_access_token();
+            return Ok(conn_owned);
+          }
+          conn_owned.refresh_session().await?;
+          crate::web_runtime::mark_web_refreshed_now();
+          Ok(conn_owned)
+        })
+        .await;
+        locked.map(|updated| {
+          *conn = updated;
+        })
+      };
+      #[cfg(not(target_arch = "wasm32"))]
+      let refresh_res = conn.refresh_session().await;
+
+      match refresh_res {
+        Ok(()) => {
+          let rot = RotatedSession::from_connector(conn);
+          let pair = rot.token_pair();
+          guard.complete(Ok(rot));
+          Ok(pair)
+        }
+        Err(err) => {
+          guard.complete(Err(err.clone()));
+          Err(err)
+        }
       }
-      Err(err) => {
-        guard.complete(Err(err.clone()));
-        Err(err)
-      }
-    },
+    }
   }
 }
 

@@ -8,7 +8,7 @@
 2. **异步网络响应必验归属**：登录、拉取树、同步文档或获取成员列表跨 `await` 返回时，必须核对当前活动 `origin`/账号/会话代际；切换世界后的在途旧响应一律丢弃。
 3. **桌面端无账号可离线使用，Web 端纯云端无本地工作区**：桌面端支持零注册、零联网的本地离线 SQLite Vault（默认无缝兼容旧版 Flutter `store.db` 路径并保留早期纯 Rust `vault.sqlite` 回退与 `MICA_DATA_DIR` 覆盖）；Web 端没有持久本地 SQLite 库，严禁启动或回退到假「本地工作区」，直接绑定当前 `window.location.origin` 作为纯云端客户端，未登录时展示不可关闭的全屏云端登录门禁；Web 鉴权走服务端 `HttpOnly` Cookie（`mica_token` + `mica_refresh`）与 `POST /api/auth/refresh` / `POST /api/auth/logout`，`window.localStorage` 仅保存非敏感 UI 偏好、严禁落盘任何 Token。
 4. **云端文档实时 CRDT 协同优先，禁止并发整篇覆盖**：已打开的云端文档默认建立 `/ws/workspaces/{ws}/documents/{doc}?v=1` WebSocket 连接并由 `crates/mica-sync` `SyncEngine` 驱动增量 yrs diff 同步（同时订阅 `/ws/workspaces/{ws}/views` 热刷新目录树）；WS 协同激活期间跳过 HTTP `PATCH /markdown`（`replace_all`），避免并发编辑互相覆盖。
-5. **单飞令牌轮换与绝不展示假空白页**：客户端所有云端 HTTP 401 刷新与 WebSocket 401 重连刷新必须经由按 `(server_url, refresh_token)` 归并的单飞（single-flight）协调器（含 RAII 取消唤醒与短时轮换结果复用缓存），避免并发请求重放同一旧 `refresh_token` 触发服务端重放检测并吊销整条登录族；一旦云端会话真正过期，主界面必须展示醒目的重新登录横幅，且未在本地缓存的云端页面必须展示「重新登录 / 重试」遮罩卡（严禁静默渲染成假空白文档）。
+5. **单飞令牌轮换、长期滑动会话与绝不展示假空白页**：Refresh Token 默认有效期 **365 天（滑动续期）**，活跃使用持续顺延；客户端所有云端 HTTP 401 刷新与 WebSocket 401 重连刷新必须经由按 `(server_url, refresh_token)` 归并的单飞（single-flight）协调器（含 RAII 取消唤醒与短时轮换结果复用缓存；Web 端额外叠加 `navigator.locks` 跨标签页锁 + `localStorage` 非敏感刷新时间戳，避免多标签页并发重放旧 Cookie），防止并发请求触发服务端重放检测吊销整条登录族；一旦云端会话真正过期，主界面必须展示醒目的重新登录横幅，且未在本地缓存的云端页面必须展示「重新登录 / 重试」遮罩卡（严禁静默渲染成假空白文档）。
 
 ---
 

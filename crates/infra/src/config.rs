@@ -242,15 +242,19 @@ impl AppConfig {
     // shorter access token shrinks the window in which a token that SHOULD be
     // dead (password changed, session revoked) still works, at no user-visible
     // cost. Override with ACCESS_TOKEN_TTL_SECONDS.
-    let access_token_ttl_seconds = env::var("ACCESS_TOKEN_TTL_SECONDS")
-      .ok()
-      .and_then(|value| value.parse::<i64>().ok())
-      .unwrap_or(60 * 60);
+    let access_token_ttl_seconds = parse_positive_ttl(
+      env::var("ACCESS_TOKEN_TTL_SECONDS").ok().as_deref(),
+      DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
+    );
 
-    let refresh_token_ttl_seconds = env::var("REFRESH_TOKEN_TTL_SECONDS")
-      .ok()
-      .and_then(|value| value.parse::<i64>().ok())
-      .unwrap_or(60 * 60 * 24 * 30);
+    // 365d sliding default (within browser 400d Cookie Max-Age ceiling): active
+    // sessions stay signed in indefinitely across both desktop and Web, while
+    // refresh tokens remain revocable on logout / password change / reuse.
+    // Override with REFRESH_TOKEN_TTL_SECONDS.
+    let refresh_token_ttl_seconds = parse_positive_ttl(
+      env::var("REFRESH_TOKEN_TTL_SECONDS").ok().as_deref(),
+      DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
+    );
 
     // Comma-separated browser origins allowed cross-origin. Empty => deny all
     // cross-origin in production (see the `cors_allowed_origins` field doc).
@@ -801,5 +805,44 @@ mod quota_parse {
       0,
       "garbage is logged, not guessed at"
     );
+  }
+
+  #[test]
+  fn token_ttl_defaults_and_rejects_empty_zero_or_garbage() {
+    use super::{
+      DEFAULT_ACCESS_TOKEN_TTL_SECONDS, DEFAULT_REFRESH_TOKEN_TTL_SECONDS, parse_positive_ttl,
+    };
+    assert_eq!(
+      parse_positive_ttl(None, DEFAULT_REFRESH_TOKEN_TTL_SECONDS),
+      60 * 60 * 24 * 365
+    );
+    assert_eq!(
+      parse_positive_ttl(None, DEFAULT_ACCESS_TOKEN_TTL_SECONDS),
+      60 * 60
+    );
+    for bad in ["", "   ", "0", "-60", "abc", "365d"] {
+      assert_eq!(
+        parse_positive_ttl(Some(bad), DEFAULT_REFRESH_TOKEN_TTL_SECONDS),
+        DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
+        "invalid TTL {bad:?} must fall back to default"
+      );
+    }
+    assert_eq!(
+      parse_positive_ttl(Some(" 86400 "), DEFAULT_REFRESH_TOKEN_TTL_SECONDS),
+      86400
+    );
+  }
+}
+
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS: i64 = 60 * 60;
+const DEFAULT_REFRESH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 365;
+
+fn parse_positive_ttl(raw: Option<&str>, default_secs: i64) -> i64 {
+  match raw.map(str::trim) {
+    None | Some("") => default_secs,
+    Some(value) => match value.parse::<i64>() {
+      Ok(secs) if secs > 0 => secs,
+      _ => default_secs,
+    },
   }
 }

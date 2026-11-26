@@ -63,6 +63,117 @@ pub fn local_storage_set(key: &str, value: &str) -> Result<(), String> {
   }
 }
 
+const WEB_LAST_REFRESH_KEY: &str = "mica_auth_refreshed_at";
+
+/// Non-secret epoch-millisecond timestamp recorded whenever any browser tab on
+/// this origin completes `POST /api/auth/refresh`, letting sibling tabs skip
+/// redundant rotations after acquiring the cross-tab Web Lock.
+pub fn web_last_refresh_ms() -> u64 {
+  local_storage_get(WEB_LAST_REFRESH_KEY)
+    .and_then(|raw| raw.trim().parse::<u64>().ok())
+    .unwrap_or(0)
+}
+
+/// Record the current epoch-millisecond timestamp after a successful Web
+/// `POST /api/auth/refresh`. Never writes any token or secret.
+pub fn mark_web_refreshed_now() {
+  #[cfg(target_arch = "wasm32")]
+  {
+    let now = js_sys::Date::now().max(0.0) as u64;
+    let _ = local_storage_set(WEB_LAST_REFRESH_KEY, &now.to_string());
+  }
+}
+
+/// Serialize an async operation across all browser tabs on the same origin via
+/// the Web Locks API (`navigator.locks.request`), falling back to running `f`
+/// directly on desktop or in browsers without `navigator.locks`.
+pub async fn with_cross_tab_lock<T, F, Fut>(lock_name: &str, f: F) -> Result<T, String>
+where
+  T: 'static,
+  F: FnOnce() -> Fut + 'static,
+  Fut: std::future::Future<Output = Result<T, String>> + 'static,
+{
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    let _ = lock_name;
+    f().await
+  }
+
+  #[cfg(target_arch = "wasm32")]
+  {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use js_sys::{Function, Promise, Reflect};
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::{JsFuture, future_to_promise};
+
+    let locks_req = web_sys::window().and_then(|win| {
+      let nav = Reflect::get(&win, &JsValue::from_str("navigator")).ok()?;
+      let locks = Reflect::get(&nav, &JsValue::from_str("locks")).ok()?;
+      if locks.is_undefined() || locks.is_null() {
+        return None;
+      }
+      let req = Reflect::get(&locks, &JsValue::from_str("request"))
+        .ok()?
+        .dyn_into::<Function>()
+        .ok()?;
+      Some((locks, req))
+    });
+
+    let Some((locks, req_fn)) = locks_req else {
+      return f().await;
+    };
+
+    let result_slot: Rc<RefCell<Option<Result<T, String>>>> = Rc::new(RefCell::new(None));
+    let slot_cb = Rc::clone(&result_slot);
+    let f_cell = Rc::new(RefCell::new(Some(f)));
+    let f_cb = Rc::clone(&f_cell);
+
+    let cb = Closure::once(move |_lock: JsValue| -> Promise {
+      let op = f_cb.borrow_mut().take();
+      future_to_promise(async move {
+        if let Some(run) = op {
+          let res = run().await;
+          *slot_cb.borrow_mut() = Some(res);
+        }
+        Ok(JsValue::UNDEFINED)
+      })
+    });
+
+    let promise_val = match req_fn.call2(
+      &locks,
+      &JsValue::from_str(lock_name),
+      cb.as_ref().unchecked_ref(),
+    ) {
+      Ok(val) => val,
+      Err(_) => {
+        let run = f_cell.borrow_mut().take();
+        if let Some(run) = run {
+          return run().await;
+        }
+        return Err("cross-tab lock failed before callback".to_string());
+      }
+    };
+
+    let Ok(promise) = promise_val.dyn_into::<Promise>() else {
+      let run = f_cell.borrow_mut().take();
+      if let Some(run) = run {
+        return run().await;
+      }
+      return Err("navigator.locks.request did not return a Promise".to_string());
+    };
+
+    let _ = JsFuture::from(promise).await;
+    drop(cb);
+    result_slot
+      .borrow_mut()
+      .take()
+      .unwrap_or_else(|| Err("cross-tab lock exited without producing a result".to_string()))
+  }
+}
+
 /// Execute an asynchronous same-origin HTTP request via the browser Fetch API
 /// (`window.fetch`) with an `AbortController` timeout and `credentials: "same-origin"`
 /// so `HttpOnly` session cookies are sent and updated without ever blocking the

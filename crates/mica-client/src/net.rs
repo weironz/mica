@@ -369,6 +369,14 @@ impl CloudConnector {
       .filter(|t| !t.is_empty())
   }
 
+  /// Drop a stale in-memory access token without clearing the session itself.
+  /// Used on Web (`wasm32`) when a sibling browser tab already rotated the
+  /// shared `HttpOnly` session cookies so subsequent requests rely on the fresh
+  /// cookie instead of sending an expired `Authorization: Bearer` header.
+  pub fn clear_access_token(&mut self) {
+    self.config.access_token = None;
+  }
+
   /// Active refresh token, if one was issued at login/refresh.
   pub fn refresh_token(&self) -> Option<&str> {
     self

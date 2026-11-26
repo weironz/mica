@@ -39,7 +39,7 @@ token**. Two kinds of credential because they answer opposite needs:
 | | access token | refresh token |
 |---|---|---|
 | form | JWT, stateless | opaque random, a row in `refresh_tokens` |
-| lifetime | `ACCESS_TOKEN_TTL_SECONDS`, default **24h** | `REFRESH_TOKEN_TTL_SECONDS`, default **30d** |
+| lifetime | `ACCESS_TOKEN_TTL_SECONDS`, default **1h** | `REFRESH_TOKEN_TTL_SECONDS`, default **365d** (sliding) |
 | revocable | **no** — nothing is stored to revoke | yes |
 | used for | every API/WS call | `POST /api/auth/refresh`, nothing else |
 
