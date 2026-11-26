@@ -1304,3 +1304,146 @@ fn regression_share_dialog_public_toggle_survives_busy_rebuild_and_reveals_url()
     .wait_for_gone("id:share-url-box", std::time::Duration::from_millis(500))
     .unwrap();
 }
+
+#[nsh_core::prelude::component]
+fn MissingTextLayoutSelectionHarness() -> impl nsh_core::prelude::IntoElement {
+  use std::{cell::RefCell, rc::Rc};
+  use nsh_core::prelude::*;
+
+  let md = "\
+cloud镜像选择：\n\n\
+- jammy-server-cloudimg-amd64.img\n\
+- jammy-server-cloudimg-amd64-disk-kvm.img\n\n\
+cloud-disk image和cloud image区别\n\n\
+- cloudimg-amd64-disk-kvm.img 用于虚拟环境的精简内核`linux-image-kvm 5.8.0.1018.20`，它可能会丢失一些模块/配置，但更轻一些\n\
+- cloudimg-amd64.img 在任何地方都可以使用的通用内核`linux-image-5.8.0-43-generic`。您可以使用这些映像来部署一个新的裸机系统，或者在 `linux-kvm` 代表您不想要的限制的任何其他地方。\n\n\
+cloudinit文件\n";
+  let bridge = mica_rust::editor_bridge::MicaDocumentBridge::from_markdown(md);
+  let layouts = Rc::new(RefCell::new(mica_rust::text_geometry::VisibleLayoutCache::default()));
+  let dark_mode = signal(false);
+  let page_width = signal(820.0_f32);
+  let env = mica_rust::block_views::BlockRenderEnv {
+    bridge: bridge.clone(),
+    dark_mode,
+    page_width,
+    layouts: layouts.clone(),
+    drag_anchor: signal(None),
+    last_click: signal((0, 0, 0.0, 0)),
+    lightbox: signal(None),
+    image_ctx: mica_rust::image_blocks::ImageContext::offline_default(),
+    focused_code_block: signal(None),
+    focused_table_cell: signal(None),
+    table_selection: signal(None),
+    table_drag_anchor: signal(None),
+    marquee_selected: signal(None),
+    body_blank_marquee_ready: signal(false),
+    marquee_origin_page: signal(None),
+    editor_focused: signal(true),
+    caret_blink_on: signal(true),
+    sink_clear_rev: signal(0),
+    inline_math_edit: signal(None),
+    inner_drag_hit: Rc::new(std::cell::Cell::new(None)),
+    last_pointer_is_touch: signal(false),
+    touch_selection_active: signal(false),
+    touch_tap_tracker: Rc::new(RefCell::new(mica_rust::touch_selection::TouchTapTracker::default())),
+  };
+  let structure_rev = bridge.structure_rev_signal();
+  let br_count = bridge.clone();
+  let br_keys = bridge.clone();
+  let br_sel = bridge.clone();
+  let layouts_wipe = layouts.clone();
+
+  view()
+    .flex_1()
+    .w_full()
+    .h_full()
+    .child(
+      nsh_base::button()
+        .test_id("wipe-lines-and-select-all")
+        .on_press(move || {
+          // Simulate blocks whose `EventKind::TextLayout` has not delivered
+          // (empty `lines`, while `text_frame` is populated by `on_layout`).
+          for entry in layouts_wipe.borrow_mut().blocks.values_mut() {
+            entry.lines.clear();
+          }
+          let last = br_sel.block_len().saturating_sub(1);
+          let last_len = br_sel
+            .block_at(last)
+            .map(|b| mica_editor::utf16::utf16_len(&b.text))
+            .unwrap_or(0);
+          br_sel.set_selection(mica_editor::DocSelection::from_positions(
+            mica_editor::DocPosition::new(0, 0),
+            mica_editor::DocPosition::new(last, last_len),
+          ));
+        })
+        .child(text("select")),
+    )
+    .child(
+      virtual_list(
+        move || {
+          structure_rev.get();
+          br_count.block_len()
+        },
+        move |at| mica_rust::block_views::render_virtual_block_row(env.clone(), at),
+      )
+      .test_id("selection-fallback-vlist")
+      .keys(move || {
+        structure_rev.get();
+        br_keys.block_ids()
+      })
+      .estimated_item_size(px(36.0))
+      .flex_1()
+      .w_full()
+      .h_full(),
+    )
+}
+
+#[test]
+fn regression_cross_block_selection_never_collapses_to_8px_stub_when_text_layout_missing() {
+  let mut config = EngineConfig::new(Root::of::<MissingTextLayoutSelectionHarness>());
+  config.viewport = size(px(1024.0), px(720.0));
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("cloudinit文件").unwrap();
+  app.press("id:wipe-lines-and-select-all").unwrap();
+
+  // Wait for selection highlight nodes to mount; verify ZERO 8px fallback stubs
+  // exist and all 7 prose blocks received full-width synthesized selection rects.
+  let has_wide_rects = || {
+    app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .filter(|n| {
+        n.bounds.size.width.0 > 60.0
+          && n.bounds.size.height.0 >= 14.0
+          && n.bounds.size.height.0 <= 28.0
+          && n.test_id.is_none()
+      })
+      .count()
+  };
+  let start = std::time::Instant::now();
+  while has_wide_rects() < 7 && start.elapsed() < std::time::Duration::from_secs(2) {
+    std::thread::sleep(std::time::Duration::from_millis(20));
+  }
+  let stub_8px: Vec<_> = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .filter(|n| {
+      (n.bounds.size.width.0 - 8.0).abs() < 0.5
+        && n.bounds.size.height.0 >= 14.0
+        && n.bounds.size.height.0 <= 28.0
+        && n.test_id.is_none()
+    })
+    .collect();
+  assert!(
+    stub_8px.is_empty(),
+    "selection must never degrade to 8px first-character stubs when TextLayout is missing: {stub_8px:?}"
+  );
+  assert!(
+    has_wide_rects() >= 7,
+    "expected >=7 full-width selection rects across all 7 blocks, got {}",
+    has_wide_rects()
+  );
+}

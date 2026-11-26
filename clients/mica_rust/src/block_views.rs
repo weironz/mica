@@ -45,7 +45,7 @@ use crate::{
   mica_theme::palette,
   text_geometry::{
     VisibleLayoutCache, block_typography, caret_rect_for_offset, offset_at_point,
-    selection_rects_for_range,
+    resolve_lines_for_block, selection_rects_for_range,
   },
 };
 
@@ -369,32 +369,48 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         let block_u16_len = utf16_len(&block.text);
         let off = {
           let cache = layouts_drag.borrow();
-          if let Some(info) = cache.blocks.get(&block.id) {
-            let (text_left, text_top) = row_text_origin_offset(
-              &block,
-              content_left,
-              (info.text_frame.origin.x.0, info.text_frame.origin.y.0),
-            );
-            let local_x = e.position.x.0 - text_left;
-            let local_y = (e.position.y.0 - text_top).max(0.0);
-            if e.position.x.0 <= text_left {
-              offset_at_point(&info.lines, 0.0, local_y, &info.font, &|f, t| drag_measure(f, t))
-                .min(block_u16_len)
-            } else if e.position.x.0 >= content_right {
-              offset_at_point(&info.lines, f32::MAX * 0.25, local_y, &info.font, &|f, t| {
-                drag_measure(f, t)
-              })
+          let info_opt = cache.blocks.get(&block.id);
+          let text_frame_origin = info_opt
+            .map(|i| (i.text_frame.origin.x.0, i.text_frame.origin.y.0))
+            .unwrap_or((0.0, 0.0));
+          let (text_left, text_top) =
+            row_text_origin_offset(&block, content_left, text_frame_origin);
+          let fallback_w = (content_right - text_left).max(160.0);
+          let (_, fallback_lh, _, fallback_font) = block_typography(
+            &block.kind,
+            block.data.get("level").and_then(Value::as_u64).unwrap_or(1),
+            16.0,
+            "",
+          );
+          let eff_font = info_opt
+            .map(|i| i.font.as_str())
+            .filter(|f| !f.is_empty())
+            .unwrap_or(fallback_font.as_str());
+          let eff_lh = info_opt
+            .map(|i| i.line_height)
+            .filter(|&h| h > 1.0)
+            .unwrap_or(fallback_lh);
+          let lines = resolve_lines_for_block(
+            info_opt,
+            &block.text,
+            fallback_w,
+            eff_font,
+            eff_lh,
+            &|f, t| drag_measure(f, t),
+          );
+          let local_x = e.position.x.0 - text_left;
+          let local_y = (e.position.y.0 - text_top).max(0.0);
+          if e.position.x.0 <= text_left {
+            offset_at_point(&lines, 0.0, local_y, eff_font, &|f, t| drag_measure(f, t))
               .min(block_u16_len)
-            } else {
-              offset_at_point(&info.lines, local_x, local_y, &info.font, &|f, t| {
-                drag_measure(f, t)
-              })
-              .min(block_u16_len)
-            }
-          } else if idx < anchor.node {
-            0
+          } else if e.position.x.0 >= content_right {
+            offset_at_point(&lines, f32::MAX * 0.25, local_y, eff_font, &|f, t| {
+              drag_measure(f, t)
+            })
+            .min(block_u16_len)
           } else {
-            block_u16_len
+            offset_at_point(&lines, local_x, local_y, eff_font, &|f, t| drag_measure(f, t))
+              .min(block_u16_len)
           }
         };
         DocPosition::new(idx, off)
@@ -529,7 +545,11 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
   let marks = block_marks(&block);
   let text_str = block.text.clone();
   let text_ref = element_ref();
-  layouts.borrow_mut().register_text_ref(&block_id, text_ref);
+  {
+    let mut cache = layouts.borrow_mut();
+    cache.register_text_ref(&block_id, text_ref);
+    cache.update_typography(&block_id, &css_font, line_h);
+  }
 
   // Text container with exact `EventKind::TextLayout` + scoped selection/caret overlay
   let text_box = {
@@ -596,19 +616,34 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     let measure_lp = measure.clone();
     let measure_move = measure;
 
+    let hit_page_w = env.page_width;
+    let sel_text = text_str.clone();
+    let sel_page_w = env.page_width;
+    let text_move = text_str.clone();
     let hit_offset = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
                            bid: &str,
+                           block_text: &str,
                            font: &str,
                            meas: &TextMeasureFn,
                            lx: f32,
                            ly: f32|
           -> u32 {
       let cache = layouts_ref.borrow();
-      if let Some(info) = cache.blocks.get(bid) {
-        offset_at_point(&info.lines, lx, ly, font, &|f, t| meas(f, t))
+      let eff = hit_page_w.get_untracked();
+      let fallback_w = if crate::page_width::is_full_width(eff) {
+        820.0
       } else {
-        0
-      }
+        (eff - 48.0).max(200.0)
+      };
+      let lines = resolve_lines_for_block(
+        cache.blocks.get(bid),
+        block_text,
+        fallback_w,
+        font,
+        line_h,
+        &|f, t| meas(f, t),
+      );
+      offset_at_point(&lines, lx, ly, font, &|f, t| meas(f, t))
     };
 
     view()
@@ -619,7 +654,9 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
       .relative()
       .cursor(Cursor::Text)
       .on_layout(move |b: &Bounds<Points>| {
-        layouts_f.borrow_mut().update_text_frame(&bid_f, *b);
+        if layouts_f.borrow_mut().update_text_frame(&bid_f, *b) {
+          layout_rev.update(|v| *v = v.wrapping_add(1));
+        }
       })
       .on_press_down(move |e: &PressEvent| {
         focused_code.set(None);
@@ -635,7 +672,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         blank_marquee_ready.set(false);
         marquee_origin_page.set(None);
 
-        let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
+        let off = hit_offset(&layouts_click, &bid_click, &text_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
         let is_touch = last_ptr_touch_down.get_untracked();
         let click_count = if is_touch {
           tap_tracker_down.borrow_mut().bump(
@@ -701,7 +738,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         marquee_origin_lp.set(None);
         drag_anchor_lp.set(None);
 
-        let off = hit_offset(&layouts_lp, &bid_lp, &font_lp, &measure_lp, e.position.x.0, e.position.y.0);
+        let off = hit_offset(&layouts_lp, &bid_lp, &text_lp, &font_lp, &measure_lp, e.position.x.0, e.position.y.0);
         let idx = live_index(at);
         let (ws, we) = crate::touch_selection::touch_word_bounds(&text_lp, off);
         if we > ws {
@@ -719,7 +756,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         };
         inner_drag_hit_m.set(Some((e.page_position.x.0, e.page_position.y.0)));
         let idx = live_index(at);
-        let off = hit_offset(&layouts_move, &bid_move, &font_move, &measure_move, e.position.x.0, e.position.y.0);
+        let off = hit_offset(&layouts_move, &bid_move, &text_move, &font_move, &measure_move, e.position.x.0, e.position.y.0);
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
         if br_move.selection().as_ref() != Some(&next) {
           br_move.set_selection(next);
@@ -782,11 +819,21 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
           };
           let p = palette(dark);
           let cache = layouts_sel.borrow();
-          let lines = cache
-            .blocks
-            .get(&bid_sel)
-            .map(|i| i.lines.as_slice())
-            .unwrap_or(&[]);
+          let eff = sel_page_w.get_untracked();
+          let fallback_w = if crate::page_width::is_full_width(eff) {
+            820.0
+          } else {
+            (eff - 48.0).max(200.0)
+          };
+          let lines = resolve_lines_for_block(
+            cache.blocks.get(&bid_sel),
+            &sel_text,
+            fallback_w,
+            &font_sel,
+            line_h,
+            &|f, t| measure_sel(f, t),
+          );
+          let lines = lines.as_ref();
 
           let mut layer = view()
             .absolute()
@@ -1489,18 +1536,37 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
     let text_code_lp = source.clone();
     let br_code_lp = bridge.clone();
 
+    let code_sel_text = source.clone();
+    let text_code_move = source.clone();
+    let code_page_w = env.page_width;
+    let code_sel_page_w = env.page_width;
     let hit_code_offset = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
                                 bid: &str,
+                                block_text: &str,
                                 meas: &TextMeasureFn,
                                 lx: f32,
                                 ly: f32|
           -> u32 {
       let cache = layouts_ref.borrow();
-      if let Some(info) = cache.blocks.get(bid) {
-        offset_at_point(&info.lines, lx, ly, code_font, &|f, t| meas(f, t)).min(text_u16_len)
+      let eff = code_page_w.get_untracked();
+      let fallback_w = if wrap {
+        if crate::page_width::is_full_width(eff) {
+          820.0
+        } else {
+          (eff - 80.0).max(200.0)
+        }
       } else {
-        text_u16_len
-      }
+        f32::INFINITY
+      };
+      let lines = resolve_lines_for_block(
+        cache.blocks.get(bid),
+        block_text,
+        fallback_w,
+        code_font,
+        code_line_h,
+        &|f, t| meas(f, t),
+      );
+      offset_at_point(&lines, lx, ly, code_font, &|f, t| meas(f, t)).min(text_u16_len)
     };
 
     view()
@@ -1520,7 +1586,9 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           origin: point(b.origin.x, px(b.origin.y.0 + 8.0)),
           size: b.size,
         };
-        layouts_f.borrow_mut().update_text_frame(&bid_f, adjusted);
+        if layouts_f.borrow_mut().update_text_frame(&bid_f, adjusted) {
+          layout_rev.update(|v| *v = v.wrapping_add(1));
+        }
       })
       .on_press_down(move |e: &PressEvent| {
         focused_code.set(None);
@@ -1532,7 +1600,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         marquee_origin_page.set(None);
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
 
-        let off = hit_code_offset(&layouts_click, &bid_click, &measure_click, e.position.x.0, e.position.y.0);
+        let off = hit_code_offset(&layouts_click, &bid_click, &text_click, &measure_click, e.position.x.0, e.position.y.0);
         let is_touch = last_ptr_touch_code.get_untracked();
         let click_count = if is_touch {
           tap_tracker_code.borrow_mut().bump(
@@ -1576,7 +1644,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         blank_marquee_ready.set(false);
         marquee_origin_page.set(None);
         drag_anchor.set(None);
-        let off = hit_code_offset(&layouts_code_lp, &bid_code_lp, &measure_lp, e.position.x.0, e.position.y.0);
+        let off = hit_code_offset(&layouts_code_lp, &bid_code_lp, &text_code_lp, &measure_lp, e.position.x.0, e.position.y.0);
         let idx = live_index(at);
         let (ws, we) = crate::touch_selection::touch_word_bounds(&text_code_lp, off);
         if we > ws {
@@ -1605,7 +1673,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         };
         inner_drag_hit_code.set(Some((e.page_position.x.0, e.page_position.y.0)));
         let idx = live_index(at);
-        let off = hit_code_offset(&layouts_move, &bid_move, &measure_move, e.position.x.0, e.position.y.0);
+        let off = hit_code_offset(&layouts_move, &bid_move, &text_code_move, &measure_move, e.position.x.0, e.position.y.0);
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
         if br_move.selection().as_ref() != Some(&next) {
           br_move.set_selection(next);
@@ -1664,11 +1732,25 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           };
           let p = palette(dark);
           let cache = layouts_sel.borrow();
-          let lines = cache
-            .blocks
-            .get(&bid_sel)
-            .map(|i| i.lines.as_slice())
-            .unwrap_or(&[]);
+          let eff = code_sel_page_w.get_untracked();
+          let fallback_w = if wrap {
+            if crate::page_width::is_full_width(eff) {
+              820.0
+            } else {
+              (eff - 80.0).max(200.0)
+            }
+          } else {
+            f32::INFINITY
+          };
+          let lines = resolve_lines_for_block(
+            cache.blocks.get(&bid_sel),
+            &code_sel_text,
+            fallback_w,
+            code_font,
+            code_line_h,
+            &|f, t| measure_sel(f, t),
+          );
+          let lines = lines.as_ref();
 
           let mut layer = view()
             .absolute()

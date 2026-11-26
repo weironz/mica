@@ -126,7 +126,9 @@ where
     return Some(DocPosition::new(row.block_idx, off));
   }
 
-  let off = if let Some(info) = layouts.blocks.get(&row.block_id) {
+  let off = if let Some(info) = layouts.blocks.get(&row.block_id)
+    && !info.lines.is_empty()
+  {
     let local_x = target_x - row.text_left;
     let local_y = (target_y - row.text_top).max(0.0);
     if target_x <= row.text_left {

@@ -42,6 +42,7 @@
 - **反例 3（点击空白处选中不释放）**：页边距 `on_press_down` 只清了 marquee 没调 `bridge.clear_selection()`，导致蓝色文本高亮和顶部菜单一直挂在屏幕上。
 - **反例 4（`nsh-core` 中 `PressDown` 不向父级冒泡导致正文内无法起框选）**：虽然子元素（短行右侧留白、空行、底部空白区）设置了 `body_blank_marquee_ready = true`，但 `PressDown` 不会冒泡到外层 `mica-rich-editor`，导致外层的 `marquee_origin` 始终为 `None`、行矩形也未快照，只能在正文外边缘起框选。根治方案：子元素及行外层容器统一写入 `marquee_origin_page = Some(e.page_position)`，外层通过 `effect` 自动快照可见块矩形，并在 `on_mouse_move` 中用 `e.position - (e.page_position - origin_page)` 零误差还原局部起点。
 - **反例 5（Web 端跨块拖选选不全且被代码块挡住中断）**：① 内层 `text_box`/`code_text_box` 算完精确字符命中后，同帧冒泡到外层 `row.on_mouse_move` 又用错位的 `text_frame.origin` 覆盖选区；② 拖选进入代码块时 `on_mouse_enter` 动态弹出右上角 `code-block-toolbar` 截断 Web `elementFromPoint` 命中；③ Web 端无 `setPointerCapture`，移出 `root` 后 `pointermove`/`mouseUp` 断流。根治方案：内层命中打 `inner_drag_hit` 帧内去重戳、外层 `row_text_origin_offset` 精确计入缩进与代码块内边距并贴齐右边界行尾、拖选期间抑制代码块悬浮工具栏、并在 `mica-rich-editor` 通过被动 `on_touch` 接收 `window` 级鼠标移出与松手事件持续驱动自动滚屏与释放。
+- **反例 6（部分块缺失或过期 `EventKind::TextLayout` 时拖选仅高亮首字符 8px 且命中锁死偏移 0）**：当虚拟列表在内容裁剪/分帧创建/缩放复用下未为部分块送达有效 `TextLayout`（仅 `on_layout` 写入了 `text_frame` 而 `lines` 为空或零宽/截断）时，`selection_rects_for_range(&[])` 退化为 `(0, 0, 8px)` 仅覆盖首字符，且 `offset_at_point(&[])` 恒返回 `0` 导致跨块拖选选不全。根治方案：在 `text_geometry.rs` 引入 `lines_usable_for_text`、`synthesize_wrapped_lines` 与 `resolve_lines_for_block`，当原生 `TextLayout` 缺失、为空或未覆盖完整文本时，基于已测 `text_frame.size.width` 与平台 `text_measurer` 按需合成精确折行 `TextLine`，同时防止空 `TextLayout([])` 冲掉既有有效行缓存并在宽度就绪时刷新选区层。
 
 ---
 
@@ -63,3 +64,4 @@
 
 - **2026-11-23**：沉淀跨块全宽拖选、正文内空白区左键框选升级、点击外区即时释放选区等契约（对应 `72d84877` / `ff104b87`）。
 - **2026-11-23（根因修复）**：修复 `nsh-core` 中 `PressDown` 不向父级冒泡导致正文范围内空白区、行间隙、列表前缀槽与底部区域均无法启动框选的根因，改为通过 `marquee_origin_page` 统一透传起点并自动快照块矩形。
+- **2026-11-27（`TextLayout` 缺失/退化导致拖选仅选中首字符修复）**：新增 `text_geometry::resolve_lines_for_block` 与纯 Rust `synthesize_wrapped_lines` 折行兜底，接入正文/代码块/行外层拖选与选区定位全链路，并补充单元与无头 UI 回归测试。

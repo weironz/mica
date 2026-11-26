@@ -6,7 +6,7 @@
 //! click/drag UTF-16 hit-test offsets, and vertical arrow navigation without
 //! ever laying out off-screen blocks.
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use mica_editor::utf16::{utf16_len, utf16_slice};
 use nsh_core::{
@@ -43,6 +43,7 @@ pub struct VisibleLayoutCache {
 
 impl VisibleLayoutCache {
   /// Updates `lines` for `block_id`, returning `true` iff the line geometry changed.
+  /// Never lets a transient empty `TextLayout([])` overwrite already-valid lines.
   pub fn update_lines(
     &mut self,
     block_id: &str,
@@ -51,6 +52,9 @@ impl VisibleLayoutCache {
     line_height: f32,
   ) -> bool {
     let entry = self.blocks.entry(block_id.to_owned()).or_default();
+    if lines.is_empty() && !entry.lines.is_empty() {
+      return false;
+    }
     let changed = entry.lines != lines
       || entry.font != font
       || (entry.line_height - line_height).abs() > 0.1;
@@ -62,9 +66,26 @@ impl VisibleLayoutCache {
     changed
   }
 
-  pub fn update_text_frame(&mut self, block_id: &str, frame: Bounds<Points>) {
+  /// Stores block typography eagerly on mount so fallback line synthesis has
+  /// exact font & line-height metrics even before `EventKind::TextLayout` fires.
+  pub fn update_typography(&mut self, block_id: &str, font: &str, line_height: f32) {
     let entry = self.blocks.entry(block_id.to_owned()).or_default();
+    if entry.font != font {
+      entry.font = font.to_owned();
+    }
+    if (entry.line_height - line_height).abs() > 0.1 {
+      entry.line_height = line_height;
+    }
+  }
+
+  /// Updates `text_frame` for `block_id`, returning `true` when the measured
+  /// width changed meaningfully while `lines` is still empty (so fallback line
+  /// wrapping can re-render to the exact column width).
+  pub fn update_text_frame(&mut self, block_id: &str, frame: Bounds<Points>) -> bool {
+    let entry = self.blocks.entry(block_id.to_owned()).or_default();
+    let width_changed = (entry.text_frame.size.width.0 - frame.size.width.0).abs() > 0.5;
     entry.text_frame = frame;
+    width_changed && entry.lines.is_empty()
   }
 
   pub fn update_row_frame(&mut self, block_id: &str, frame: Bounds<Points>) {
@@ -135,6 +156,217 @@ pub fn block_typography(
   };
   let css = format!("{weight} {size}px {family}");
   (size, line_height, weight, css)
+}
+
+/// Returns `true` when cached `EventKind::TextLayout` lines cover `text` with
+/// usable non-zero geometry. Rejects empty, truncated/stale (e.g. pre-edit
+/// `"\u{200B}"`), or zero-width layouts so selection and drag hit-testing never
+/// degrade to an 8px first-character stub or offset `0`.
+pub fn lines_usable_for_text(lines: &[TextLine], text: &str) -> bool {
+  if lines.is_empty() {
+    return false;
+  }
+  let visible = text.trim_end_matches('\u{200B}');
+  let u16_len = utf16_len(visible);
+  if u16_len == 0 {
+    return true;
+  }
+  let max_end = lines.iter().map(|l| l.end).max().unwrap_or(0);
+  // Allow a trailing `\n` / `\r` difference of 1 UTF-16 unit (DirectWrite strips
+  // trailing newlineLength from `line.end`), but reject anything shorter.
+  let min_expected = visible
+    .trim_end_matches(['\n', '\r'])
+    .encode_utf16()
+    .count() as u32;
+  if max_end < min_expected {
+    return false;
+  }
+  let has_non_ws = visible.chars().any(|c| !c.is_whitespace());
+  !has_non_ws || lines.iter().any(|l| l.width.0 > 0.5)
+}
+
+/// Pure-Rust wrapped visual line synthesizer backed by the platform's exact
+/// `text_measurer`. Used ONLY as an on-demand fallback when `EventKind::TextLayout`
+/// has not populated usable lines for a visible block (e.g. under NSH content
+/// culling / pacing / recycling / window resize).
+pub fn synthesize_wrapped_lines<F>(
+  text: &str,
+  max_width: f32,
+  font: &str,
+  line_height: f32,
+  measure: &F,
+) -> Vec<TextLine>
+where
+  F: Fn(&str, &str) -> Points,
+{
+  let lh = line_height.max(18.0);
+  let make_line = |slice: &str, start: u32, end: u32, y: f32, width: f32| TextLine {
+    text: slice.to_owned(),
+    start,
+    end,
+    x: Points(0.0),
+    y: Points(y),
+    width: Points(width.max(0.0)),
+    height: Points(lh),
+    ascender: Points(lh * 0.78),
+    descender: Points(lh * 0.22),
+    cap_height: Points(lh * 0.60),
+    x_height: Points(lh * 0.44),
+  };
+
+  let clean = text.trim_end_matches('\u{200B}');
+  if clean.is_empty() {
+    return vec![make_line("", 0, 0, 0.0, 0.0)];
+  }
+
+  let wrap_w = if max_width.is_finite() && max_width > 24.0 {
+    Some(max_width)
+  } else {
+    None
+  };
+
+  let mut out = Vec::new();
+  let mut line_idx = 0usize;
+  let mut para_u16_start = 0u32;
+
+  for para in clean.split('\n') {
+    let para_u16_len = utf16_len(para);
+    if para.is_empty() {
+      out.push(make_line("", para_u16_start, para_u16_start, line_idx as f32 * lh, 0.0));
+      line_idx += 1;
+      para_u16_start = para_u16_start.saturating_add(1);
+      continue;
+    }
+
+    let full_w = measure(font, para).0.max(0.0);
+    let Some(limit) = wrap_w else {
+      out.push(make_line(
+        para,
+        para_u16_start,
+        para_u16_start + para_u16_len,
+        line_idx as f32 * lh,
+        full_w,
+      ));
+      line_idx += 1;
+      para_u16_start = para_u16_start.saturating_add(para_u16_len + 1);
+      continue;
+    };
+
+    if full_w <= limit + 0.5 {
+      out.push(make_line(
+        para,
+        para_u16_start,
+        para_u16_start + para_u16_len,
+        line_idx as f32 * lh,
+        full_w,
+      ));
+      line_idx += 1;
+      para_u16_start = para_u16_start.saturating_add(para_u16_len + 1);
+      continue;
+    }
+
+    // Collect char byte offsets and cumulative UTF-16 offsets for O(log N) wrap binary search.
+    let mut byte_offs: Vec<usize> = Vec::with_capacity(para.len() + 1);
+    let mut u16_offs: Vec<u32> = Vec::with_capacity(para.len() + 1);
+    let mut acc_u16 = 0u32;
+    for (bi, ch) in para.char_indices() {
+      byte_offs.push(bi);
+      u16_offs.push(acc_u16);
+      acc_u16 += ch.len_utf16() as u32;
+    }
+    byte_offs.push(para.len());
+    u16_offs.push(acc_u16);
+    let n_chars = byte_offs.len() - 1;
+
+    let mut cur = 0usize;
+    while cur < n_chars {
+      let rem = &para[byte_offs[cur]..];
+      let rem_w = measure(font, rem).0.max(0.0);
+      if rem_w <= limit + 0.5 {
+        let s_u16 = para_u16_start + u16_offs[cur];
+        let e_u16 = para_u16_start + u16_offs[n_chars];
+        out.push(make_line(rem, s_u16, e_u16, line_idx as f32 * lh, rem_w));
+        line_idx += 1;
+        break;
+      }
+
+      // Binary search for the longest prefix `cur..hi` fitting within `limit`.
+      let mut lo = cur + 1;
+      let mut hi = n_chars;
+      while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        let seg = &para[byte_offs[cur]..byte_offs[mid]];
+        if measure(font, seg).0 <= limit + 0.5 {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      let mut cut = lo.max(cur + 1);
+
+      // Prefer breaking after whitespace when breaking mid-ASCII-word so wrapped
+      // lines closely match DirectWrite / CoreText / CSS word wrapping.
+      if cut < n_chars {
+        let next_ch = para[byte_offs[cut]..].chars().next().unwrap_or(' ');
+        if next_ch.is_ascii_alphanumeric() {
+          let min_back = cur + ((cut - cur) * 2 / 5).max(1);
+          for k in (min_back..cut).rev() {
+            let prev_ch = para[byte_offs[k - 1]..byte_offs[k]].chars().next().unwrap_or('a');
+            if prev_ch.is_ascii_whitespace() || matches!(prev_ch, '-' | '/' | '，' | '。' | '、') {
+              cut = k;
+              break;
+            }
+          }
+        }
+      }
+
+      let seg = &para[byte_offs[cur]..byte_offs[cut]];
+      let seg_w = measure(font, seg).0.max(0.0);
+      let s_u16 = para_u16_start + u16_offs[cur];
+      let e_u16 = para_u16_start + u16_offs[cut];
+      out.push(make_line(seg, s_u16, e_u16, line_idx as f32 * lh, seg_w));
+      line_idx += 1;
+      cur = cut;
+    }
+
+    para_u16_start = para_u16_start.saturating_add(para_u16_len + 1);
+  }
+
+  out
+}
+
+/// Resolves visual `TextLine`s for a block: returns borrowed native
+/// `EventKind::TextLayout` lines in O(1) when usable, or synthesizes wrapped
+/// lines via `text_measurer` whenever `TextLayout` is missing, empty, or stale.
+pub fn resolve_lines_for_block<'a, F>(
+  cached: Option<&'a BlockTextLayout>,
+  text: &str,
+  fallback_width: f32,
+  font: &str,
+  line_height: f32,
+  measure: &F,
+) -> Cow<'a, [TextLine]>
+where
+  F: Fn(&str, &str) -> Points,
+{
+  if let Some(info) = cached
+    && lines_usable_for_text(&info.lines, text)
+  {
+    return Cow::Borrowed(info.lines.as_slice());
+  }
+  let eff_font = cached
+    .map(|i| i.font.as_str())
+    .filter(|f| !f.is_empty())
+    .unwrap_or(font);
+  let eff_lh = cached
+    .map(|i| i.line_height)
+    .filter(|&h| h > 1.0)
+    .unwrap_or(line_height);
+  let eff_w = cached
+    .map(|i| i.text_frame.size.width.0)
+    .filter(|&w| w > 24.0)
+    .unwrap_or(fallback_width);
+  Cow::Owned(synthesize_wrapped_lines(text, eff_w, eff_font, eff_lh, measure))
 }
 
 /// Measures the horizontal advance of UTF-16 prefix `prefix_u16` within `line`,
@@ -433,5 +665,68 @@ mod tests {
     // Caret at end of `"line1\nline2\n"` (u16=12) lands on trailing empty line 2 at x=0, y=44.
     let (cx, cy, _) = caret_rect_for_offset(&lines, 12, "", 22.0, &fixed_measure);
     assert_eq!((cx, cy), (0.0, 44.0));
+  }
+
+  #[test]
+  fn lines_usable_for_text_rejects_empty_truncated_and_zero_width_layouts() {
+    assert!(!lines_usable_for_text(&[], "cloud镜像选择："));
+    // Degenerate zero-width layout on non-empty text
+    let mut zero = mk_line("cloud镜像选择：", 0, 0.0);
+    zero.width = Points(0.0);
+    assert!(!lines_usable_for_text(&[zero], "cloud镜像选择："));
+    // Truncated stale layout (e.g. old "\u{200B}" entry)
+    let zwsp = mk_line("\u{200B}", 0, 0.0);
+    assert!(!lines_usable_for_text(&[zwsp], "cloud镜像选择："));
+    // Valid full layout passes
+    let good = mk_line("cloud镜像选择：", 0, 0.0);
+    assert!(lines_usable_for_text(&[good], "cloud镜像选择："));
+    // Empty paragraph accepts empty single-line layout
+    let empty_line = mk_line("", 0, 0.0);
+    assert!(lines_usable_for_text(&[empty_line], ""));
+  }
+
+  #[test]
+  fn synthesize_wrapped_lines_and_resolve_cover_full_selection_and_hit_test() {
+    let text = "cloudimg-amd64-disk-kvm.img 用于虚拟环境的精简内核，它可能会丢失一些模块/配置";
+    // Empty cache -> falls back cleanly to wrapped lines instead of 8px stub!
+    let empty_cache = BlockTextLayout {
+      lines: Vec::new(),
+      font: String::new(),
+      line_height: 26.0,
+      text_frame: Bounds {
+        origin: nsh_core::geometry::point(Points(0.0), Points(0.0)),
+        size: nsh_core::geometry::size(Points(320.0), Points(52.0)),
+      },
+      row_frame: Bounds::default(),
+    };
+    let resolved = resolve_lines_for_block(
+      Some(&empty_cache),
+      text,
+      320.0,
+      "",
+      26.0,
+      &fixed_measure,
+    );
+    assert!(
+      resolved.len() >= 2,
+      "long bullet text at 320px must wrap across >=2 lines, got {:?}",
+      resolved
+    );
+    let total_u16 = utf16_len(text);
+    let rects = selection_rects_for_range(&resolved, 0, total_u16, "", 26.0, &fixed_measure);
+    assert_eq!(rects.len(), resolved.len());
+    assert!(
+      rects[0].2 > 150.0,
+      "first line selection width must span the wrapped line (not 8px stub), got {:?}",
+      rects
+    );
+    assert!(
+      rects[1].2 > 40.0,
+      "second line selection width must also be highlighted, got {:?}",
+      rects
+    );
+    // Hit-testing middle of line 1 resolves a real mid-string offset, never stuck at 0!
+    let hit = offset_at_point(&resolved, 160.0, 12.0, "", &fixed_measure);
+    assert!(hit > 10 && hit < total_u16, "expected mid-line hit offset, got {hit}");
   }
 }

@@ -20,8 +20,8 @@ use crate::{
   editor_bridge::MicaDocumentBridge,
   mica_theme::palette,
   text_geometry::{
-    VisibleLayoutCache, caret_rect_for_offset, offset_at_point, selection_rects_for_range,
-    vertical_move_offset,
+    VisibleLayoutCache, caret_rect_for_offset, offset_at_point, resolve_lines_for_block,
+    selection_rects_for_range, vertical_move_offset,
   },
 };
 
@@ -43,8 +43,17 @@ pub fn schedule_ime_sink_pos_update(
     let tref = cache.text_refs.get(&bid).copied();
     let rref = cache.row_refs.get(&bid).map(|(_, r)| *r);
     let measure = text_measurer();
+    let block_text = bridge.block_at(pos.node).map(|b| b.text).unwrap_or_default();
     let caret = cache.blocks.get(&bid).map(|info| {
-      caret_rect_for_offset(&info.lines, pos.offset, &info.font, info.line_height, &measure)
+      let lines = resolve_lines_for_block(
+        Some(info),
+        &block_text,
+        760.0,
+        &info.font,
+        info.line_height.max(24.0),
+        &measure,
+      );
+      caret_rect_for_offset(&lines, pos.offset, &info.font, info.line_height, &measure)
     });
     (tref, rref, caret)
   };
@@ -101,8 +110,17 @@ pub fn schedule_slash_anchor_update(
     let tref = cache.text_refs.get(&bid).copied();
     let rref = cache.row_refs.get(&bid).map(|(_, r)| *r);
     let measure = text_measurer();
+    let block_text = bridge.block_at(pos.node).map(|b| b.text).unwrap_or_default();
     let caret = cache.blocks.get(&bid).map(|info| {
-      caret_rect_for_offset(&info.lines, pos.offset, &info.font, info.line_height, &measure)
+      let lines = resolve_lines_for_block(
+        Some(info),
+        &block_text,
+        760.0,
+        &info.font,
+        info.line_height.max(24.0),
+        &measure,
+      );
+      caret_rect_for_offset(&lines, pos.offset, &info.font, info.line_height, &measure)
     });
     (tref, rref, caret)
   };
@@ -170,17 +188,31 @@ pub fn schedule_bubble_anchor_update(
   };
 
   let local_rect_opt = {
-    let b_len = bridge
+    let block_text = bridge
       .block_at(target_idx)
-      .map(|b| utf16_len(&b.text))
-      .unwrap_or(0);
+      .map(|b| b.text)
+      .unwrap_or_default();
+    let b_len = utf16_len(&block_text);
     let s_u16 = if target_idx == start_p.node { start_p.offset } else { 0 };
     let e_u16 = if target_idx == end_p.node { end_p.offset } else { b_len.max(1) };
     let cache = layouts.borrow();
     let measure = text_measurer();
     cache.blocks.get(&bid).and_then(|info| {
+      let fallback_w = if crate::page_width::is_full_width(page_width) {
+        820.0
+      } else {
+        (page_width - 48.0).max(200.0)
+      };
+      let lines = resolve_lines_for_block(
+        Some(info),
+        &block_text,
+        fallback_w,
+        &info.font,
+        info.line_height.max(24.0),
+        &measure,
+      );
       let rects = selection_rects_for_range(
-        &info.lines,
+        &lines,
         s_u16,
         e_u16,
         &info.font,
@@ -266,10 +298,8 @@ pub fn schedule_touch_handles_update(
     let cache = layouts.borrow();
     let row_ref = cache.row_refs.get(&bid).map(|(_, r)| *r);
     let text_ref = cache.text_refs.get(&bid).copied();
-    let b_len = bridge
-      .block_at(pos.node)
-      .map(|b| utf16_len(&b.text))
-      .unwrap_or(0);
+    let block_text = bridge.block_at(pos.node).map(|b| b.text).unwrap_or_default();
+    let b_len = utf16_len(&block_text);
     let local_pt = cache.blocks.get(&bid).and_then(|info| {
       let (s_u16, e_u16) = if start_p.node == end_p.node {
         (start_p.offset, end_p.offset)
@@ -278,8 +308,16 @@ pub fn schedule_touch_handles_update(
       } else {
         (0, end_p.offset.max(1))
       };
+      let lines = resolve_lines_for_block(
+        Some(info),
+        &block_text,
+        760.0,
+        &info.font,
+        info.line_height.max(24.0),
+        &measure,
+      );
       let rects = selection_rects_for_range(
-        &info.lines,
+        &lines,
         s_u16,
         e_u16,
         &info.font,
