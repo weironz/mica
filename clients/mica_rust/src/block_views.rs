@@ -31,7 +31,7 @@ use nsh_core::{
   Color, PropertyValue, StyleDecl, StyleKey, SubmitBehavior,
   color::Rgba,
   element::{
-    Align, ElementRef, ImageSrc, Placement, Style, Svg, element_ref, overlay,
+    Align, ElementRef, ImageSrc, Placement, Style, Svg, element_ref, open_url, overlay,
     set_clipboard, svg, text_measurer,
   },
   geometry::{Bounds, Point, Points, px},
@@ -85,6 +85,111 @@ pub enum CodeAiAction {
 /// Receives `(action, block_index, code_source)`.
 #[derive(Clone)]
 pub struct CodeAiCallback(pub Rc<dyn Fn(CodeAiAction, usize, String)>);
+
+/// Ambient callback invoked when the user clicks an internal `mica://page/<uuid>`
+/// link inside the editor or a table cell.
+#[derive(Clone)]
+pub struct OpenMicaPageCallback(pub Rc<dyn Fn(uuid::Uuid)>);
+
+/// Validated target for an inline hyperlink click.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+  MicaPage(uuid::Uuid),
+  ExternalUrl(String),
+}
+
+/// Validates and classifies a raw hyperlink target (`https://`, `http://`,
+/// `mailto:`, `tel:`, `www.*`, or internal `mica://page/<uuid>`). Rejects
+/// empty strings and unsafe schemes such as `javascript:` or `data:`.
+pub fn resolve_link_target(raw: &str) -> Option<LinkTarget> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  if lower.starts_with("mica://page/") {
+    let rest = &trimmed["mica://page/".len()..];
+    let id_part = rest.split(['?', '#', '/']).next().unwrap_or("");
+    return uuid::Uuid::parse_str(id_part).ok().map(LinkTarget::MicaPage);
+  }
+  if lower.starts_with("https://")
+    || lower.starts_with("http://")
+    || lower.starts_with("mailto:")
+    || lower.starts_with("tel:")
+  {
+    return Some(LinkTarget::ExternalUrl(trimmed.to_owned()));
+  }
+  if lower.starts_with("www.") {
+    return Some(LinkTarget::ExternalUrl(format!("https://{trimmed}")));
+  }
+  None
+}
+
+/// Opens a validated inline hyperlink: internal `mica://page/<uuid>` links jump
+/// directly within Mica when `open_page` is provided, while safe external URLs
+/// launch via `nsh_core::open_url`.
+pub(crate) fn open_editor_link(
+  raw_href: &str,
+  open_page: Option<&OpenMicaPageCallback>,
+) -> bool {
+  match resolve_link_target(raw_href) {
+    Some(LinkTarget::MicaPage(id)) => {
+      if let Some(cb) = open_page {
+        (cb.0)(id);
+        true
+      } else {
+        false
+      }
+    }
+    Some(LinkTarget::ExternalUrl(url)) => {
+      drop(open_url(url));
+      true
+    }
+    None => false,
+  }
+}
+
+/// Pixel-exact hit test for inline `link` marks at text-local `(lx, ly)`:
+/// returns the resolved raw href only when the pointer lands inside the visual
+/// bounding box of a link mark (so clicking blank margin space past the end of
+/// a link places the caret normally without opening the URL).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hit_link_in_lines(
+  lines: &[nsh_core::TextLine],
+  text: &str,
+  marks: &[EditorMark],
+  lx: f32,
+  ly: f32,
+  font: &str,
+  line_h: f32,
+  measure: &impl Fn(&str, &str) -> Points,
+) -> Option<String> {
+  if marks.is_empty() || lx < -2.0 || ly < -2.0 {
+    return None;
+  }
+  for m in marks {
+    if m.kind != "link" || m.end <= m.start {
+      continue;
+    }
+    let rects = selection_rects_for_range(lines, m.start, m.end, font, line_h, measure);
+    let inside = rects.into_iter().any(|(rx, ry, rw, rh)| {
+      lx >= rx - 1.0 && lx <= rx + rw + 2.0 && ly >= ry - 1.0 && ly <= ry + rh + 1.0
+    });
+    if !inside {
+      continue;
+    }
+    let raw = m
+      .href
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .unwrap_or_else(|| utf16_slice(text, m.start, m.end).trim());
+    if resolve_link_target(raw).is_some() {
+      return Some(raw.to_owned());
+    }
+  }
+  None
+}
 
 /// Content shown inside the fullscreen pan/zoom lightbox modal.
 #[derive(Clone, Debug, PartialEq)]
@@ -608,6 +713,15 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     let blank_marquee_lp = env.body_blank_marquee_ready;
     let marquee_origin_lp = env.marquee_origin_page;
     let marks_click = marks.clone();
+    let marks_move = marks.clone();
+    let has_links = marks.iter().any(|m| m.kind == "link" && m.end > m.start);
+    let open_page_cb = use_context::<OpenMicaPageCallback>();
+    let hovering_link = signal(false);
+    let pending_link_click: Rc<RefCell<Option<(String, f32, f32)>>> = Rc::new(RefCell::new(None));
+    let pending_link_down = pending_link_click.clone();
+    let pending_link_move = pending_link_click.clone();
+    let pending_link_press = pending_link_click;
+    let br_link_press = bridge.clone();
     let layout_rev = signal(0u64);
     let kind_color = kind.clone();
     let measure: TextMeasureFn = Rc::new(text_measurer());
@@ -645,20 +759,58 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
       );
       offset_at_point(&lines, lx, ly, font, &|f, t| meas(f, t))
     };
+    let hit_link = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
+                         bid: &str,
+                         block_text: &str,
+                         block_marks: &[EditorMark],
+                         font: &str,
+                         meas: &TextMeasureFn,
+                         lx: f32,
+                         ly: f32|
+          -> Option<String> {
+      let cache = layouts_ref.borrow();
+      let eff = hit_page_w.get_untracked();
+      let fallback_w = if crate::page_width::is_full_width(eff) {
+        820.0
+      } else {
+        (eff - 48.0).max(200.0)
+      };
+      let lines = resolve_lines_for_block(
+        cache.blocks.get(bid),
+        block_text,
+        fallback_w,
+        font,
+        line_h,
+        &|f, t| meas(f, t),
+      );
+      hit_link_in_lines(
+        &lines,
+        block_text,
+        block_marks,
+        lx,
+        ly,
+        font,
+        line_h,
+        &|f, t| meas(f, t),
+      )
+    };
 
     view()
       .element_ref(&text_ref)
+      .test_id(&format!("block-text-{init_idx}"))
       .flex_1()
       .min_w(px(0.0))
       .min_h(px(line_h))
       .relative()
       .cursor(Cursor::Text)
+      .style_when(hovering_link, |s| s.cursor(Cursor::Pointer))
       .on_layout(move |b: &Bounds<Points>| {
         if layouts_f.borrow_mut().update_text_frame(&bid_f, *b) {
           layout_rev.update(|v| *v = v.wrapping_add(1));
         }
       })
       .on_press_down(move |e: &PressEvent| {
+        *pending_link_down.borrow_mut() = None;
         focused_code.set(None);
         focused_cell.set(None);
         table_sel.set(None);
@@ -702,6 +854,24 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
           touch_sel_down.set(is_touch && !sel.is_collapsed());
           br_click.set_selection(sel);
         } else {
+          // Arm link navigation on a clean single click (Alt+Click places caret
+          // inside the link for typing without opening; dragging cancels it).
+          if has_links
+            && !e.modifiers.alt
+            && let Some(href) = hit_link(
+              &layouts_click,
+              &bid_click,
+              &text_click,
+              &marks_click,
+              &font_click,
+              &measure_click,
+              e.position.x.0,
+              e.position.y.0,
+            )
+          {
+            *pending_link_down.borrow_mut() =
+              Some((href, e.page_position.x.0, e.page_position.y.0));
+          }
           if let Some(m) = marks_click.iter().find(|m| {
             m.kind == "math"
               && m.end > m.start
@@ -722,6 +892,14 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
           br_click.set_selection(DocSelection::caret(idx, off));
         }
         br_click.request_focus();
+      })
+      .on_press(move || {
+        let Some((href, _, _)) = pending_link_press.borrow_mut().take() else {
+          return;
+        };
+        if br_link_press.selection().is_none_or(|s| s.is_collapsed()) {
+          open_editor_link(&href, open_page_cb.as_ref());
+        }
       })
       .on_long_press(move |e: &PressEvent| {
         // Mobile / touch long-press selects a 1-2 char CJK word or full Latin word
@@ -748,7 +926,35 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         }
       })
       .on_mouse_move(move |e: &MouseEvent| {
-        if e.pressed_button != Some(MouseButton::Left) || blank_marquee_ready.get_untracked() {
+        if e.pressed_button != Some(MouseButton::Left) {
+          if has_links && e.pressed_button.is_none() {
+            let over = hit_link(
+              &layouts_move,
+              &bid_move,
+              &text_move,
+              &marks_move,
+              &font_move,
+              &measure_move,
+              e.position.x.0,
+              e.position.y.0,
+            )
+            .is_some();
+            if hovering_link.get_untracked() != over {
+              hovering_link.set(over);
+            }
+          }
+          return;
+        }
+        let moved_past_slop = pending_link_move
+          .borrow()
+          .as_ref()
+          .is_some_and(|(_, px0, py0)| {
+            (e.page_position.x.0 - *px0).hypot(e.page_position.y.0 - *py0) > 4.0
+          });
+        if moved_past_slop {
+          *pending_link_move.borrow_mut() = None;
+        }
+        if blank_marquee_ready.get_untracked() {
           return;
         }
         let Some(anchor) = drag_anchor_m.get_untracked() else {
@@ -760,6 +966,11 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
         if br_move.selection().as_ref() != Some(&next) {
           br_move.set_selection(next);
+        }
+      })
+      .on_mouse_leave(move |_: &MouseEvent| {
+        if hovering_link.get_untracked() {
+          hovering_link.set(false);
         }
       })
       // 1. Scoped selection highlight & primary caret layer (NEVER rebuilds text spans!
@@ -3797,5 +4008,45 @@ mod tests {
     assert!(runs[2].highlight && !runs[2].bold);
     assert_eq!(runs[3].text, "内容");
     assert!(!runs[3].highlight);
+  }
+
+  #[test]
+  fn resolve_link_target_validates_external_mica_and_rejects_unsafe_schemes() {
+    assert_eq!(
+      resolve_link_target("https://docs.nvidia.com/dgx/"),
+      Some(LinkTarget::ExternalUrl("https://docs.nvidia.com/dgx/".to_owned()))
+    );
+    assert_eq!(
+      resolve_link_target("www.example.com/docs"),
+      Some(LinkTarget::ExternalUrl("https://www.example.com/docs".to_owned()))
+    );
+    let page_id = uuid::Uuid::new_v4();
+    assert_eq!(
+      resolve_link_target(&format!("mica://page/{page_id}")),
+      Some(LinkTarget::MicaPage(page_id))
+    );
+    assert_eq!(resolve_link_target("javascript:alert(1)"), None);
+    assert_eq!(resolve_link_target("data:text/html,hi"), None);
+    assert_eq!(resolve_link_target("   "), None);
+  }
+
+  #[test]
+  fn hit_link_in_lines_hits_link_rect_and_ignores_trailing_blank_margin() {
+    let text = "https://docs.nvidia.com/dgx/";
+    let mut link = EditorMark::new(0, utf16_len(text), "link");
+    link.href = Some(text.to_owned());
+    let marks = vec![link];
+    let measure = |_: &str, s: &str| Points((s.chars().count() as f32) * 8.0);
+    let lines = crate::text_geometry::synthesize_wrapped_lines(text, 600.0, "400 15px sans-serif", 24.0, &measure);
+    // Inside the link text (width ~224px) -> hits link
+    assert_eq!(
+      hit_link_in_lines(&lines, text, &marks, 64.0, 10.0, "400 15px sans-serif", 24.0, &measure).as_deref(),
+      Some(text)
+    );
+    // Blank whitespace well to the right of the link -> returns None so user can click end-of-line
+    assert_eq!(
+      hit_link_in_lines(&lines, text, &marks, 320.0, 10.0, "400 15px sans-serif", 24.0, &measure),
+      None
+    );
   }
 }

@@ -43,7 +43,8 @@ use nsh_core::{
 
 use crate::{
   block_views::{
-    BlockRenderEnv, TRANSPARENT_RGBA, build_inline_runs, live_index, render_inline_span,
+    BlockRenderEnv, OpenMicaPageCallback, TRANSPARENT_RGBA, build_inline_runs, hit_link_in_lines,
+    live_index, open_editor_link, render_inline_span,
   },
   editor_bridge::MicaDocumentBridge,
   mica_theme::palette,
@@ -1367,6 +1368,39 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
   let hit_down = hit_offset.clone();
   let hit_move = hit_offset;
 
+  let hit_cell_link = {
+    let cl_link = cell_layout.clone();
+    move |local_x: f32, local_y: f32| -> Option<String> {
+      let marks = live_marks.get_untracked();
+      if !marks.iter().any(|m| m.kind == "link" && m.end > m.start) {
+        return None;
+      }
+      let txt = live_text.get_untracked();
+      let (ref raw_lines, frame) = *cl_link.borrow();
+      let lines: Cow<'_, [TextLine]> = if lines_usable_for_text(raw_lines, &txt) {
+        Cow::Borrowed(raw_lines.as_slice())
+      } else {
+        Cow::Owned(resolve_cell_lines(raw_lines, frame, &txt))
+      };
+      let origin_x = if frame.size.width.0 > 0.5 { frame.origin.x.0 } else { 12.0 };
+      let origin_y = if frame.size.height.0 > 0.5 { frame.origin.y.0 } else { 8.0 };
+      let lx = local_x - origin_x;
+      let ly = local_y - origin_y;
+      let measurer = text_measurer();
+      hit_link_in_lines(&lines, &txt, &marks, lx, ly, cell_font, CELL_LINE_H_PX, &|f, s| {
+        measurer(f, s)
+      })
+    }
+  };
+  let hit_link_down = hit_cell_link.clone();
+  let hit_link_move = hit_cell_link;
+  let open_page_cb = use_context::<OpenMicaPageCallback>();
+  let hovering_link = signal(false);
+  let pending_link_click: Rc<RefCell<Option<(String, f32, f32)>>> = Rc::new(RefCell::new(None));
+  let pending_link_down = pending_link_click.clone();
+  let pending_link_move = pending_link_click.clone();
+  let pending_link_press = pending_link_click;
+
   let bid_down = block_id.clone();
   let bid_move = block_id.clone();
   let bid_press = block_id.clone();
@@ -1635,6 +1669,7 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
     .px_3()
     .py_2()
     .cursor(Cursor::Text)
+    .style_when(hovering_link, |s| s.cursor(Cursor::Pointer))
     .bg(move || {
       if is_in_multi_sel.get() {
         palette(dark_mode.get()).selection_bg
@@ -1645,7 +1680,13 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
     .on_mouse_enter(move |_: &MouseEvent| {
       hovered_cell.set(Some((r, c)));
     })
+    .on_mouse_leave(move |_: &MouseEvent| {
+      if hovering_link.get_untracked() {
+        hovering_link.set(false);
+      }
+    })
     .on_press_down(move |e: &PressEvent| {
+      *pending_link_down.borrow_mut() = None;
       handled_down_flag.set(true);
       drag_anchor.set(None);
       marquee_selected.set(None);
@@ -1658,6 +1699,12 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
       let txt = live_text.get_untracked();
       let max_off = utf16_len(&txt);
       let clicks = e.clicks.clamp(1, 3);
+      if clicks == 1
+        && !e.modifiers.alt
+        && let Some(href) = hit_link_down(e.position.x.0, e.position.y.0)
+      {
+        *pending_link_down.borrow_mut() = Some((href, e.page_position.x.0, e.page_position.y.0));
+      }
       let (sel_start, sel_end, anchor) = if clicks == 3 {
         (0, max_off, None)
       } else if clicks == 2 {
@@ -1678,7 +1725,22 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
         if cell_text_drag_anchor.get_untracked().is_some() {
           cell_text_drag_anchor.set(None);
         }
+        if e.pressed_button.is_none() {
+          let over = hit_link_move(e.position.x.0, e.position.y.0).is_some();
+          if hovering_link.get_untracked() != over {
+            hovering_link.set(over);
+          }
+        }
         return;
+      }
+      let moved_past_slop = pending_link_move
+        .borrow()
+        .as_ref()
+        .is_some_and(|(_, px0, py0)| {
+          (e.page_position.x.0 - *px0).hypot(e.page_position.y.0 - *py0) > 4.0
+        });
+      if moved_past_slop {
+        *pending_link_move.borrow_mut() = None;
       }
       let Some((ref anchor_bid, ar, ac)) = table_drag_anchor.get_untracked() else {
         return;
@@ -1687,6 +1749,7 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
         return;
       }
       if ar != r || ac != c || table_selection.get_untracked().is_some() {
+        *pending_link_move.borrow_mut() = None;
         cell_text_drag_anchor.set(None);
         if focused_cell.get_untracked().is_some() {
           focused_cell.set(None);
@@ -1711,6 +1774,12 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
       cell_text_drag_anchor.set(None);
     })
     .on_press(move || {
+      if let Some((href, _, _)) = pending_link_press.borrow_mut().take() {
+        let (vs, ve) = visual_sel.get_untracked();
+        if vs == ve && table_selection.get_untracked().is_none() {
+          open_editor_link(&href, open_page_cb.as_ref());
+        }
+      }
       // Only handle non-pointer activation (e.g. keyboard/accessibility press);
       // real pointer clicks/drags were already placed accurately by `on_press_down`
       // and must NOT snap the caret back to the end of the cell on mouse-up!

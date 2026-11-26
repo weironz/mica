@@ -1645,3 +1645,212 @@ fn regression_table_cell_mid_click_places_caret_in_middle_and_drag_selects_subst
     "intra-cell selection highlight must start near drag anchor x=48 (got local x={sel_local_x:.1})"
   );
 }
+
+#[nsh_core::prelude::component]
+fn EditorLinkClickHarness() -> impl nsh_core::prelude::IntoElement {
+  use std::{cell::RefCell, rc::Rc};
+  use nsh_core::prelude::*;
+
+  let target_page_id = uuid::Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap();
+  let md = format!(
+    "- **DGX OS 7 Release Notes**:\\\n  https://docs.nvidia.com/dgx/dgx-os-7-user-guide/release_notes.html\n\n\
+     [内部文档](mica://page/{target_page_id})\n\n\
+     | 项目 | 官方文档 |\n\
+     | --- | --- |\n\
+     | DGX OS | [NVIDIA Docs](https://docs.nvidia.com/dgx/) |\n"
+  );
+  let bridge = mica_rust::editor_bridge::MicaDocumentBridge::from_markdown(&md);
+  let layouts = Rc::new(RefCell::new(mica_rust::text_geometry::VisibleLayoutCache::default()));
+  let dark_mode = signal(false);
+  let page_width = signal(880.0_f32);
+  let last_internal_nav = signal(String::new());
+  provide_context(mica_rust::block_views::OpenMicaPageCallback(Rc::new(move |id| {
+    last_internal_nav.set(id.to_string());
+  })));
+  let env = mica_rust::block_views::BlockRenderEnv {
+    bridge: bridge.clone(),
+    dark_mode,
+    page_width,
+    layouts,
+    drag_anchor: signal(None),
+    last_click: signal((0, 0, 0.0, 0)),
+    lightbox: signal(None),
+    image_ctx: mica_rust::image_blocks::ImageContext::offline_default(),
+    focused_code_block: signal(None),
+    focused_table_cell: signal(None),
+    table_selection: signal(None),
+    table_drag_anchor: signal(None),
+    marquee_selected: signal(None),
+    body_blank_marquee_ready: signal(false),
+    marquee_origin_page: signal(None),
+    editor_focused: signal(false),
+    caret_blink_on: signal(true),
+    sink_clear_rev: signal(0),
+    inline_math_edit: signal(None),
+    inner_drag_hit: Rc::new(std::cell::Cell::new(None)),
+    last_pointer_is_touch: signal(false),
+    touch_selection_active: signal(false),
+    touch_tap_tracker: Rc::new(RefCell::new(mica_rust::touch_selection::TouchTapTracker::default())),
+  };
+  let structure_rev = bridge.structure_rev_signal();
+  let br_count = bridge.clone();
+  let br_keys = bridge.clone();
+
+  view()
+    .flex_1()
+    .w_full()
+    .h_full()
+    .flex_col()
+    .child(
+      text(move || format!("nav:{}", last_internal_nav.get()))
+        .test_id("link-nav-status"),
+    )
+    .child(
+      virtual_list(
+        move || {
+          structure_rev.get();
+          br_count.block_len()
+        },
+        move |at| mica_rust::block_views::render_virtual_block_row(env.clone(), at),
+      )
+      .keys(move || {
+        structure_rev.get();
+        br_keys.block_ids()
+      })
+      .estimated_item_size(px(56.0))
+      .flex_1()
+      .w_full()
+      .h_full(),
+    )
+}
+
+#[test]
+fn regression_editor_and_table_links_open_on_click_without_breaking_drag_or_alt_click() {
+  use nsh_core::{
+    EventKind, EventPayload, MouseButton, MouseEvent, PressEvent,
+    geometry::point,
+    keymap::Modifiers,
+  };
+
+  let mut config = EngineConfig::new(Root::of::<EditorLinkClickHarness>());
+  config.viewport = size(px(1100.0), px(720.0));
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("id:block-text-0").unwrap();
+  app.wait_for("id:block-text-1").unwrap();
+  app.wait_for("id:table-cell-2-1-1").unwrap();
+
+  // 1. Clicking directly on line 2 of the bullet item (the external URL) opens it!
+  app
+    .press_at("id:block-text-0", point(px(64.0), px(34.0)))
+    .unwrap();
+  assert_eq!(
+    app.screen().opened_urls(),
+    &["https://docs.nvidia.com/dgx/dgx-os-7-user-guide/release_notes.html"],
+    "clicking an external link in a bullet item must open the URL"
+  );
+
+  // 2. Clicking in the blank whitespace far to the right of the link on line 2
+  //    must NOT open the URL (places caret at end of line for typing).
+  app
+    .press_at("id:block-text-0", point(px(760.0), px(34.0)))
+    .unwrap();
+  assert_eq!(
+    app.screen().opened_urls().len(),
+    1,
+    "clicking trailing blank space past a link must not trigger navigation"
+  );
+
+  // 3. Alt+Click on the link places caret for editing without opening the URL.
+  let b0 = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("block-text-0"))
+    .expect("block-text-0 must exist");
+  let alt_local = point(px(64.0), px(34.0));
+  let alt_page = point(b0.bounds.origin.x + alt_local.x, b0.bounds.origin.y + alt_local.y);
+  let control = app.engine().control();
+  control.dispatch_event(
+    b0.id,
+    EventKind::PressDown,
+    EventPayload::Press(PressEvent {
+      position: alt_local,
+      page_position: alt_page,
+      modifiers: Modifiers { alt: true, ..Modifiers::default() },
+      clicks: 1,
+    }),
+  );
+  control.dispatch_event(b0.id, EventKind::Press, EventPayload::None);
+  app.settle();
+  assert_eq!(
+    app.screen().opened_urls().len(),
+    1,
+    "Alt+Click on a link must place caret without opening the URL"
+  );
+
+  // 4. Dragging across the link selects text without opening the URL.
+  let drag_end_local = point(px(180.0), px(34.0));
+  let drag_end_page = point(
+    b0.bounds.origin.x + drag_end_local.x,
+    b0.bounds.origin.y + drag_end_local.y,
+  );
+  control.dispatch_event(
+    b0.id,
+    EventKind::PressDown,
+    EventPayload::Press(PressEvent {
+      position: alt_local,
+      page_position: alt_page,
+      modifiers: Modifiers::default(),
+      clicks: 1,
+    }),
+  );
+  control.dispatch_event(
+    b0.id,
+    EventKind::MouseMove,
+    EventPayload::Mouse(MouseEvent::new(
+      drag_end_local,
+      drag_end_page,
+      Modifiers::default(),
+      Some(MouseButton::Left),
+    )),
+  );
+  control.dispatch_event(
+    b0.id,
+    EventKind::MouseUp,
+    EventPayload::Mouse(MouseEvent::released(
+      drag_end_local,
+      drag_end_page,
+      Modifiers::default(),
+      MouseButton::Left,
+    )),
+  );
+  control.dispatch_event(b0.id, EventKind::Press, EventPayload::None);
+  app.settle();
+  assert_eq!(
+    app.screen().opened_urls().len(),
+    1,
+    "dragging across a link to select text must not open the URL"
+  );
+
+  // 5. Clicking an internal `mica://page/<uuid>` link invokes OpenMicaPageCallback.
+  app
+    .press_at("id:block-text-1", point(px(24.0), px(12.0)))
+    .unwrap();
+  app
+    .wait_for("text:nav:11111111-2222-3333-4444-555555555555")
+    .unwrap();
+
+  // 6. Clicking an external link inside a table cell also opens the URL.
+  app
+    .press_at("id:table-cell-2-1-1", point(px(36.0), px(16.0)))
+    .unwrap();
+  assert_eq!(
+    app.screen().opened_urls(),
+    &[
+      "https://docs.nvidia.com/dgx/dgx-os-7-user-guide/release_notes.html",
+      "https://docs.nvidia.com/dgx/",
+    ],
+    "clicking a link inside a table cell must open its URL"
+  );
+}

@@ -182,7 +182,23 @@ pub fn lines_usable_for_text(lines: &[TextLine], text: &str) -> bool {
     return false;
   }
   let has_non_ws = visible.chars().any(|c| !c.is_whitespace());
-  !has_non_ws || lines.iter().any(|l| l.width.0 > 0.5)
+  if has_non_ws {
+    if !lines.iter().any(|l| l.width.0 > 0.5) {
+      return false;
+    }
+    if !lines
+      .iter()
+      .any(|l| !l.text.trim_end_matches(['\n', '\r', '\u{200B}']).is_empty())
+    {
+      return false;
+    }
+  }
+  let explicit_breaks = visible
+    .trim_end_matches(['\n', '\r'])
+    .bytes()
+    .filter(|&b| b == b'\n')
+    .count();
+  lines.len() > explicit_breaks
 }
 
 /// Pure-Rust wrapped visual line synthesizer backed by the platform's exact

@@ -92,7 +92,10 @@ use crate::{
   app_chrome::{EmbeddedBoardEdit, TopBarProps},
   app_menu::{AccountMenuState, AppMenuCallbacks},
   app_transfer_io::{AppTransferContext, AppTransferHandlers, CrossWorkspaceTransferCtx},
-  block_views::{CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback},
+  block_views::{
+    CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback,
+    OpenMicaPageCallback,
+  },
   editor_bridge::MicaDocumentBridge,
   editor_view::EditorHeaderProps,
   graph_dialog::PageGraphData,
@@ -2384,6 +2387,20 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       .into_element()
     })
   };
+  {
+    let sel = on_select_doc.clone();
+    let tree_ref = tree.clone();
+    provide_context(OpenMicaPageCallback(Rc::new(move |doc_id: Uuid| {
+      let title = tree_ref
+        .borrow()
+        .all_live_rows()
+        .into_iter()
+        .find(|r| !r.is_folder && r.object_id == doc_id)
+        .map(|r| r.name)
+        .unwrap_or_else(|| "未命名页面".to_string());
+      sel(doc_id, title);
+    })));
+  }
 
   let rehost_images_sig = signal(true);
   let image_ctx = image_blocks::ImageContext::new(
