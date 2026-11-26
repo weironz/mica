@@ -15,7 +15,7 @@
 //! - Account footer (`28×28` avatar `本` + `本地工作区`, plus `⚙` settings button).
 //! - Exported `workspace_switcher_popover` (`320px`) & `rename_dialog_modal` (`400px`).
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use mica_client::{PageTreeModel, TreeRow};
 use nsh_base::{HandleEdge, ResizeHandleState, button, input, resize_handle};
@@ -23,8 +23,8 @@ use nsh_core::{
   AccessibilityRole, ContextMenuEvent, MouseButton, MouseEvent, PointerEvents, PressEvent,
   SubmitBehavior,
   color::Rgba,
-  element::{Align, Placement, overlay},
-  geometry::{Axis, Point, Points, point},
+  element::{Align, ElementRef, Placement, element_ref, overlay, set_interval},
+  geometry::{Axis, Bounds, Point, Points, point},
   keymap::When,
   prelude::*,
 };
@@ -35,8 +35,9 @@ use crate::{
   mica_icons,
   mica_theme::palette,
   tree_dnd::{
-    ClickIntent, DropIndicatorState, DropMode, TREE_ROW_HEIGHT, TreeDropPlanner, TreeSelection,
-    drop_indicator_inset, independent_selection, renamed_to, tree_click_intent,
+    ClickIntent, DropIndicatorState, DropMode, TREE_ROW_HEIGHT, TREE_ROW_PITCH, TreeDropPlanner,
+    TreeSelection, compute_next_scroll_y, drop_indicator_inset, independent_selection, renamed_to,
+    tree_click_intent, tree_drag_autoscroll_speed, tree_drag_row_at_y,
   },
 };
 
@@ -221,6 +222,13 @@ struct TreeRowContext {
   page_to_local: Signal<(f32, f32)>,
   drag_state: Signal<DragState>,
   drag_pointer: Signal<(f32, f32)>,
+  drag_page_pointer: Signal<(f32, f32)>,
+  drag_autoscroll_speed: Signal<f32>,
+  tree_list_ref: ElementRef,
+  tree_scroll_y: Signal<f32>,
+  tree_content_h: Signal<f32>,
+  tree_viewport_h: Signal<f32>,
+  tree_page_origin: Signal<(f32, f32)>,
   just_dragged: Signal<bool>,
   rename_modal_open: Signal<bool>,
   rename_modal_view: Signal<Option<Uuid>>,
@@ -251,6 +259,13 @@ pub fn sidebar_view(
   let page_to_local: Signal<(f32, f32)> = signal((0.0_f32, 36.0_f32));
   let drag_state: Signal<DragState> = signal(DragState::default());
   let drag_pointer: Signal<(f32, f32)> = signal((0.0_f32, 0.0_f32));
+  let drag_page_pointer: Signal<(f32, f32)> = signal((0.0_f32, 0.0_f32));
+  let drag_autoscroll_speed: Signal<f32> = signal(0.0_f32);
+  let tree_list_ref = element_ref();
+  let tree_scroll_y: Signal<f32> = signal(0.0_f32);
+  let tree_content_h: Signal<f32> = signal(0.0_f32);
+  let tree_viewport_h: Signal<f32> = signal(0.0_f32);
+  let tree_page_origin: Signal<(f32, f32)> = signal((0.0_f32, 0.0_f32));
   let just_dragged = signal(false);
   let (rename_modal_open, rename_modal_view, rename_modal_initial) =
     (signal(false), signal(None::<Uuid>), signal(String::new()));
@@ -270,6 +285,7 @@ pub fn sidebar_view(
         if context_menu.get_untracked().is_some() {
           context_menu.set(None);
         } else if drag_state.get_untracked().active.is_some() {
+          drag_autoscroll_speed.set(0.0);
           drag_state.set(DragState::default());
         } else {
           let mut s = selection.get_untracked();
@@ -291,10 +307,45 @@ pub fn sidebar_view(
 
   let tree_ctx = Rc::new(TreeRowContext {
     tree: tree.clone(), tree_rev, active_doc, dark_mode, sidebar_hovered, selection,
-    context_menu, page_to_local, drag_state, drag_pointer, just_dragged,
-    rename_modal_open, rename_modal_view, rename_modal_initial,
+    context_menu, page_to_local, drag_state, drag_pointer, drag_page_pointer,
+    drag_autoscroll_speed, tree_list_ref, tree_scroll_y, tree_content_h, tree_viewport_h,
+    tree_page_origin, just_dragged, rename_modal_open, rename_modal_view, rename_modal_initial,
     emoji_modal_open, emoji_modal_view, emoji_modal_current, cb: cb.clone(),
   });
+
+  // Smooth 60fps edge auto-scroll while dragging tree rows near/past top or bottom edge.
+  // Gated on a boolean memo so speed changes never reset the 16ms interval.
+  {
+    let ctx_auto = tree_ctx.clone();
+    let autoscroll_active = computed(move || {
+      drag_state.get().active.is_some() && drag_autoscroll_speed.get().abs() >= 0.1
+    });
+    effect(move || {
+      if !autoscroll_active.get() {
+        return;
+      }
+      let ctx_tick = ctx_auto.clone();
+      let task = set_interval(Duration::from_millis(16), move || {
+        let speed = ctx_tick.drag_autoscroll_speed.get_untracked();
+        if speed.abs() < 0.1 || ctx_tick.drag_state.get_untracked().active.is_none() {
+          ctx_tick.drag_autoscroll_speed.set(0.0);
+          return;
+        }
+        let row_count = ctx_tick.tree.borrow().visible_rows().len();
+        let cur_y = ctx_tick.tree_scroll_y.get_untracked();
+        let ch = ctx_tick.tree_content_h.get_untracked();
+        let vh = ctx_tick.tree_viewport_h.get_untracked();
+        let next_y = compute_next_scroll_y(cur_y, speed, ch, vh, row_count);
+        if (next_y - cur_y).abs() >= 0.5 {
+          ctx_tick.tree_scroll_y.set(next_y);
+          ctx_tick.tree_list_ref.scroll_to_offset(px(next_y), false);
+          update_drag_target_after_autoscroll(&ctx_tick, next_y, ch, vh, row_count);
+        }
+      });
+      cleanup(move || task.cancel());
+    });
+  }
+
   let (ctx_move, ctx_up, ctx_menu_overlay) = (tree_ctx.clone(), tree_ctx.clone(), tree_ctx.clone());
   let (cb_rename_submit, cb_emoji_pick) = (cb.clone(), cb.clone());
 
@@ -305,7 +356,10 @@ pub fn sidebar_view(
     .border_color(move || palette(dark_mode.get()).border_subtle)
     .bg(move || palette(dark_mode.get()).surface_raised)
     .on_mouse_enter(move |_: &MouseEvent| sidebar_hovered.set(true))
-    .on_mouse_leave(move |_: &MouseEvent| sidebar_hovered.set(false))
+    .on_mouse_leave(move |_: &MouseEvent| {
+      sidebar_hovered.set(false);
+      drag_autoscroll_speed.set(0.0);
+    })
     .on_mouse_move(move |e: &MouseEvent| {
       ctx_move.page_to_local.set((e.page_position.x.0 - e.position.x.0, e.page_position.y.0 - e.position.y.0));
       let st = ctx_move.drag_state.get_untracked();
@@ -313,20 +367,30 @@ pub fn sidebar_view(
       if e.pressed_button != Some(MouseButton::Left) {
         // Mouse was released outside the sidebar (so `on_mouse_up` here did not fire):
         // cancel any dangling drag cleanly rather than committing a stale drop.
+        ctx_move.drag_autoscroll_speed.set(0.0);
         ctx_move.drag_state.set(DragState::default());
         return;
       }
       if st.active.is_some() {
         ctx_move.drag_pointer.set((e.position.x.0, e.position.y.0));
+        update_drag_autoscroll(&ctx_move, e.page_position.x.0, e.page_position.y.0);
       } else if let Some(pending) = st.pending.clone() {
         let dx = e.page_position.x.0 - pending.start_page_x;
         let dy = e.page_position.y.0 - pending.start_page_y;
         if dx.hypot(dy) >= DRAG_THRESHOLD_PX {
-          start_active_drag(&ctx_move, pending.source_view_id, e.position.x.0, e.position.y.0);
+          start_active_drag(
+            &ctx_move,
+            pending.source_view_id,
+            e.position.x.0,
+            e.position.y.0,
+            e.page_position.x.0,
+            e.page_position.y.0,
+          );
         }
       }
     })
     .on_mouse_up(move |_: &MouseEvent| {
+      ctx_up.drag_autoscroll_speed.set(0.0);
       let mut st = ctx_up.drag_state.get_untracked();
       if st.active.is_none() && st.pending.is_none() { return; }
       if let Some(active) = st.active.take() {
@@ -651,6 +715,8 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
   let row_ctx = ctx.clone();
   let root_ctx = ctx.clone();
   let root_click_ctx = ctx.clone();
+  let scroll_ctx = ctx.clone();
+  let layout_ctx = ctx.clone();
   let dark_mode = ctx.dark_mode;
   let drag_state = ctx.drag_state;
 
@@ -673,7 +739,33 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
           .map(|r| r.view_id.to_string())
           .collect::<Vec<_>>()
       })
+      .element_ref(&ctx.tree_list_ref)
       .estimated_item_size(px(TREE_ROW_HEIGHT))
+      .on_scroll(move |e: &ScrollEvent| {
+        scroll_ctx.tree_scroll_y.set(e.offset.y.0);
+        if e.content_size.height.0 > 0.0 {
+          scroll_ctx.tree_content_h.set(e.content_size.height.0);
+        }
+        if e.size.height.0 > 0.0 {
+          scroll_ctx.tree_viewport_h.set(e.size.height.0);
+        }
+        if scroll_ctx.drag_state.get_untracked().active.is_some() {
+          let row_count = scroll_ctx.tree.borrow().visible_rows().len();
+          update_drag_target_after_autoscroll(
+            &scroll_ctx,
+            e.offset.y.0,
+            scroll_ctx.tree_content_h.get_untracked(),
+            scroll_ctx.tree_viewport_h.get_untracked(),
+            row_count,
+          );
+        }
+      })
+      .on_layout(move |b: &Bounds<Points>| {
+        if b.size.height.0 > 0.0 {
+          layout_ctx.tree_viewport_h.set(b.size.height.0);
+        }
+        refresh_tree_list_geometry(&layout_ctx);
+      })
       .flex_1(),
     )
     .child(
@@ -692,11 +784,12 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
             return;
           }
           let mut st = root_ctx.drag_state.get_untracked();
-          if let Some(active) = st.active.as_mut()
-            && active.target != Some(DragTarget::Root)
-          {
-            active.target = Some(DragTarget::Root);
-            root_ctx.drag_state.set(st);
+          if let Some(active) = st.active.as_mut() {
+            update_drag_autoscroll(&root_ctx, e.page_position.x.0, e.page_position.y.0);
+            if active.target != Some(DragTarget::Root) {
+              active.target = Some(DragTarget::Root);
+              root_ctx.drag_state.set(st);
+            }
           }
         })
         .child(dynamic(move || {
@@ -812,38 +905,20 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
           let dy = e.page_position.y.0 - pending.start_page_y;
           if dx.hypot(dy) >= DRAG_THRESHOLD_PX {
             let (ox, oy) = ctx_move.page_to_local.get_untracked();
-            start_active_drag(&ctx_move, pending.source_view_id, e.page_position.x.0 - ox, e.page_position.y.0 - oy);
+            start_active_drag(
+              &ctx_move,
+              pending.source_view_id,
+              e.page_position.x.0 - ox,
+              e.page_position.y.0 - oy,
+              e.page_position.x.0,
+              e.page_position.y.0,
+            );
           }
         }
         return;
       }
-      let mut st = ctx_move.drag_state.get_untracked();
-      let Some(active) = st.active.as_mut() else { return; };
-      let visible = ctx_move.tree.borrow().visible_rows();
-      let Some(cur_idx) = visible.iter().position(|r| r.view_id == row.view_id) else { return; };
-      let mode = TreeDropPlanner::drop_zone_for_local_y(e.position.y.0, TREE_ROW_HEIGHT);
-      let (level, allowed) = match mode {
-        DropMode::Before => (
-          row.depth,
-          TreeDropPlanner::can_drop(&active.dragged_ids, &row, DropMode::Before, &visible),
-        ),
-        DropMode::Into => (
-          row.depth + 1,
-          TreeDropPlanner::can_drop(&active.dragged_ids, &row, DropMode::Into, &visible),
-        ),
-        DropMode::After => {
-          let next_depth = visible.get(cur_idx + 1).map(|r| r.depth);
-          let lvl = TreeDropPlanner::reparent_level_for(e.position.x.0, row.depth, next_depth);
-          let resolved_id = TreeDropPlanner::resolve_after_target(cur_idx, lvl, &visible);
-          let resolved_row = visible.iter().find(|r| r.view_id == resolved_id).unwrap_or(&row);
-          (lvl, TreeDropPlanner::can_drop(&active.dragged_ids, resolved_row, DropMode::After, &visible))
-        }
-      };
-      let next_target = Some(DragTarget::Row { target_idx: cur_idx, target_view_id: row.view_id, mode, level, allowed });
-      if active.target != next_target {
-        active.target = next_target;
-        ctx_move.drag_state.set(st);
-      }
+      update_drag_autoscroll(&ctx_move, e.page_position.x.0, e.page_position.y.0);
+      update_drag_target_for_row(&ctx_move, row.view_id, e.position.x.0, e.position.y.0);
     })
     .on_context_menu(move |e: &ContextMenuEvent| {
       if let Some(row) = row_info.get_untracked() {
@@ -1098,7 +1173,133 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
 
 // ── Drag-and-Drop Engine & Indicators ─────────────────────────────────────────
 
-fn start_active_drag(ctx: &TreeRowContext, source_view_id: Uuid, local_x: f32, local_y: f32) {
+fn refresh_tree_list_geometry(ctx: &TreeRowContext) {
+  let lref = ctx.tree_list_ref;
+  let origin_sig = ctx.tree_page_origin;
+  let vh_sig = ctx.tree_viewport_h;
+  let drag_state = ctx.drag_state;
+  let drag_page_pointer = ctx.drag_page_pointer;
+  let drag_autoscroll_speed = ctx.drag_autoscroll_speed;
+  spawn(async move {
+    if let Some(m) = lref.measure().await {
+      origin_sig.set((m.page.x.0, m.page.y.0));
+      if m.frame.size.height.0 > 0.0 {
+        vh_sig.set(m.frame.size.height.0);
+      }
+      if drag_state.get_untracked().active.is_some() {
+        let (_, page_y) = drag_page_pointer.get_untracked();
+        let speed = tree_drag_autoscroll_speed(page_y - m.page.y.0, vh_sig.get_untracked());
+        if (drag_autoscroll_speed.get_untracked() - speed).abs() >= 0.05 {
+          drag_autoscroll_speed.set(speed);
+        }
+      }
+    }
+  });
+}
+
+fn update_drag_autoscroll(ctx: &TreeRowContext, page_x: f32, page_y: f32) {
+  ctx.drag_page_pointer.set((page_x, page_y));
+  let (_, origin_y) = ctx.tree_page_origin.get_untracked();
+  let vh = ctx.tree_viewport_h.get_untracked();
+  let local_y = page_y - origin_y;
+  let speed = tree_drag_autoscroll_speed(local_y, vh);
+  if (ctx.drag_autoscroll_speed.get_untracked() - speed).abs() >= 0.05 {
+    ctx.drag_autoscroll_speed.set(speed);
+  }
+}
+
+fn update_drag_target_for_row(
+  ctx: &TreeRowContext,
+  target_view_id: Uuid,
+  row_local_x: f32,
+  row_local_y: f32,
+) {
+  let mut st = ctx.drag_state.get_untracked();
+  let Some(active) = st.active.as_mut() else {
+    return;
+  };
+  let visible = ctx.tree.borrow().visible_rows();
+  let Some(cur_idx) = visible.iter().position(|r| r.view_id == target_view_id) else {
+    return;
+  };
+  let row = &visible[cur_idx];
+  let mode = TreeDropPlanner::drop_zone_for_local_y(row_local_y, TREE_ROW_HEIGHT);
+  let (level, allowed) = match mode {
+    DropMode::Before => (
+      row.depth,
+      TreeDropPlanner::can_drop(&active.dragged_ids, row, DropMode::Before, &visible),
+    ),
+    DropMode::Into => (
+      row.depth + 1,
+      TreeDropPlanner::can_drop(&active.dragged_ids, row, DropMode::Into, &visible),
+    ),
+    DropMode::After => {
+      let next_depth = visible.get(cur_idx + 1).map(|r| r.depth);
+      let lvl = TreeDropPlanner::reparent_level_for(row_local_x, row.depth, next_depth);
+      let resolved_id = TreeDropPlanner::resolve_after_target(cur_idx, lvl, &visible);
+      let resolved_row = visible.iter().find(|r| r.view_id == resolved_id).unwrap_or(row);
+      (
+        lvl,
+        TreeDropPlanner::can_drop(&active.dragged_ids, resolved_row, DropMode::After, &visible),
+      )
+    }
+  };
+  let next_target = Some(DragTarget::Row {
+    target_idx: cur_idx,
+    target_view_id,
+    mode,
+    level,
+    allowed,
+  });
+  if active.target != next_target {
+    active.target = next_target;
+    ctx.drag_state.set(st);
+  }
+}
+
+fn update_drag_target_after_autoscroll(
+  ctx: &TreeRowContext,
+  next_scroll_y: f32,
+  content_h: f32,
+  viewport_h: f32,
+  row_count: usize,
+) {
+  if row_count == 0 || viewport_h <= 1.0 {
+    return;
+  }
+  let (page_x, page_y) = ctx.drag_page_pointer.get_untracked();
+  let (origin_x, origin_y) = ctx.tree_page_origin.get_untracked();
+  let local_y = page_y - origin_y;
+  if local_y < 0.0 || local_y > viewport_h {
+    return;
+  }
+  let row_pitch = if content_h > 0.0 {
+    content_h / (row_count as f32)
+  } else {
+    TREE_ROW_PITCH
+  };
+  let Some((idx, row_local_y)) = tree_drag_row_at_y(next_scroll_y + local_y, row_pitch, row_count)
+  else {
+    return;
+  };
+  let target_view_id = {
+    let visible = ctx.tree.borrow().visible_rows();
+    visible.get(idx).map(|r| r.view_id)
+  };
+  if let Some(vid) = target_view_id {
+    let row_local_x = (page_x - origin_x).max(0.0);
+    update_drag_target_for_row(ctx, vid, row_local_x, row_local_y);
+  }
+}
+
+fn start_active_drag(
+  ctx: &TreeRowContext,
+  source_view_id: Uuid,
+  local_x: f32,
+  local_y: f32,
+  page_x: f32,
+  page_y: f32,
+) {
   let visible = ctx.tree.borrow().visible_rows();
   let sel = ctx.selection.get_untracked();
   let dragged_ids = if sel.acts_on_selection(source_view_id) {
@@ -1112,8 +1313,10 @@ fn start_active_drag(ctx: &TreeRowContext, source_view_id: Uuid, local_x: f32, l
     .map(|r| if r.name.trim().is_empty() { "无标题".to_string() } else { r.name.clone() })
     .unwrap_or_default();
 
+  refresh_tree_list_geometry(ctx);
   ctx.context_menu.set(None);
   ctx.drag_pointer.set((local_x, local_y));
+  ctx.drag_page_pointer.set((page_x, page_y));
   ctx.drag_state.set(DragState {
     pending: None,
     active: Some(ActiveDrag {
@@ -1124,6 +1327,7 @@ fn start_active_drag(ctx: &TreeRowContext, source_view_id: Uuid, local_x: f32, l
       target: None,
     }),
   });
+  update_drag_autoscroll(ctx, page_x, page_y);
 }
 
 fn commit_tree_drop(ctx: &TreeRowContext, active: ActiveDrag) {

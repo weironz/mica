@@ -18,6 +18,9 @@ use uuid::Uuid;
 /// Standard sidebar tree row height in points (matches `kSidebarRowHeight = 30`).
 pub const TREE_ROW_HEIGHT: f32 = 30.0;
 
+/// Full vertical pitch of each tree row including its `1px` top & bottom margins (`30 + 2`).
+pub const TREE_ROW_PITCH: f32 = TREE_ROW_HEIGHT + 2.0;
+
 /// Horizontal indent per nesting depth (matches `kTreeIndentUnit = 16.0`).
 pub const TREE_INDENT_UNIT: f32 = 16.0;
 
@@ -414,9 +417,123 @@ pub fn renamed_to(input: &str, current_name: &str) -> Option<String> {
   Some(trimmed.to_string())
 }
 
+/// Computes continuous 60fps vertical edge auto-scroll velocity (in px per 16ms
+/// tick; negative scrolls up, positive scrolls down, `0.0` in the middle band)
+/// when dragging tree rows near or past the top/bottom edge of the sidebar tree.
+pub fn tree_drag_autoscroll_speed(local_y: f32, viewport_h: f32) -> f32 {
+  if viewport_h <= 1.0 {
+    return 0.0;
+  }
+  let zone = 44.0_f32.min(viewport_h * 0.25);
+  const MIN_SPEED: f32 = 3.5;
+  const MAX_SPEED: f32 = 14.0;
+  const RAMP: f32 = 72.0;
+  let ramp = |past: f32| {
+    let t = (past / RAMP).clamp(0.0, 1.0);
+    MIN_SPEED + t * (MAX_SPEED - MIN_SPEED)
+  };
+  if local_y < zone {
+    -ramp(zone - local_y)
+  } else if local_y > viewport_h - zone {
+    ramp(local_y - (viewport_h - zone))
+  } else {
+    0.0
+  }
+}
+
+/// Computes the next clamped scroll offset for a sidebar auto-scroll tick.
+///
+/// When `content_h` has not yet been reported by an `on_scroll` event (`<= 0.0`),
+/// falls back to `row_count * TREE_ROW_PITCH` so dragging works on the very first
+/// drag before any manual wheel scroll has occurred.
+pub fn compute_next_scroll_y(
+  cur_y: f32,
+  speed: f32,
+  content_h: f32,
+  viewport_h: f32,
+  row_count: usize,
+) -> f32 {
+  let effective_ch = if content_h > 0.0 {
+    content_h
+  } else {
+    (row_count as f32) * TREE_ROW_PITCH
+  };
+  let max_y = (effective_ch - viewport_h.max(0.0)).max(0.0);
+  (cur_y + speed).clamp(0.0, max_y)
+}
+
+/// Maps a scroll-adjusted vertical coordinate (`scroll_y + local_y`) to the
+/// corresponding visible tree row index and row-local Y offset.
+pub fn tree_drag_row_at_y(
+  content_y: f32,
+  row_pitch: f32,
+  row_count: usize,
+) -> Option<(usize, f32)> {
+  if row_count == 0 || row_pitch <= 0.0 || content_y < 0.0 {
+    return None;
+  }
+  let idx = (content_y / row_pitch).floor() as usize;
+  if idx >= row_count {
+    return None;
+  }
+  let local_y = (content_y - (idx as f32) * row_pitch).clamp(0.0, row_pitch);
+  Some((idx, local_y))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn tree_drag_autoscroll_speed_ramps_near_and_past_edges() {
+    assert_eq!(tree_drag_autoscroll_speed(200.0, 400.0), 0.0);
+    assert_eq!(tree_drag_autoscroll_speed(50.0, 0.0), 0.0);
+
+    let top_inner = tree_drag_autoscroll_speed(20.0, 400.0);
+    let top_past = tree_drag_autoscroll_speed(-30.0, 400.0);
+    assert!(top_inner < 0.0, "near top edge must scroll up: {top_inner}");
+    assert!(
+      top_past < top_inner,
+      "past top edge ({top_past}) must scroll faster than inside zone ({top_inner})"
+    );
+
+    let bot_inner = tree_drag_autoscroll_speed(380.0, 400.0);
+    let bot_past = tree_drag_autoscroll_speed(430.0, 400.0);
+    assert!(bot_inner > 0.0, "near bottom edge must scroll down: {bot_inner}");
+    assert!(
+      bot_past > bot_inner,
+      "past bottom edge ({bot_past}) must scroll faster than inside zone ({bot_inner})"
+    );
+  }
+
+  #[test]
+  fn compute_next_scroll_y_estimates_content_before_first_scroll_and_clamps() {
+    // 30 rows * 32px = 960px content in a 320px viewport -> max scroll 640px.
+    let y1 = compute_next_scroll_y(0.0, 10.0, 0.0, 320.0, 30);
+    assert!((y1 - 10.0).abs() < 0.01);
+
+    // Clamps at bottom when content_h is measured.
+    let y_bot = compute_next_scroll_y(635.0, 12.0, 960.0, 320.0, 30);
+    assert!((y_bot - 640.0).abs() < 0.01);
+
+    // Clamps at top.
+    let y_top = compute_next_scroll_y(4.0, -12.0, 960.0, 320.0, 30);
+    assert_eq!(y_top, 0.0);
+
+    // Non-scrollable short list never scrolls past 0.
+    assert_eq!(compute_next_scroll_y(0.0, 10.0, 0.0, 400.0, 5), 0.0);
+  }
+
+  #[test]
+  fn tree_drag_row_at_y_maps_scroll_offset_to_row_and_local_y() {
+    assert_eq!(tree_drag_row_at_y(-1.0, TREE_ROW_PITCH, 10), None);
+    assert_eq!(tree_drag_row_at_y(0.0, TREE_ROW_PITCH, 0), None);
+    assert_eq!(tree_drag_row_at_y(320.0, TREE_ROW_PITCH, 10), None);
+
+    let (idx, ly) = tree_drag_row_at_y(32.0 * 4.0 + 15.0, TREE_ROW_PITCH, 10).unwrap();
+    assert_eq!(idx, 4);
+    assert!((ly - 15.0).abs() < 0.01);
+  }
 
   fn mk_row(
     id: Uuid,
