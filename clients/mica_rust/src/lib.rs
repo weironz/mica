@@ -1328,11 +1328,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   };
 
   let on_new_page: Rc<dyn Fn()> = {
-    let tree_ref = tree.clone();
     let create = create_page_with_content.clone();
     Rc::new(move || {
-      let idx = tree_ref.borrow().count_live_pages() + 1;
-      create(format!("未命名页面 {idx}"), String::new());
+      create("未命名页面".to_string(), String::new());
     })
   };
 
@@ -1345,7 +1343,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
       let count = tree_ref.borrow().all_live_rows().len() + 1;
-      let name = custom_name.unwrap_or_else(|| format!("文件夹 {count}"));
+      let name = custom_name.unwrap_or_else(|| "新文件夹".to_string());
       let valid_parent = parent.filter(|&pid| {
         tree_ref
           .borrow()
@@ -2065,10 +2063,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_open_in_new_tab: on_open_in_new_tab.clone(),
     on_new_child_page: {
       let create = create_page_in_parent.clone();
-      let tree_ref = tree.clone();
       Rc::new(move |folder_id: Uuid| {
-        let idx = tree_ref.borrow().count_live_pages() + 1;
-        create(Some(folder_id), format!("未命名页面 {idx}"), String::new(), false);
+        create(Some(folder_id), "未命名页面".to_string(), String::new(), false);
       })
     },
     on_new_child_folder: {
