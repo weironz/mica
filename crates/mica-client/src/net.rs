@@ -886,6 +886,26 @@ impl CloudConnector {
     Ok(())
   }
 
+  /// Move multiple cloud views (and their subtrees) into the recycle bin in ONE
+  /// atomic server transaction (`POST /api/workspaces/{ws}/views/batch-trash`).
+  pub async fn batch_trash_views(
+    &self,
+    workspace_id: Uuid,
+    view_ids: &[Uuid],
+  ) -> Result<(), String> {
+    if view_ids.is_empty() {
+      return Ok(());
+    }
+    self
+      .authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/views/batch-trash"),
+        &json!({ "view_ids": view_ids }),
+        API_TIMEOUT_SECS,
+      )
+      .await?;
+    Ok(())
+  }
+
   /// Restore a trashed cloud view (`POST /api/workspaces/{ws}/views/{view}/restore`).
   pub async fn restore_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
     self
@@ -903,6 +923,17 @@ impl CloudConnector {
     self
       .authed_delete(
         &format!("/api/workspaces/{workspace_id}/trash/{view_id}"),
+        API_TIMEOUT_SECS,
+      )
+      .await?;
+    Ok(())
+  }
+
+  /// Permanently empty a cloud workspace's recycle bin (`DELETE /api/workspaces/{ws}/trash`).
+  pub async fn purge_workspace_trash(&self, workspace_id: Uuid) -> Result<(), String> {
+    self
+      .authed_delete(
+        &format!("/api/workspaces/{workspace_id}/trash"),
         API_TIMEOUT_SECS,
       )
       .await?;

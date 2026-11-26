@@ -81,6 +81,7 @@ pub struct EditorHeaderProps {
   pub is_favorite: Signal<bool>,
   pub right_panel_open: Signal<bool>,
   pub on_rename_title: Rc<dyn Fn(String)>,
+  pub on_title_focus_change: Option<Rc<dyn Fn(bool)>>,
   pub on_open_board: Rc<dyn Fn()>,
   pub on_toggle_favorite: Rc<dyn Fn()>,
   pub on_toggle_right_panel: Rc<dyn Fn()>,
@@ -2166,6 +2167,9 @@ pub fn editor_view(
                   .child(when(move || show_page_title.get(), move || {
                     let h_val = h_title_v.clone();
                     let h_chg = h_title_c.clone();
+                    let h_foc = h_title_v.on_title_focus_change.clone();
+                    let h_blur = h_title_v.on_title_focus_change.clone();
+                    let h_sub = h_title_v.on_title_focus_change.clone();
                     let b_enter = b_title_e.clone();
                     let b_tf = br_title_focus.clone();
                     let m_tc = m_title_clear.clone();
@@ -2182,6 +2186,9 @@ pub fn editor_view(
                       .bg(move || palette(dark_mode.get()).surface_base)
                       .value(move || h_val.page_title.get())
                       .on_focus(move || {
+                        if let Some(cb) = &h_foc {
+                          cb(true);
+                        }
                         b_tf.clear_selection();
                         m_tc.clear();
                         touch_selection_active.set(false);
@@ -2190,8 +2197,16 @@ pub fn editor_view(
                         focused_table_cell.set(None);
                         editor_focused.set(false);
                       })
+                      .on_blur(move || {
+                        if let Some(cb) = &h_blur {
+                          cb(false);
+                        }
+                      })
                       .on_change(move |v: &str| (h_chg.on_rename_title)(v.to_owned()))
                       .on_submit(move |_: &str| {
+                        if let Some(cb) = &h_sub {
+                          cb(false);
+                        }
                         b_enter.prepend_empty_paragraph_and_focus();
                       })
                   }))

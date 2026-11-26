@@ -57,3 +57,4 @@
 - **2026-11-23**：沉淀应用外壳、多标签页、目录树 30/40/30 拖拽、多选与子树回收站规格。
 - **2026-11-25**：补齐 `clients/mica_rust` Windows PE 整数 ID `1` 图标资源嵌入（`build.rs` + `assets/app_icon.ico` + `mica.iss` `SetupIconFile`）及真机 Win32 `LoadIconW`/`LoadImageW` 回归测试。
 - **2026-11-26**：补齐侧边栏目录树拖拽排序时的边缘自动滚动（`virtual_list` 挂载 `ElementRef` + `on_scroll`/`on_layout` 实时几何测量 + 16ms 渐进滚屏循环 + 滚屏期间落点指示线同步刷新与 RAII 取消守卫），解决长列表拖到视口外无法自动跟滚的问题。
+- **2026-11-27**：修复云端删除复活与标题中间输入丢字——① `on_batch_trash` 改为单次原子 `POST /views/batch-trash`，`on_purge_all_trash` 接入 `DELETE /trash`；② `CloudSessionHandles` 引入 `views_refresh_gen` 代际丢弃与 RAII `PendingViewOps` 在途变更屏障，确保连续/批量删除期间收到的中间态 `views_changed` 延后到全部变更落库后再单次刷新，杜绝已删项复活；③ 页面标题输入改为 400ms 防抖 + 失焦/回车立即提交，并在聚焦或待提交期间屏蔽远端 `views_changed` 覆盖 `active_title`。

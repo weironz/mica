@@ -1319,6 +1319,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     active_doc,
     active_doc_id_str,
     active_title,
+    title_input_focused: signal(false),
     active_is_favorite,
     open_tabs,
     active_tab_idx,
@@ -1341,6 +1342,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     cloud_status,
     auth_gen,
     cloud_load_gen,
+    views_refresh_gen: signal(0u64),
+    pending_view_ops: Rc::new(RefCell::new(cloud_sync::PendingViewOps::default())),
     doc_fetch_gen,
     doc_save_gen,
     doc_loading,
@@ -1657,11 +1660,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let on_purge_all_trash: Rc<dyn Fn() -> usize> = {
     let v = vault.clone();
     let reload = reload_tree_from_vault.clone();
+    let cs = cloud_session.clone();
     Rc::new(move || {
       let orig = active_origin.get_untracked();
       let ws = active_workspace_id.get_untracked();
       let n = v.purge_all_trash(&orig, ws).unwrap_or(0);
       reload();
+      cs.spawn_cloud_op("云端清空回收站", move |c| async move {
+        c.purge_workspace_trash(ws).await
+      });
       n
     })
   };
@@ -1787,22 +1794,133 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
+  // Debounced cloud title rename state so rapid typing in the middle of the
+  // page title never fires concurrent out-of-order `PATCH /views/{id}` requests
+  // or gets clobbered by its own `views_changed` WS echo.
+  struct PendingTitleRename {
+    origin: String,
+    ws_id: Uuid,
+    view_id: Uuid,
+    name: String,
+  }
+  let title_rename_gen = signal(0u64);
+  let pending_title_rename: Rc<RefCell<Option<PendingTitleRename>>> = Rc::new(RefCell::new(None));
+
+  let flush_pending_title_rename: Rc<dyn Fn()> = {
+    let pending = pending_title_rename.clone();
+    let cs = cloud_session.clone();
+    Rc::new(move || {
+      let Some(PendingTitleRename {
+        origin: orig,
+        ws_id,
+        view_id: vid,
+        name: next_name,
+      }) = pending.borrow_mut().take()
+      else {
+        return;
+      };
+      if !cloud_sync::is_cloud_origin(&orig) || ws_id.is_nil() {
+        cs.pending_view_ops.borrow_mut().clear_pending_title(vid);
+        return;
+      }
+      let trimmed = next_name.trim().to_string();
+      if trimmed.is_empty() {
+        cs.pending_view_ops.borrow_mut().clear_pending_title(vid);
+        return;
+      }
+      let committed = next_name.clone();
+      let ops_done = cs.pending_view_ops.clone();
+      cs.spawn_cloud_op_with_done(
+        "云端重命名",
+        move |c| {
+          let rename_req = trimmed.clone();
+          async move { c.update_view(ws_id, vid, &rename_req, None).await.map(|_| ()) }
+        },
+        Some(Box::new(move |_ok| {
+          ops_done
+            .borrow_mut()
+            .clear_pending_title_if_matches(vid, &committed);
+        })),
+      );
+    })
+  };
+
+  let on_title_focus_change: Rc<dyn Fn(bool)> = {
+    let cs = cloud_session.clone();
+    let flush = flush_pending_title_rename.clone();
+    Rc::new(move |focused: bool| {
+      cs.title_input_focused.set(focused);
+      if !focused {
+        flush();
+      }
+    })
+  };
+
   let on_rename_active: Rc<dyn Fn(String)> = {
     let tree_ref = tree.clone();
-    let rename_v = on_rename_view.clone();
+    let v = vault.clone();
+    let ref_favs = refresh_favorite_pages.clone();
+    let sync_t = sync_tree_snapshots.clone();
+    let cs = cloud_session.clone();
+    let pending = pending_title_rename.clone();
+    let flush = flush_pending_title_rename.clone();
     Rc::new(move |next_name: String| {
       active_title.set(next_name.clone());
       let Some(doc_id) = active_doc.get_untracked() else {
         return;
       };
+      let orig = active_origin.get_untracked();
+      let cur_ws = active_workspace_id.get_untracked();
       let target_id = tree_ref
         .borrow()
         .all_live_rows()
         .into_iter()
         .find(|r| !r.is_folder && r.object_id == doc_id)
         .map(|r| r.view_id);
-      if let Some(vid) = target_id {
-        rename_v(vid, next_name);
+      let Some(vid) = target_id else {
+        return;
+      };
+      let updated = {
+        let mut t = tree_ref.borrow_mut();
+        t.get(vid).cloned().map(|mut row| {
+          row.name = next_name.clone();
+          row.updated_at = Utc::now();
+          t.upsert_view(row.clone());
+          row
+        })
+      };
+      if let Some(row) = updated {
+        let _ = v.save_view(&orig, &row);
+        let mut tabs = open_tabs.get_untracked();
+        for tab in &mut tabs {
+          if tab.doc_id == row.object_id {
+            tab.title = next_name.clone();
+          }
+        }
+        open_tabs.set(tabs);
+        ref_favs();
+        sync_t();
+
+        if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
+          cs.pending_view_ops
+            .borrow_mut()
+            .set_pending_title(vid, next_name.clone());
+          *pending.borrow_mut() = Some(PendingTitleRename {
+            origin: orig,
+            ws_id: cur_ws,
+            view_id: vid,
+            name: next_name,
+          });
+          let epoch = title_rename_gen.get_untracked().wrapping_add(1);
+          title_rename_gen.set(epoch);
+          let flush_t = flush.clone();
+          spawn(async move {
+            timer(std::time::Duration::from_millis(400)).await;
+            if title_rename_gen.get_untracked() == epoch {
+              flush_t();
+            }
+          });
+        }
       }
     })
   };
@@ -2202,11 +2320,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       transfer_modal_open.set(true);
     }),
     on_batch_trash: {
-      let trash_v = on_trash_view.clone();
+      let v = vault.clone();
+      let reload = reload_tree_from_vault.clone();
+      let cs = cloud_session.clone();
       Rc::new(move |ids: Vec<Uuid>| {
-        for id in ids {
-          trash_v(id);
+        if ids.is_empty() {
+          return;
         }
+        let orig = active_origin.get_untracked();
+        let cur_ws = active_workspace_id.get_untracked();
+        for &id in &ids {
+          let _ = v.trash_view_subtree(&orig, id);
+        }
+        reload();
+        cs.spawn_cloud_op("云端批量移入回收站", move |c| {
+          let ids = ids.clone();
+          async move { c.batch_trash_views(cur_ws, &ids).await }
+        });
       })
     },
     on_reorder_views,
@@ -2280,6 +2410,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     page_width: page_width_sig,
     ai_enabled,
     on_rename_title: on_rename_active,
+    on_title_focus_change: Some(on_title_focus_change),
     on_open_board: Rc::new(move || active_mode.set(MODE_BOARD)),
     on_toggle_favorite,
     on_toggle_right_panel: Rc::new(move || {

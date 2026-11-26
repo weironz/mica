@@ -578,6 +578,110 @@ pub fn persist_refreshed_tokens(
   }
 }
 
+/// Coordinates in-flight optimistic view mutations (delete, batch-trash,
+/// rename, reorder, empty-trash) against incoming `/ws/.../views` refresh
+/// broadcasts so an intermediate `GET /views` can never resurrect newly deleted
+/// items or clobber an in-progress title edit.
+#[derive(Default)]
+pub(crate) struct PendingViewOps {
+  in_flight: usize,
+  deferred_refresh: Option<(String, String, Uuid)>,
+  pending_title_renames: HashMap<Uuid, String>,
+}
+
+impl PendingViewOps {
+  pub(crate) fn begin_op(&mut self) {
+    self.in_flight = self.in_flight.saturating_add(1);
+  }
+
+  pub(crate) fn end_op(&mut self) -> Option<(String, String, Uuid)> {
+    self.in_flight = self.in_flight.saturating_sub(1);
+    if self.in_flight == 0 {
+      self.deferred_refresh.take()
+    } else {
+      None
+    }
+  }
+
+  pub(crate) fn has_in_flight(&self) -> bool {
+    self.in_flight > 0
+  }
+
+  pub(crate) fn defer_if_busy(
+    &mut self,
+    server_url: String,
+    cache_origin: String,
+    ws_id: Uuid,
+  ) -> bool {
+    if self.in_flight > 0 {
+      self.deferred_refresh = Some((server_url, cache_origin, ws_id));
+      true
+    } else {
+      false
+    }
+  }
+
+  pub(crate) fn mark_deferred_refresh(
+    &mut self,
+    server_url: String,
+    cache_origin: String,
+    ws_id: Uuid,
+  ) {
+    self.deferred_refresh = Some((server_url, cache_origin, ws_id));
+  }
+
+  pub(crate) fn set_pending_title(&mut self, view_id: Uuid, name: String) {
+    self.pending_title_renames.insert(view_id, name);
+  }
+
+  pub(crate) fn clear_pending_title_if_matches(&mut self, view_id: Uuid, committed: &str) {
+    if self
+      .pending_title_renames
+      .get(&view_id)
+      .is_some_and(|cur| cur == committed)
+    {
+      self.pending_title_renames.remove(&view_id);
+    }
+  }
+
+  pub(crate) fn clear_pending_title(&mut self, view_id: Uuid) {
+    self.pending_title_renames.remove(&view_id);
+  }
+
+  pub(crate) fn pending_title_for(&self, view_id: Uuid) -> Option<&str> {
+    self.pending_title_renames.get(&view_id).map(String::as_str)
+  }
+
+  pub(crate) fn clear_all_pending_titles(&mut self) {
+    self.pending_title_renames.clear();
+  }
+}
+
+/// RAII guard ensuring `PendingViewOps::in_flight` is always decremented even if
+/// an async cloud view task is cancelled or panics (`async-review-checklist.md` §3).
+struct ViewOpGuard {
+  handles: CloudSessionHandles,
+}
+
+impl ViewOpGuard {
+  fn enter(handles: CloudSessionHandles) -> Self {
+    handles.pending_view_ops.borrow_mut().begin_op();
+    handles
+      .views_refresh_gen
+      .set(handles.views_refresh_gen.get_untracked().wrapping_add(1));
+    Self { handles }
+  }
+}
+
+impl Drop for ViewOpGuard {
+  fn drop(&mut self) {
+    let follow_up = self.handles.pending_view_ops.borrow_mut().end_op();
+    if let Some((srv, orig, ws_id)) = follow_up {
+      self.handles.refresh_views_only(srv, orig, ws_id);
+    }
+  }
+}
+
 /// Shared UI & storage handles driving cloud auth, workspace bootstrap,
 /// tree refresh, and cloud CRUD mutations from `lib.rs`.
 #[derive(Clone)]
@@ -597,6 +701,7 @@ pub(crate) struct CloudSessionHandles {
   pub active_doc: Signal<Option<Uuid>>,
   pub active_doc_id_str: Signal<String>,
   pub active_title: Signal<String>,
+  pub title_input_focused: Signal<bool>,
   pub active_is_favorite: Signal<bool>,
   pub open_tabs: Signal<Vec<OpenTab>>,
   pub active_tab_idx: Signal<usize>,
@@ -619,6 +724,8 @@ pub(crate) struct CloudSessionHandles {
   pub cloud_status: Signal<String>,
   pub auth_gen: Signal<u64>,
   pub cloud_load_gen: Signal<u64>,
+  pub views_refresh_gen: Signal<u64>,
+  pub pending_view_ops: Rc<RefCell<PendingViewOps>>,
   pub doc_fetch_gen: Signal<u64>,
   pub doc_save_gen: Signal<u64>,
   pub doc_loading: Signal<bool>,
@@ -685,23 +792,49 @@ impl CloudSessionHandles {
     }
   }
 
-  /// Fire a background cloud mutation with transparent 401 token refresh and
-  /// ownership verification before reporting status or persisting rotated tokens.
+  /// Fire a background cloud mutation with transparent 401 token refresh,
+  /// ownership verification, and RAII in-flight view-op tracking so concurrent
+  /// `views_changed` WS events never resurrect optimistically deleted items.
   pub(crate) fn spawn_cloud_op<F, Fut>(&self, label: &'static str, op: F)
   where
     F: Fn(CloudConnector) -> Fut + 'static,
     Fut: std::future::Future<Output = Result<(), String>> + 'static,
   {
+    self.spawn_cloud_op_with_done(label, op, None);
+  }
+
+  /// Same as [`Self::spawn_cloud_op`], with an optional completion callback
+  /// invoked on the UI owner once the request settles (e.g., to release a
+  /// pending title rename lock).
+  pub(crate) fn spawn_cloud_op_with_done<F, Fut>(
+    &self,
+    label: &'static str,
+    op: F,
+    on_done: Option<Box<dyn FnOnce(bool)>>,
+  ) where
+    F: Fn(CloudConnector) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + 'static,
+  {
     let orig = self.active_origin.get_untracked();
     if !is_cloud_origin(&orig) || !self.is_cloud_signed_in.get_untracked() {
+      if let Some(cb) = on_done {
+        cb(true);
+      }
       return;
     }
+    let cur_ws = self.active_workspace_id.get_untracked();
     let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
+    let guard = ViewOpGuard::enter(self.clone());
     spawn(async move {
+      let _guard = guard;
       let res = with_auto_refresh(&mut conn, op).await.map(|(_, r)| (conn, r));
+      let ok = res.is_ok();
+      if let Some(cb) = on_done {
+        cb(ok);
+      }
       if h.active_origin.get_untracked() != orig {
         return;
       }
@@ -717,7 +850,14 @@ impl CloudSessionHandles {
           if CloudConnector::is_unauthorized_error(&err) {
             h.mark_cloud_session_expired(&srv_url, false);
           } else {
-            h.cloud_status.set(format!("{label}失败：{err}"));
+            let msg = format!("{label}失败：{err}");
+            h.cloud_status.set(msg.clone());
+            h.bridge.set_status_flash(msg);
+            if !cur_ws.is_nil() {
+              h.pending_view_ops
+                .borrow_mut()
+                .mark_deferred_refresh(srv_url, orig, cur_ws);
+            }
           }
         }
       }
@@ -736,6 +876,10 @@ impl CloudSessionHandles {
     mirror_to_vault: bool,
   ) {
     self.bridge.flush_pending_persist();
+    self
+      .views_refresh_gen
+      .set(self.views_refresh_gen.get_untracked().wrapping_add(1));
+    self.pending_view_ops.borrow_mut().clear_all_pending_titles();
     let is_cloud = is_cloud_origin(&origin);
     if mirror_to_vault {
       let _ = self.vault.replace_workspace_views(&origin, ws_id, &views);
@@ -866,11 +1010,21 @@ impl CloudSessionHandles {
 
   /// Lightweight sidebar-only tree refresh triggered by `/ws/workspaces/{ws}/views`
   /// (`{"type":"views_changed"}`) — updates folders, pages, titles, and trash
-  /// without disturbing the active editor CRDT document.
+  /// without disturbing the active editor CRDT document, any in-flight local view
+  /// mutation, or an in-progress title edit.
   pub(crate) fn refresh_views_only(&self, server_url: String, cache_origin: String, ws_id: Uuid) {
     if !is_cloud_origin(&cache_origin) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
       return;
     }
+    if self
+      .pending_view_ops
+      .borrow_mut()
+      .defer_if_busy(server_url.clone(), cache_origin.clone(), ws_id)
+    {
+      return;
+    }
+    let refresh_epoch = self.views_refresh_gen.get_untracked().wrapping_add(1);
+    self.views_refresh_gen.set(refresh_epoch);
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
@@ -885,17 +1039,29 @@ impl CloudSessionHandles {
         Ok::<_, String>((conn, merge_live_and_trash(live, trash, ws_id), rot))
       }
       .await;
-      if h.active_origin.get_untracked() != cache_origin
+      if h.views_refresh_gen.get_untracked() != refresh_epoch
+        || h.pending_view_ops.borrow().has_in_flight()
+        || h.active_origin.get_untracked() != cache_origin
         || h.active_workspace_id.get_untracked() != ws_id
         || !h.is_cloud_signed_in.get_untracked()
       {
         return;
       }
-      if let Ok((conn, merged, rot)) = res {
+      if let Ok((conn, mut merged, rot)) = res {
         if rot.is_some() {
           *h.cloud_connector.borrow_mut() = conn;
           if h.allow_local {
             persist_refreshed_tokens(&h.vault, &server_url, &email, rot);
+          }
+        }
+        // Preserve any locally typed, not-yet-flushed title edits so a background
+        // `views_changed` refresh never reverts the sidebar or title input mid-edit.
+        {
+          let ops = h.pending_view_ops.borrow();
+          for row in &mut merged {
+            if let Some(local_name) = ops.pending_title_for(row.id) {
+              row.name = local_name.to_string();
+            }
           }
         }
         let _ = h.vault.replace_workspace_views(&cache_origin, ws_id, &merged);
@@ -917,16 +1083,19 @@ impl CloudSessionHandles {
           && let Some(row) = merged
             .iter()
             .find(|v| is_page_view(v) && !v.is_deleted && v.object_id == cur_doc)
-          && h.active_title.get_untracked() != row.name
         {
-          h.active_title.set(row.name.clone());
-          let mut tabs = h.open_tabs.get_untracked();
-          for tab in &mut tabs {
-            if tab.doc_id == cur_doc {
-              tab.title = row.name.clone();
+          let editing_this_title = h.title_input_focused.get_untracked()
+            || h.pending_view_ops.borrow().pending_title_for(row.id).is_some();
+          if !editing_this_title && h.active_title.get_untracked() != row.name {
+            h.active_title.set(row.name.clone());
+            let mut tabs = h.open_tabs.get_untracked();
+            for tab in &mut tabs {
+              if tab.doc_id == cur_doc {
+                tab.title = row.name.clone();
+              }
             }
+            h.open_tabs.set(tabs);
           }
-          h.open_tabs.set(tabs);
         }
         (h.refresh_favorite_pages)();
         (h.sync_tree_snapshots)();
@@ -2159,5 +2328,42 @@ mod tests {
     }
     clear_refresh_gate_for_server(&base_url);
     drop(server_thread);
+  }
+
+  #[test]
+  fn pending_view_ops_defers_refresh_until_all_mutations_finish_and_protects_title() {
+    let mut ops = PendingViewOps::default();
+    let ws = Uuid::new_v4();
+    let vid = Uuid::new_v4();
+
+    // No in-flight ops -> refresh runs immediately.
+    assert!(!ops.defer_if_busy("https://mica.example".into(), "cloud".into(), ws));
+
+    // Two overlapping mutations (e.g. rapid delete A + delete B):
+    ops.begin_op();
+    ops.begin_op();
+    assert!(ops.has_in_flight());
+    // Incoming WS `views_changed` after delete A MUST be deferred so delete B doesn't resurrect.
+    assert!(ops.defer_if_busy("https://mica.example".into(), "cloud".into(), ws));
+    assert!(ops.end_op().is_none(), "still 1 op in flight");
+    // Last op finishes -> returns exactly one coalesced follow-up refresh.
+    let follow_up = ops.end_op();
+    assert_eq!(
+      follow_up,
+      Some(("https://mica.example".to_string(), "cloud".to_string(), ws))
+    );
+    assert!(!ops.has_in_flight());
+
+    // Pending title rename protects against stale overwrite and only clears when matching committed text.
+    ops.set_pending_title(vid, "测试abc标题".to_string());
+    assert_eq!(ops.pending_title_for(vid), Some("测试abc标题"));
+    ops.clear_pending_title_if_matches(vid, "测试a标题");
+    assert_eq!(
+      ops.pending_title_for(vid),
+      Some("测试abc标题"),
+      "older committed rename must not unlock newer in-progress typing"
+    );
+    ops.clear_pending_title_if_matches(vid, "测试abc标题");
+    assert_eq!(ops.pending_title_for(vid), None);
   }
 }
