@@ -166,11 +166,31 @@ pub fn board_view_with_rev_and_close(
   on_persist_board: Rc<dyn Fn(String)>,
   on_close: Option<Rc<dyn Fn()>>,
 ) -> impl IntoElement {
-  let initial_title = session.borrow().snapshot().title.clone();
+  let (initial_title, initial_mode, initial_tool, initial_undo, initial_redo, initial_counts, initial_zoom, initial_insp) = {
+    let s = session.borrow();
+    let snap = s.snapshot();
+    (
+      snap.title.clone(),
+      snap.mode.clone(),
+      s.tool(),
+      s.can_undo(),
+      s.can_redo(),
+      (snap.nodes.len(), snap.edges.len()),
+      (s.zoom() * 100.0).round() as i32,
+      compute_inspector_state(&s, false),
+    )
+  };
   let ctx = BoardCtx {
     session,
     rev,
     dark_mode,
+    tool_sig: signal(initial_tool),
+    board_mode_sig: signal(initial_mode),
+    can_undo_sig: signal(initial_undo),
+    can_redo_sig: signal(initial_redo),
+    counts_sig: signal(initial_counts),
+    zoom_pct_sig: signal(initial_zoom),
+    inspector_state: signal(initial_insp),
     title_draft: signal(initial_title),
     editing_node_id: signal(None),
     editing_draft: signal(String::new()),
@@ -189,6 +209,7 @@ pub fn board_view_with_rev_and_close(
     viewport_size: signal((1040.0, 680.0)),
     did_initial_fit: signal(false),
     space_held: signal(false),
+    last_move_ms: Rc::new(std::cell::Cell::new(0)),
     #[cfg(not(target_arch = "wasm32"))]
     mounted_at: std::time::Instant::now(),
     on_persist: on_persist_board,
@@ -199,9 +220,8 @@ pub fn board_view_with_rev_and_close(
 
   let (space_down, space_up, toast_sig) = (ctx.space_held, ctx.space_held, ctx.toast_msg);
   let (c_paint, c_layout, c_pdown) = (ctx.clone(), ctx.clone(), ctx.clone());
-  let (c_pmove, c_pup, c_wheel) = (ctx.clone(), ctx.clone(), ctx.clone());
-  let (c_inline_cond, c_inline_body) = (ctx.clone(), ctx.clone());
-  let (c_insp_cond, c_insp_body) = (ctx.clone(), ctx.clone());
+  let (c_pmove, c_pup, c_root_up, c_wheel) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
+  let (c_inline_cond, c_inline_body, c_insp) = (ctx.clone(), ctx.clone(), ctx.clone());
   let (c_edge_cond, c_edge_body) = (ctx.clone(), ctx.clone());
   let (c_md_cond, c_md_body) = (ctx.clone(), ctx.clone());
   let (c_imp_cond, c_imp_body) = (ctx.clone(), ctx.clone());
@@ -210,6 +230,7 @@ pub fn board_view_with_rev_and_close(
   view()
     .flex_1().w_full().h_full().relative().overflow_hidden()
     .bg(move || bc::canvas(dark_mode.get()))
+    .on_mouse_up(move |_: &MouseEvent| c_root_up.finish_gesture_if_active())
     .on_key_down(move |ev: &KeyEvent| {
       if ev.key == " " || ev.code == "Space" { space_down.set(true); }
     })
@@ -261,34 +282,56 @@ pub fn board_view_with_rev_and_close(
               } else if let Some(eid) = sel_edge {
                 let lbl = c_pdown.session.borrow().snapshot().edges.iter()
                   .find(|e| e.id == eid).map(|e| e.label.clone()).unwrap_or_default();
+                c_pdown.finish_gesture_if_active();
                 c_pdown.editing_edge_draft.set(lbl);
                 c_pdown.editing_edge_id.set(Some(eid));
+                c_pdown.sync_chrome();
               }
             }
           })
           .on_mouse_move(move |ev: &MouseEvent| {
             let (sx, sy) = (f32::from(ev.position.x) as f64, f32::from(ev.position.y) as f64);
             if let Some(btn) = ev.pressed_button {
-              if btn == MouseButton::Middle && matches!(c_pmove.session.borrow().gesture(), GestureState::Idle) {
-                c_pmove.dispatch_and_handle(BoardCommand::PointerDown {
-                  screen_x: sx, screen_y: sy, button: 1, shift: ev.modifiers.shift,
-                  alt: ev.modifiers.alt, space: false, read_only: false, timestamp_ms: None,
-                });
-              } else {
-                c_pmove.session.borrow_mut().dispatch(BoardCommand::PointerMove { screen_x: sx, screen_y: sy, alt: ev.modifiers.alt });
+              let is_idle = matches!(c_pmove.session.borrow().gesture(), GestureState::Idle);
+              if is_idle {
+                if btn == MouseButton::Middle {
+                  c_pmove.dispatch_and_handle(BoardCommand::PointerDown {
+                    screen_x: sx, screen_y: sy, button: 1, shift: ev.modifiers.shift,
+                    alt: ev.modifiers.alt, space: false, read_only: false, timestamp_ms: None,
+                  });
+                }
+                return;
+              }
+              let now = c_pmove.now_ms();
+              let prev = c_pmove.last_move_ms.get();
+              if now > prev && now - prev < 8 {
+                return;
+              }
+              c_pmove.last_move_ms.set(now);
+              let changed = {
+                let mut s = c_pmove.session.borrow_mut();
+                let before = s.active_rev();
+                s.dispatch(BoardCommand::PointerMove { screen_x: sx, screen_y: sy, alt: ev.modifiers.alt });
+                s.active_rev() != before
+              };
+              if changed {
                 c_pmove.bump();
               }
             } else {
+              // Auto-recover if mouse button was released outside window or over a floating overlay.
+              c_pmove.finish_gesture_if_active();
               let changed = {
                 let mut s = c_pmove.session.borrow_mut();
                 let before = s.active_rev();
                 s.dispatch(BoardCommand::PointerHover { screen_x: sx, screen_y: sy });
                 s.active_rev() != before
               };
-              if changed { c_pmove.bump(); }
+              if changed {
+                c_pmove.bump();
+              }
             }
           })
-          .on_mouse_up(move |_: &MouseEvent| { c_pup.dispatch_and_handle(BoardCommand::PointerUp); })
+          .on_mouse_up(move |_: &MouseEvent| c_pup.finish_gesture_if_active())
           .on_wheel(move |ev: &WheelEvent| {
             let dy = match ev.delta {
               WheelDelta::Points(pt) => f32::from(pt.y),
@@ -303,18 +346,13 @@ pub fn board_view_with_rev_and_close(
           .flex_1().w_full().h_full(),
         )
         .child(build_left_dock(&ctx))
-        .child(when(
-          move || {
-            c_insp_cond.rev.get();
-            if c_insp_cond.editing_node_id.get().is_some() || c_insp_cond.editing_edge_id.get().is_some() {
-              return false;
-            }
-            let s = c_insp_cond.session.borrow();
-            let busy = matches!(s.gesture(), GestureState::Drag(_) | GestureState::Resize(_) | GestureState::Connector(_));
-            !busy && (!s.selected_node_ids().is_empty() || s.selected_edge_id().is_some())
-          },
-          move || build_contextual_inspector(&c_insp_body),
-        ))
+        .child(dynamic(move || {
+          let Some(state) = c_insp.inspector_state.get() else {
+            return view().into_element();
+          };
+          let dark = c_insp.dark_mode.get();
+          build_contextual_inspector_for(&c_insp, &state, dark).into_element()
+        }))
         .child(when(move || c_inline_cond.editing_node_id.get().is_some(), move || {
           build_world_inline_editor(&c_inline_body)
         }))
@@ -337,11 +375,73 @@ pub fn board_view_with_rev_and_close(
 // Board Context & Unified Command + UiEffect Loop
 // ============================================================================
 
+#[derive(Clone, PartialEq)]
+enum InspectorState {
+  Node {
+    fill: String,
+    stroke: String,
+    dashed: bool,
+    font_size_tenths: i32,
+  },
+  Edge {
+    edge_id: String,
+    routing: String,
+    stroke: String,
+    dashed: bool,
+    arrow_end: String,
+    label: String,
+  },
+}
+
+fn compute_inspector_state(s: &BoardSession, editing_any: bool) -> Option<InspectorState> {
+  if editing_any {
+    return None;
+  }
+  let busy = matches!(
+    s.gesture(),
+    GestureState::Drag(_)
+      | GestureState::Resize(_)
+      | GestureState::Connector(_)
+      | GestureState::Marquee(_)
+  );
+  if busy {
+    return None;
+  }
+  if let Some(first) = s.selected_node_ids().first().and_then(|id| s.node_by_id(id)) {
+    return Some(InspectorState::Node {
+      fill: first.style.fill.clone(),
+      stroke: first.style.stroke.clone(),
+      dashed: first.style.dashed,
+      font_size_tenths: (first.style.font_size * 10.0).round() as i32,
+    });
+  }
+  if let Some(eid) = s.selected_edge_id()
+    && let Some(edge) = s.snapshot().edges.iter().find(|e| e.id == eid)
+  {
+    return Some(InspectorState::Edge {
+      edge_id: edge.id.clone(),
+      routing: edge.routing.clone(),
+      stroke: edge.style.stroke.clone(),
+      dashed: edge.style.dashed,
+      arrow_end: edge.arrow_end.clone(),
+      label: edge.label.clone(),
+    });
+  }
+  None
+}
+
 #[derive(Clone)]
 struct BoardCtx {
   session: Rc<RefCell<BoardSession>>,
   rev: Signal<u64>,
   dark_mode: Signal<bool>,
+  tool_sig: Signal<BoardTool>,
+  board_mode_sig: Signal<String>,
+  can_undo_sig: Signal<bool>,
+  can_redo_sig: Signal<bool>,
+  counts_sig: Signal<(usize, usize)>,
+  zoom_pct_sig: Signal<i32>,
+  inspector_state: Signal<Option<InspectorState>>,
   title_draft: Signal<String>,
   editing_node_id: Signal<Option<String>>,
   editing_draft: Signal<String>,
@@ -360,6 +460,7 @@ struct BoardCtx {
   viewport_size: Signal<(f32, f32)>,
   did_initial_fit: Signal<bool>,
   space_held: Signal<bool>,
+  last_move_ms: Rc<std::cell::Cell<u64>>,
   #[cfg(not(target_arch = "wasm32"))]
   mounted_at: std::time::Instant,
   on_persist: Rc<dyn Fn(String)>,
@@ -368,6 +469,38 @@ struct BoardCtx {
 
 impl BoardCtx {
   fn bump(&self) { self.rev.set(self.rev.get_untracked() + 1); }
+
+  fn sync_chrome(&self) {
+    let editing_any = self.editing_node_id.get_untracked().is_some()
+      || self.editing_edge_id.get_untracked().is_some();
+    let (tool, mode, can_undo, can_redo, counts, zoom_pct, insp) = {
+      let s = self.session.borrow();
+      let snap = s.snapshot();
+      (
+        s.tool(),
+        snap.mode.clone(),
+        s.can_undo(),
+        s.can_redo(),
+        (snap.nodes.len(), snap.edges.len()),
+        (s.zoom() * 100.0).round() as i32,
+        compute_inspector_state(&s, editing_any),
+      )
+    };
+    if self.tool_sig.get_untracked() != tool { self.tool_sig.set(tool); }
+    if self.board_mode_sig.get_untracked() != mode { self.board_mode_sig.set(mode); }
+    if self.can_undo_sig.get_untracked() != can_undo { self.can_undo_sig.set(can_undo); }
+    if self.can_redo_sig.get_untracked() != can_redo { self.can_redo_sig.set(can_redo); }
+    if self.counts_sig.get_untracked() != counts { self.counts_sig.set(counts); }
+    if self.zoom_pct_sig.get_untracked() != zoom_pct { self.zoom_pct_sig.set(zoom_pct); }
+    if self.inspector_state.get_untracked() != insp { self.inspector_state.set(insp); }
+  }
+
+  fn finish_gesture_if_active(&self) {
+    let active = !matches!(self.session.borrow().gesture(), GestureState::Idle);
+    if active {
+      self.dispatch_and_handle(BoardCommand::PointerUp);
+    }
+  }
 
   fn now_ms(&self) -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
@@ -434,6 +567,7 @@ impl BoardCtx {
       }
     }
 
+    self.sync_chrome();
     self.bump();
     if let Some(json) = next_json { (self.on_persist)(json); }
     patch
@@ -516,6 +650,7 @@ impl BoardCtx {
       s.export_compact_json()
     };
     self.editing_node_id.set(None);
+    self.sync_chrome();
     self.bump();
     (self.on_persist)(json);
   }
@@ -723,7 +858,11 @@ fn register_board_shortcuts(ctx: &BoardCtx) {
   let c_esc = ctx.clone();
   on_key_with("escape", KeyOptions { when: When::Always, pass_through: true, ..KeyOptions::default() }, move |_| {
     if c_esc.show_md_import_modal.get_untracked() { c_esc.show_md_import_modal.set(false); return; }
-    if c_esc.editing_edge_id.get_untracked().is_some() { c_esc.editing_edge_id.set(None); return; }
+    if c_esc.editing_edge_id.get_untracked().is_some() {
+      c_esc.editing_edge_id.set(None);
+      c_esc.sync_chrome();
+      return;
+    }
     if c_esc.show_shape_panel.get_untracked() || c_esc.show_icon_panel.get_untracked()
       || c_esc.show_import_menu.get_untracked() || c_esc.show_export_menu.get_untracked()
     {
@@ -747,8 +886,13 @@ fn floating_panel(dm: Signal<bool>, tid: &'static str, radius: f32) -> View {
 }
 
 fn build_top_bar(ctx: &BoardCtx) -> impl IntoElement {
-  let (dm, rev, title_draft) = (ctx.dark_mode, ctx.rev, ctx.title_draft);
-  let (s_mode, s_undo, s_redo, s_count) = (ctx.session.clone(), ctx.session.clone(), ctx.session.clone(), ctx.session.clone());
+  let (dm, title_draft) = (ctx.dark_mode, ctx.title_draft);
+  let (mode_sig, can_undo_sig, can_redo_sig, counts_sig) = (
+    ctx.board_mode_sig,
+    ctx.can_undo_sig,
+    ctx.can_redo_sig,
+    ctx.counts_sig,
+  );
   let (c_title_sub, c_undo, c_redo, c_layout) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
   let (c_imp_btn, c_exp_btn, c_svg_quick, c_done) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
 
@@ -757,8 +901,7 @@ fn build_top_bar(ctx: &BoardCtx) -> impl IntoElement {
     .flex_row().items_center().gap_2().border_b_1()
     .border_color(move || bc::border(dm.get())).bg(move || bc::panel(dm.get()))
     .child(dynamic(move || {
-      rev.get();
-      let glyph = if s_mode.borrow().snapshot().mode == "mindmap" { ICON_MINDMAP } else { ICON_DRAW };
+      let glyph = if mode_sig.get() == "mindmap" { ICON_MINDMAP } else { ICON_DRAW };
       dock_svg(19.0, "#3370FF", glyph)
     }))
     .child(
@@ -776,8 +919,7 @@ fn build_top_bar(ctx: &BoardCtx) -> impl IntoElement {
         .hover(move |s| s.bg(bc::chip(dm.get_untracked())))
         .on_press(move || { c_undo.dispatch_and_handle(BoardCommand::Undo); })
         .child(dynamic(move || {
-          rev.get();
-          mica_icons::undo(if s_undo.borrow().can_undo() { bc::icon_hex(dm.get()) } else { "#9CA3AF" })
+          mica_icons::undo(if can_undo_sig.get() { bc::icon_hex(dm.get()) } else { "#9CA3AF" })
         })),
     )
     .child(
@@ -786,8 +928,7 @@ fn build_top_bar(ctx: &BoardCtx) -> impl IntoElement {
         .hover(move |s| s.bg(bc::chip(dm.get_untracked())))
         .on_press(move || { c_redo.dispatch_and_handle(BoardCommand::Redo); })
         .child(dynamic(move || {
-          rev.get();
-          mica_icons::redo(if s_redo.borrow().can_redo() { bc::icon_hex(dm.get()) } else { "#9CA3AF" })
+          mica_icons::redo(if can_redo_sig.get() { bc::icon_hex(dm.get()) } else { "#9CA3AF" })
         })),
     )
     .child(
@@ -795,7 +936,7 @@ fn build_top_bar(ctx: &BoardCtx) -> impl IntoElement {
         .px_2().h(px(30.0)).flex_row().items_center().gap_1().rounded(px(6.0))
         .hover(move |s| s.bg(bc::chip(dm.get_untracked())))
         .on_press(move || { c_layout.dispatch_and_handle(BoardCommand::LayoutMindmap); })
-        .child(dynamic(move || dock_svg(15.0, "#3370FF", ICON_WAND)))
+        .child(dock_svg(15.0, "#3370FF", ICON_WAND))
         .child(text("Auto Layout").text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(move || bc::ink(dm.get()))),
     )
     .child(
@@ -832,9 +973,8 @@ fn build_top_bar(ctx: &BoardCtx) -> impl IntoElement {
     .child(view().flex_1())
     .child(
       text(move || {
-        rev.get();
-        let s = s_count.borrow();
-        format!("{} 图形 · {} 连线", s.snapshot().nodes.len(), s.snapshot().edges.len())
+        let (nodes, edges) = counts_sig.get();
+        format!("{nodes} 图形 · {edges} 连线")
       })
       .text_size(px(12.0)).text_color(move || bc::muted(dm.get())),
     )
@@ -933,19 +1073,16 @@ fn dock_tool_btn(
   is_active: impl Fn(BoardTool, bool, bool) -> bool + Copy + 'static,
   on_click: impl Fn() + 'static,
 ) -> impl IntoElement {
-  let (dm, rev, sp, ip) = (ctx.dark_mode, ctx.rev, ctx.show_shape_panel, ctx.show_icon_panel);
-  let (s_bg, s_fg) = (ctx.session.clone(), ctx.session.clone());
+  let (dm, tool_sig, sp, ip) = (ctx.dark_mode, ctx.tool_sig, ctx.show_shape_panel, ctx.show_icon_panel);
   button()
     .test_id(tid).accessibility_label(tooltip_text)
     .w(px(36.0)).h(px(36.0)).items_center().justify_center().rounded(px(8.0))
     .bg(move || {
-      rev.get();
-      if is_active(s_bg.borrow().tool(), sp.get(), ip.get()) { bc::brand_wash(dm.get()) } else { rgba_const(0x000000, 0.0) }
+      if is_active(tool_sig.get(), sp.get(), ip.get()) { bc::brand_wash(dm.get()) } else { rgba_const(0x000000, 0.0) }
     })
     .hover(move |s| s.bg(bc::chip(dm.get_untracked()))).on_press(on_click)
     .child(dynamic(move || {
-      rev.get();
-      let col = if is_active(s_fg.borrow().tool(), sp.get(), ip.get()) { "#3370FF" } else { bc::icon_hex(dm.get()) };
+      let col = if is_active(tool_sig.get(), sp.get(), ip.get()) { "#3370FF" } else { bc::icon_hex(dm.get()) };
       dock_svg(19.0, col, svg_inner)
     }))
 }
@@ -1012,51 +1149,49 @@ fn build_tech_icon_flyout(ctx: &BoardCtx) -> impl IntoElement + use<> {
 // Top-Center Contextual Floating Inspector (Node Mode + Edge Mode)
 // ============================================================================
 
-fn build_contextual_inspector(ctx: &BoardCtx) -> impl IntoElement + use<> {
-  let (dm, c_dyn) = (ctx.dark_mode, ctx.clone());
+fn build_contextual_inspector_for(ctx: &BoardCtx, state: &InspectorState, dark: bool) -> impl IntoElement + use<> {
+  let body = match state {
+    InspectorState::Node { fill, stroke, dashed, font_size_tenths } => {
+      build_node_inspector_row(ctx, fill, stroke, *dashed, (*font_size_tenths as f64) / 10.0, dark).into_element()
+    }
+    InspectorState::Edge { edge_id, routing, stroke, dashed, arrow_end, label } => {
+      build_edge_inspector_row(ctx, edge_id, routing, stroke, *dashed, arrow_end, label, dark).into_element()
+    }
+  };
   view()
     .test_id("board-inspector-wrap").absolute().top(px(14.0)).left(px(68.0)).right(px(68.0)).z_index(24)
     .pointer_events(PointerEvents::BoxNone).flex_row().justify_center()
     .child(
-      floating_panel(dm, "board-inspector-card", 10.0).px(px(10.0)).py(px(6.0))
-        .child(dynamic(move || {
-          c_dyn.rev.get();
-          let dark = c_dyn.dark_mode.get();
-          let s = c_dyn.session.borrow();
-          if let Some(first) = s.selected_node_ids().first().and_then(|id| s.node_by_id(id)).cloned() {
-            drop(s);
-            build_node_inspector_row(&c_dyn, &first, dark).into_element()
-          } else if let Some(eid) = s.selected_edge_id()
-            && let Some(edge) = s.snapshot().edges.iter().find(|e| e.id == eid).cloned()
-          {
-            drop(s);
-            build_edge_inspector_row(&c_dyn, &edge, dark).into_element()
-          } else {
-            view().into_element()
-          }
-        })),
+      floating_panel(ctx.dark_mode, "board-inspector-card", 10.0).px(px(10.0)).py(px(6.0))
+        .child(body),
     )
 }
 
-fn build_node_inspector_row(ctx: &BoardCtx, first: &BoardNode, dark: bool) -> impl IntoElement {
+fn build_node_inspector_row(
+  ctx: &BoardCtx,
+  fill: &str,
+  stroke: &str,
+  dashed: bool,
+  fs: f64,
+  dark: bool,
+) -> impl IntoElement {
   let bcol = bc::border(dark);
   let mut row = view().flex_row().flex_wrap().items_center().gap(px(5.0));
 
   for &(hex, tid, col) in FILL_SWATCHES {
     let c = ctx.clone();
-    row = row.child(color_dot_btn(tid, hex, col, false, first.style.fill.eq_ignore_ascii_case(hex), move || {
+    row = row.child(color_dot_btn(tid, hex, col, false, fill.eq_ignore_ascii_case(hex), move || {
       c.style_nodes(Some(hex), None, None, None);
     }));
   }
   row = row.child(v_sep(bcol));
   for &(hex, tid, col) in STROKE_SWATCHES {
     let c = ctx.clone();
-    row = row.child(color_dot_btn(tid, hex, col, true, first.style.stroke.eq_ignore_ascii_case(hex), move || {
+    row = row.child(color_dot_btn(tid, hex, col, true, stroke.eq_ignore_ascii_case(hex), move || {
       c.style_nodes(None, Some(hex), None, None);
     }));
   }
 
-  let (dashed, fs) = (first.style.dashed, first.style.font_size);
   let (c_dash, c_fdec, c_finc) = (ctx.clone(), ctx.clone(), ctx.clone());
   let (c_child, c_sib, c_edit) = (ctx.clone(), ctx.clone(), ctx.clone());
   let (c_front, c_back, c_dup, c_del) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
@@ -1083,28 +1218,38 @@ fn build_node_inspector_row(ctx: &BoardCtx, first: &BoardNode, dark: bool) -> im
     .child(insp_chip("board-delete", "删除", "删除 (Delete)", false, true, dark, move || { c_del.dispatch_and_handle(BoardCommand::DeleteSelection); }))
 }
 
-fn build_edge_inspector_row(ctx: &BoardCtx, edge: &BoardEdge, dark: bool) -> impl IntoElement {
+#[allow(clippy::too_many_arguments)]
+fn build_edge_inspector_row(
+  ctx: &BoardCtx,
+  edge_id: &str,
+  routing: &str,
+  stroke: &str,
+  dashed: bool,
+  arrow_end: &str,
+  label: &str,
+  dark: bool,
+) -> impl IntoElement {
   let bcol = bc::border(dark);
   let mut row = view().flex_row().flex_wrap().items_center().gap(px(5.0));
 
-  for (rkey, label, tid) in [("orthogonal", "折线", "board-edge-ortho"), ("curved", "曲线", "board-edge-curved"), ("straight", "直线", "board-edge-straight")] {
-    let (c, active) = (ctx.clone(), edge.routing == rkey);
+  for (rkey, rlabel, tid) in [("orthogonal", "折线", "board-edge-ortho"), ("curved", "曲线", "board-edge-curved"), ("straight", "直线", "board-edge-straight")] {
+    let (c, active) = (ctx.clone(), routing == rkey);
     row = row.child(
-      button().test_id(tid).accessibility_label(label).px_2().py(px(4.0)).rounded(px(6.0))
+      button().test_id(tid).accessibility_label(rlabel).px_2().py(px(4.0)).rounded(px(6.0))
         .bg(if active { bc::BRAND } else { bc::chip(dark) })
         .on_press(move || c.style_edge(Some(rkey), None, None, None))
-        .child(text(label).text_size(px(12.0)).text_color(if active { rgb_const(0xFFFFFF) } else { bc::ink(dark) })),
+        .child(text(rlabel).text_size(px(12.0)).text_color(if active { rgb_const(0xFFFFFF) } else { bc::ink(dark) })),
     );
   }
   row = row.child(v_sep(bcol));
   for &(hex, tid, col) in STROKE_SWATCHES {
     let c = ctx.clone();
-    row = row.child(color_dot_btn(tid, hex, col, false, edge.style.stroke.eq_ignore_ascii_case(hex), move || {
+    row = row.child(color_dot_btn(tid, hex, col, false, stroke.eq_ignore_ascii_case(hex), move || {
       c.style_edge(None, Some(hex), None, None);
     }));
   }
 
-  let (dashed, has_arrow, eid, elbl) = (edge.style.dashed, edge.arrow_end == "arrow", edge.id.clone(), edge.label.clone());
+  let (has_arrow, eid, elbl) = (arrow_end == "arrow", edge_id.to_owned(), label.to_owned());
   let (c_dash, c_arr, c_lbl, c_del) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
 
   row
@@ -1118,6 +1263,7 @@ fn build_edge_inspector_row(ctx: &BoardCtx, edge: &BoardEdge, dark: bool) -> imp
     .child(insp_chip("board-edge-edit-label", "编辑标签", "编辑连线标签", false, false, dark, move || {
       c_lbl.editing_edge_draft.set(elbl.clone());
       c_lbl.editing_edge_id.set(Some(eid.clone()));
+      c_lbl.sync_chrome();
     }))
     .child(insp_chip("board-edge-delete", "删除连线", "删除选中连线", false, true, dark, move || {
       c_del.dispatch_and_handle(BoardCommand::DeleteSelection);
@@ -1264,7 +1410,11 @@ fn build_edge_label_modal(ctx: &BoardCtx) -> impl IntoElement + use<> {
   modal_overlay(
     dm, "board-edge-label-modal", 360.0, "编辑连线文字", field,
     "board-edge-label-cancel", "board-edge-label-confirm", "确定",
-    move || c_cancel.editing_edge_id.set(None), move || commit(&c_ok),
+    move || {
+      c_cancel.editing_edge_id.set(None);
+      c_cancel.sync_chrome();
+    },
+    move || commit(&c_ok),
   )
 }
 
@@ -1289,7 +1439,7 @@ fn build_md_import_modal(ctx: &BoardCtx) -> impl IntoElement + use<> {
 // ============================================================================
 
 fn build_zoom_pill(ctx: &BoardCtx) -> impl IntoElement {
-  let (dm, rev, s_zoom) = (ctx.dark_mode, ctx.rev, ctx.session.clone());
+  let (dm, zoom_pct) = (ctx.dark_mode, ctx.zoom_pct_sig);
   let (c_out, c_reset, c_in, c_fit) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
 
   floating_panel(dm, "board-zoom-pill", 10.0)
@@ -1301,7 +1451,7 @@ fn build_zoom_pill(ctx: &BoardCtx) -> impl IntoElement {
         .px(px(6.0)).h(px(28.0)).items_center().justify_center().rounded(px(6.0))
         .hover(move |s| s.bg(bc::chip(dm.get_untracked()))).on_press(move || c_reset.reset_zoom())
         .child(
-          text(move || { rev.get(); format!("{:.0}%", (s_zoom.borrow().zoom() * 100.0).round()) })
+          text(move || format!("{}%", zoom_pct.get()))
             .text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(move || bc::ink(dm.get())),
         ),
     )
@@ -1446,26 +1596,35 @@ fn paint_board(s: &BoardSession, dark: bool, viewport: (f32, f32)) -> Painter {
   p.restore()
 }
 
+/// Renders the infinite dot grid in a single batched dashed-stroke path
+/// (~30 horizontal dashed segments -> 1 Direct2D geometry + 1 brush per frame)
+/// instead of thousands of individual `fill_rect` COM geometries.
 fn paint_dot_grid(mut p: Painter, pan_x: f32, pan_y: f32, zoom: f32, vw: f32, vh: f32, dark: bool) -> Painter {
   let mut world_step = 28.0f32;
-  while world_step * zoom < 12.0 { world_step *= 2.0; }
+  while world_step * zoom < 14.0 { world_step *= 2.0; }
   let mut step = world_step * zoom;
-  if step < 8.0 { return p; }
-  while (vw / step) * (vh / step) > 4800.0 { step *= 2.0; }
+  if !step.is_finite() || step < 8.0 { return p; }
+  while (vh / step) > 120.0 { step *= 2.0; }
   let (start_x, start_y) = (pan_x.rem_euclid(step), pan_y.rem_euclid(step));
-  let dot_size = (1.5 * zoom).clamp(1.2, 2.4);
+  if !start_x.is_finite() || !start_y.is_finite() { return p; }
+  let dot_size = (1.6 * zoom).clamp(1.2, 2.4);
   let half = dot_size * 0.5;
-  p = p.fill_color(if dark { bc::DOT_DARK } else { bc::DOT_LIGHT });
+  let gap = (step - dot_size).max(1.0);
+  p = p
+    .save()
+    .stroke_color(if dark { bc::DOT_DARK } else { bc::DOT_LIGHT })
+    .line_width(px(dot_size))
+    .line_cap(LineCap::Butt)
+    .line_dash(&[px(dot_size), px(gap)])
+    .begin_path();
+  let x0 = start_x - half;
+  let x1 = vw + step;
   let mut y = start_y;
   while y <= vh + step {
-    let mut x = start_x;
-    while x <= vw + step {
-      p = p.fill_rect(px(x - half), px(y - half), px(dot_size), px(dot_size));
-      x += step;
-    }
+    p = p.move_to(px(x0), px(y)).line_to(px(x1), px(y));
     y += step;
   }
-  p
+  p.stroke().restore()
 }
 
 fn paint_edge(mut p: Painter, edge: &BoardEdge, pts: &[[f64; 2]], selected: bool, dark: bool) -> Painter {
@@ -1601,13 +1760,18 @@ fn paint_node(mut p: Painter, node: &BoardNode, dark: bool) -> Painter {
     let elevated = matches!(node.kind.as_str(), "sticky" | "rounded" | "mind_root" | "mind_node");
     if let Some(fill) = fill_opt {
       if elevated {
+        // Crisp lightweight offset drop shadow (avoids per-node Direct2D Gaussian
+        // blur effect pipelines and nested command lists during 60-120fps drag).
         let is_sticky = node.kind == "sticky";
-        let alpha = match (is_sticky, dark) { (true, true) => 0.30, (true, false) => 0.10, (false, true) => 0.20, (false, false) => 0.05 };
-        p = p.save().shadow(rgba_const(0x000000, alpha), px(if is_sticky { 10.0 } else { 5.0 }), point(px(0.0), px(if is_sticky { 4.0 } else { 2.0 }))).fill_color(fill);
-        p = build_node_shape_path(p, node, x, y, w, h).fill().restore();
-      } else {
-        p = build_node_shape_path(p.fill_color(fill), node, x, y, w, h).fill();
+        let (dy, alpha) = match (is_sticky, dark) {
+          (true, true) => (3.5, 0.24),
+          (true, false) => (3.0, 0.08),
+          (false, true) => (2.0, 0.16),
+          (false, false) => (1.8, 0.05),
+        };
+        p = build_node_shape_path(p.fill_color(rgba_const(0x000000, alpha)), node, x, y + dy, w, h).fill();
       }
+      p = build_node_shape_path(p.fill_color(fill), node, x, y, w, h).fill();
     }
     if let Some(stroke) = stroke_opt && sw > 0.0 {
       p = p.stroke_color(stroke).line_width(px(sw)).line_join(LineJoin::Round);
@@ -2081,5 +2245,199 @@ mod tests {
     let _ = paint_board(&mind_session, false, (1280.0, 800.0));
     mind_session.dispatch(BoardCommand::ToggleCollapse { node_id: root_id });
     let _ = paint_board(&mind_session, true, (1280.0, 800.0));
+  }
+
+  #[test]
+  fn paint_board_uses_batched_dot_grid_and_no_gpu_shadow_blur() {
+    use nsh_core::canvas::CanvasOp;
+    let mut s = BoardSession::from_json(&mica_board::starter_board_json("whiteboard"));
+    s.dispatch(BoardCommand::FitToContent { viewport: Some([1920.0, 1080.0]) });
+    let drawing = paint_board(&s, false, (1920.0, 1080.0)).finish();
+    assert!(
+      drawing.ops.len() < 300,
+      "1920x1080 dot grid + starter board must stay compact (got {} ops; old FillRect loop emitted 1600..4800)",
+      drawing.ops.len()
+    );
+    assert!(
+      !drawing.ops.iter().any(|op| matches!(op, CanvasOp::ShadowBlur(_))),
+      "paint_board must not emit Direct2D GPU ShadowBlur effect ops per frame"
+    );
+  }
+
+  #[test]
+  fn hover_and_drag_emit_zero_inspector_churn_and_recover_stale_gestures() {
+    use nsh_core::{
+      ApproxTextEngine, Core, EventKind, EventPayload, MountItem, MouseButton, MouseEvent,
+      PressEvent, ViewKind,
+      element::{NoEvent, Root, Scope},
+      geometry::{point, px, size},
+      keymap::Modifiers,
+    };
+
+    struct BoardHarness;
+    thread_local! {
+      static TEST_SESS: RefCell<Option<Rc<RefCell<BoardSession>>>> = const { RefCell::new(None) };
+    }
+    impl nsh_core::element::Component for BoardHarness {
+      type Props = ();
+      type Event = NoEvent;
+      fn view(_: Self::Props, _: Scope<Self::Event>) -> impl IntoElement {
+        let json = mica_board::starter_board_json("whiteboard");
+        let sess = Rc::new(RefCell::new(BoardSession::from_json(&json)));
+        let rev = signal(0u64);
+        let dm = signal(false);
+        TEST_SESS.with(|s| *s.borrow_mut() = Some(sess.clone()));
+        board_view_with_rev_and_close(sess, rev, dm, Rc::new(|_| {}), None)
+      }
+    }
+
+    let mut core = Core::new(ApproxTextEngine, size(px(1280.0), px(820.0)));
+    core.mount_root(&Root::of::<BoardHarness>());
+    let batch0 = core.commit().unwrap();
+    let canvas_id = batch0
+      .items
+      .iter()
+      .find_map(|item| match item {
+        MountItem::Create { id, kind: ViewKind::Canvas, .. } => Some(*id),
+        _ => None,
+      })
+      .expect("board-canvas node id");
+    core.component_event(
+      canvas_id,
+      EventKind::Layout,
+      &EventPayload::Layout(Bounds::new(point(px(0.0), px(50.0)), size(px(1280.0), px(770.0)))),
+    );
+    let _ = core.commit();
+
+    let sess = TEST_SESS.with(|s| s.borrow().clone().unwrap());
+    let (n0_screen, n0_bottom_port, n1_screen) = {
+      let s = sess.borrow();
+      let n0 = &s.snapshot().nodes[0];
+      let n1 = &s.snapshot().nodes[1];
+      let p0 = s.world_to_screen([n0.x + n0.w * 0.5, n0.y + n0.h * 0.5]);
+      let pb = s.world_to_screen([n0.x + n0.w * 0.5, n0.y + n0.h]);
+      let p1 = s.world_to_screen([n1.x + n1.w * 0.5, n1.y + n1.h * 0.5]);
+      ((p0[0] as f32, p0[1] as f32), (pb[0] as f32, pb[1] as f32), (p1[0] as f32, p1[1] as f32))
+    };
+
+    // 1. Click node 0, then drag connector from bottom port to node 1 (selects new edge).
+    core.component_event(
+      canvas_id,
+      EventKind::PressDown,
+      &EventPayload::Press(PressEvent {
+        position: point(px(n0_screen.0), px(n0_screen.1)),
+        page_position: point(px(n0_screen.0), px(n0_screen.1 + 50.0)),
+        modifiers: Modifiers::default(),
+        clicks: 1,
+      }),
+    );
+    let _ = core.commit();
+    core.component_event(
+      canvas_id,
+      EventKind::MouseUp,
+      &EventPayload::Mouse(MouseEvent::released(
+        point(px(n0_screen.0), px(n0_screen.1)),
+        point(px(n0_screen.0), px(n0_screen.1 + 50.0)),
+        Modifiers::default(),
+        MouseButton::Left,
+      )),
+    );
+    let _ = core.commit();
+
+    core.component_event(
+      canvas_id,
+      EventKind::PressDown,
+      &EventPayload::Press(PressEvent {
+        position: point(px(n0_bottom_port.0), px(n0_bottom_port.1)),
+        page_position: point(px(n0_bottom_port.0), px(n0_bottom_port.1 + 50.0)),
+        modifiers: Modifiers::default(),
+        clicks: 1,
+      }),
+    );
+    let _ = core.commit();
+    for step in 1..=8 {
+      let t = step as f32 / 8.0;
+      let x = n0_bottom_port.0 + (n1_screen.0 - n0_bottom_port.0) * t;
+      let y = n0_bottom_port.1 + (n1_screen.1 - n0_bottom_port.1) * t;
+      core.component_event(
+        canvas_id,
+        EventKind::MouseMove,
+        &EventPayload::Mouse(MouseEvent::new(
+          point(px(x), px(y)),
+          point(px(x), px(y + 50.0)),
+          Modifiers::default(),
+          Some(MouseButton::Left),
+        )),
+      );
+      if let Some(b) = core.commit() {
+        let creates = b.items.iter().filter(|i| matches!(i, MountItem::Create { .. })).count();
+        assert_eq!(creates, 0, "PointerMove during connector drag must never rebuild UI chrome/inspector");
+      }
+    }
+    core.component_event(
+      canvas_id,
+      EventKind::MouseUp,
+      &EventPayload::Mouse(MouseEvent::released(
+        point(px(n1_screen.0), px(n1_screen.1)),
+        point(px(n1_screen.0), px(n1_screen.1 + 50.0)),
+        Modifiers::default(),
+        MouseButton::Left,
+      )),
+    );
+    let _ = core.commit();
+    assert!(sess.borrow().selected_edge_id().is_some(), "connector drag must select created edge");
+
+    // 2. Repeatedly hover over and away from node 0 while edge inspector is open:
+    //    must emit ZERO UI node creates/deletes (canvas repaint only).
+    for round in 0..6 {
+      let (hx, hy) = if round % 2 == 0 { n0_screen } else { (5.0, 5.0) };
+      core.component_event(
+        canvas_id,
+        EventKind::MouseMove,
+        &EventPayload::Mouse(MouseEvent::new(
+          point(px(hx), px(hy)),
+          point(px(hx), px(hy + 50.0)),
+          Modifiers::default(),
+          None,
+        )),
+      );
+      let b = core.commit().expect("hover change repaints canvas");
+      let creates = b.items.iter().filter(|i| matches!(i, MountItem::Create { .. })).count();
+      let deletes = b.items.iter().filter(|i| matches!(i, MountItem::Delete { .. })).count();
+      assert_eq!(creates, 0, "hover round {round} must not recreate inspector/dock views");
+      assert_eq!(deletes, 0, "hover round {round} must not delete inspector/dock views");
+    }
+
+    // 3. Stale gesture auto-recovery: start drag on node 1 (avoids double-tap on node 0),
+    //    miss MouseUp (released outside canvas), next MouseMove with no pressed button
+    //    must finish gesture cleanly back to Idle.
+    core.component_event(
+      canvas_id,
+      EventKind::PressDown,
+      &EventPayload::Press(PressEvent {
+        position: point(px(n1_screen.0), px(n1_screen.1)),
+        page_position: point(px(n1_screen.0), px(n1_screen.1 + 50.0)),
+        modifiers: Modifiers::default(),
+        clicks: 1,
+      }),
+    );
+    let _ = core.commit();
+    assert!(matches!(sess.borrow().gesture(), GestureState::Drag(_)));
+
+    core.component_event(
+      canvas_id,
+      EventKind::MouseMove,
+      &EventPayload::Mouse(MouseEvent::new(
+        point(px(n1_screen.0 + 10.0), px(n1_screen.1 + 10.0)),
+        point(px(n1_screen.0 + 10.0), px(n1_screen.1 + 60.0)),
+        Modifiers::default(),
+        None,
+      )),
+    );
+    let _ = core.commit();
+    assert!(
+      matches!(sess.borrow().gesture(), GestureState::Idle),
+      "MouseMove with no pressed button must recover stale Drag gesture back to Idle"
+    );
   }
 }

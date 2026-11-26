@@ -1141,3 +1141,52 @@ fn regression_sidebar_folders_collapse_on_workspace_open_and_table_spacing_is_co
     bottom_bar.size.height.0
   );
 }
+
+#[test]
+fn regression_board_inspector_never_collapses_empty_after_edit_and_drag() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:ed-open-board").unwrap();
+  app.wait_for("Auto Layout").unwrap();
+
+  // Add a mind_root node via dock button (selects it immediately)
+  app.press("id:board-add-node").unwrap();
+  app.wait_for("id:board-inspector-card").unwrap();
+  let card = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("board-inspector-card"))
+    .expect("node inspector card must be mounted")
+    .bounds;
+  assert!(
+    card.size.width.0 >= 400.0 && card.size.height.0 >= 32.0,
+    "node inspector card must never collapse empty (got {:?})",
+    card.size
+  );
+
+  // Enter & exit inline edit: inspector must hide during edit and return intact afterwards
+  app.press("id:board-edit-label").unwrap();
+  app.wait_for("id:board-edit-done").unwrap();
+  app.press("id:board-edit-done").unwrap();
+  app.wait_for("id:board-node-dashed").unwrap();
+
+  // Drag on canvas and verify inspector remains valid (or cleanly absent if deselected)
+  app.drag("id:board-canvas", nsh_core::geometry::point(px(120.0), px(60.0))).unwrap();
+  if let Some(after) = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("board-inspector-card"))
+  {
+    assert!(
+      after.bounds.size.width.0 >= 300.0 && after.bounds.size.height.0 >= 32.0,
+      "contextual inspector card must never render as an empty collapsed pill (got {:?})",
+      after.bounds.size
+    );
+  }
+}

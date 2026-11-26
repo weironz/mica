@@ -2180,3 +2180,20 @@ fn toggle_collapse_deselects_newly_hidden_descendant() {
   });
   assert!(s.selected_node_ids().is_empty());
 }
+
+#[test]
+fn start_editing_node_clears_active_drag_gesture() {
+  let mut s = two_node_session();
+  // Press down on node "a" (starts GestureState::Drag)
+  let a = s.node_by_id("a").unwrap().clone();
+  s.dispatch(pointer_down(a.x + a.w * 0.5, a.y + a.h * 0.5));
+  assert!(matches!(s.gesture(), GestureState::Drag(_)));
+
+  // Starting inline edit (e.g. OS double-click 360-500ms) must clear Drag back to Idle
+  // so releasing mouse over the inline edit input never leaves GestureState stuck.
+  s.dispatch(BoardCommand::StartEditingNode {
+    node_id: "a".into(),
+  });
+  assert!(matches!(s.gesture(), GestureState::Idle));
+  assert_eq!(s.editing_node_id(), Some("a"));
+}

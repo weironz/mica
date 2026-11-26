@@ -1409,6 +1409,8 @@ impl BoardSession {
       return self.noop_patch();
     };
     let text = node.text.clone();
+    self.gesture = GestureState::Idle;
+    self.snap_guides.clear();
     self.editing_edge_id = None;
     self.editing_node_id = Some(node_id.to_string());
     self.selected_node_ids.clear();
