@@ -1447,3 +1447,201 @@ fn regression_cross_block_selection_never_collapses_to_8px_stub_when_text_layout
     has_wide_rects()
   );
 }
+
+#[nsh_core::prelude::component]
+fn TableCellMidCaretHarness() -> impl nsh_core::prelude::IntoElement {
+  use std::{cell::RefCell, rc::Rc};
+  use nsh_core::prelude::*;
+
+  let md = "\
+| DGX OS 大版本 | 底层 Ubuntu 版本 | 典型适配硬件与定位 |\n\
+| --- | --- | --- |\n\
+| **DGX OS 7** | **Ubuntu 24.04 LTS** (7.6.0 对应 24.04.5) | 当前 DGX B200 / B300 生产主力基线 |\n";
+  let bridge = mica_rust::editor_bridge::MicaDocumentBridge::from_markdown(md);
+  let layouts = Rc::new(RefCell::new(mica_rust::text_geometry::VisibleLayoutCache::default()));
+  let dark_mode = signal(false);
+  let page_width = signal(880.0_f32);
+  let env = mica_rust::block_views::BlockRenderEnv {
+    bridge: bridge.clone(),
+    dark_mode,
+    page_width,
+    layouts,
+    drag_anchor: signal(None),
+    last_click: signal((0, 0, 0.0, 0)),
+    lightbox: signal(None),
+    image_ctx: mica_rust::image_blocks::ImageContext::offline_default(),
+    focused_code_block: signal(None),
+    focused_table_cell: signal(None),
+    table_selection: signal(None),
+    table_drag_anchor: signal(None),
+    marquee_selected: signal(None),
+    body_blank_marquee_ready: signal(false),
+    marquee_origin_page: signal(None),
+    editor_focused: signal(false),
+    caret_blink_on: signal(true),
+    sink_clear_rev: signal(0),
+    inline_math_edit: signal(None),
+    inner_drag_hit: Rc::new(std::cell::Cell::new(None)),
+    last_pointer_is_touch: signal(false),
+    touch_selection_active: signal(false),
+    touch_tap_tracker: Rc::new(RefCell::new(mica_rust::touch_selection::TouchTapTracker::default())),
+  };
+  let structure_rev = bridge.structure_rev_signal();
+  let br_count = bridge.clone();
+  let br_keys = bridge.clone();
+
+  view()
+    .flex_1()
+    .w_full()
+    .h_full()
+    .pt(px(140.0))
+    .pl(px(180.0))
+    .child(
+      virtual_list(
+        move || {
+          structure_rev.get();
+          br_count.block_len()
+        },
+        move |at| mica_rust::block_views::render_virtual_block_row(env.clone(), at),
+      )
+      .keys(move || {
+        structure_rev.get();
+        br_keys.block_ids()
+      })
+      .estimated_item_size(px(120.0))
+      .flex_1()
+      .w_full()
+      .h_full(),
+    )
+}
+
+#[test]
+fn regression_table_cell_mid_click_places_caret_in_middle_and_drag_selects_substring() {
+  use nsh_core::{
+    EventKind, EventPayload, MouseButton, MouseEvent, PayloadValue, PressEvent,
+    geometry::point,
+    keymap::Modifiers,
+  };
+
+  let mut config = EngineConfig::new(Root::of::<TableCellMidCaretHarness>());
+  config.viewport = size(px(1100.0), px(700.0));
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("id:table-cell-0-1-1").unwrap();
+  let cell_node = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("table-cell-0-1-1"))
+    .expect("target table cell must exist");
+  let cell_id = cell_node.id;
+  let cell_bounds = cell_node.bounds;
+
+  // 1. Click near the start/middle of the cell (local x=48px inside a >200px cell)
+  //    in a table offset far from window (0, 0) (`pl=180, pt=140`).
+  //    Previously, `on_press_down` subtracted parent-local origin from `page_position`
+  //    AND `on_press` snapped the caret back to end-of-cell on mouse-up!
+  app
+    .press_at("id:table-cell-0-1-1", point(px(48.0), px(18.0)))
+    .unwrap();
+  app.wait_for("id:mica-table-active-caret").unwrap();
+
+  // Simulate the Windows RichEdit `set_value` -> `EM_SETSEL(end, end)` spurious
+  // initial `SelectionChange` echo right after mount: caret must NOT jump to end!
+  let input_id = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("table-cell-input-0-1-1"))
+    .expect("active table cell input proxy must exist")
+    .id;
+  app.engine().control().dispatch_event(
+    input_id,
+    EventKind::SelectionChange,
+    EventPayload::Map(vec![
+      ("start", PayloadValue::Number(36.0)),
+      ("end", PayloadValue::Number(36.0)),
+    ]),
+  );
+  app.settle();
+
+  let caret_bounds = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-table-active-caret"))
+    .expect("active table caret must be rendered")
+    .bounds;
+  let caret_local_x = caret_bounds.origin.x.0 - cell_bounds.origin.x.0;
+  assert!(
+    caret_local_x > 16.0 && caret_local_x < 96.0,
+    "clicking at local x=48 must place caret near the clicked character and resist RichEdit end-echo (got local x={caret_local_x:.1}, cell width={:.1})",
+    cell_bounds.size.width.0
+  );
+
+  // 2. Desktop left-button drag within the same cell from local x=48 to x=148:
+  //    dispatch the exact desktop mouse sequence (`PressDown` -> `MouseMove(Left)` -> `MouseUp` -> `Press`).
+  //    Must highlight a substring inside the cell and KEEP it selected after release!
+  let start_local = point(px(48.0), px(18.0));
+  let start_page = point(
+    cell_bounds.origin.x + start_local.x,
+    cell_bounds.origin.y + start_local.y,
+  );
+  let end_local = point(px(148.0), px(18.0));
+  let end_page = point(
+    cell_bounds.origin.x + end_local.x,
+    cell_bounds.origin.y + end_local.y,
+  );
+  let control = app.engine().control();
+  control.dispatch_event(
+    cell_id,
+    EventKind::PressDown,
+    EventPayload::Press(PressEvent {
+      position: start_local,
+      page_position: start_page,
+      modifiers: Modifiers::default(),
+      clicks: 1,
+    }),
+  );
+  control.dispatch_event(
+    cell_id,
+    EventKind::MouseMove,
+    EventPayload::Mouse(MouseEvent::new(
+      end_local,
+      end_page,
+      Modifiers::default(),
+      Some(MouseButton::Left),
+    )),
+  );
+  control.dispatch_event(
+    cell_id,
+    EventKind::MouseUp,
+    EventPayload::Mouse(MouseEvent::released(
+      end_local,
+      end_page,
+      Modifiers::default(),
+      MouseButton::Left,
+    )),
+  );
+  // Desktop also delivers `on_press` when mouse-up occurs inside the same view.
+  control.dispatch_event(cell_id, EventKind::Press, EventPayload::None);
+
+  app.wait_for("id:mica-table-cell-selection-rect").unwrap();
+  let sel_rect = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-table-cell-selection-rect"))
+    .expect("intra-cell selection highlight must remain visible after drag release")
+    .bounds;
+  assert!(
+    sel_rect.size.width.0 >= 50.0,
+    "intra-cell drag selection must highlight dragged substring (got width={:.1})",
+    sel_rect.size.width.0
+  );
+  let sel_local_x = sel_rect.origin.x.0 - cell_bounds.origin.x.0;
+  assert!(
+    sel_local_x > 16.0 && sel_local_x < 96.0,
+    "intra-cell selection highlight must start near drag anchor x=48 (got local x={sel_local_x:.1})"
+  );
+}

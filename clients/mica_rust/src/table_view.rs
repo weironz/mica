@@ -16,7 +16,12 @@
 //!   with `overlay()` column menu, per-row left anchor pill with `overlay()` row menu, and
 //!   right/bottom expand (`+`) bars hugging the outside of the grid.
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+  borrow::Cow,
+  cell::{Cell, RefCell},
+  rc::Rc,
+  time::Duration,
+};
 
 use mica_editor::{
   EditorBlock, TableCell, TableModel, TableNavDirection, TableOp,
@@ -42,7 +47,10 @@ use crate::{
   },
   editor_bridge::MicaDocumentBridge,
   mica_theme::palette,
-  text_geometry::{caret_rect_for_offset, offset_at_point, selection_rects_for_range},
+  text_geometry::{
+    caret_rect_for_offset, lines_usable_for_text, offset_at_point, selection_rects_for_range,
+    synthesize_wrapped_lines,
+  },
 };
 
 const LEFT_GUTTER_PX: f32 = 16.0;
@@ -1297,34 +1305,62 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
     })
   });
 
+  // Helper: borrow native `EventKind::TextLayout` lines when usable, or
+  // synthesize exact wrapped lines via `text_measurer` so clicking/dragging
+  // works cleanly even before `TextLayout` arrives.
+  let resolve_cell_lines = move |lines: &[TextLine], frame: Bounds<Points>, txt: &str| -> Vec<TextLine> {
+    if lines_usable_for_text(lines, txt) {
+      return lines.to_vec();
+    }
+    let wrap_w = if frame.size.width.0 > 24.0 {
+      frame.size.width.0
+    } else {
+      (grid_w.get_untracked() * share_c - 24.0).max(40.0)
+    };
+    let measurer = text_measurer();
+    synthesize_wrapped_lines(txt, wrap_w, cell_font, CELL_LINE_H_PX, &|f, s| {
+      measurer(f, s)
+    })
+  };
+
   // Compute live caret `(x, y, h)` inside the cell text container from real `TextLayout`.
   let cl_caret = cell_layout.clone();
   let caret_rect = computed(move || {
     let _ = layout_rev.get();
     let (_, end_u16) = visual_sel.get();
-    let (ref lines, _) = *cl_caret.borrow();
-    if lines.is_empty() {
-      return (0.0_f32, 0.0_f32, CELL_LINE_H_PX);
-    }
+    let txt = live_text.get();
+    let (ref raw_lines, frame) = *cl_caret.borrow();
+    let lines: Cow<'_, [TextLine]> = if lines_usable_for_text(raw_lines, &txt) {
+      Cow::Borrowed(raw_lines.as_slice())
+    } else {
+      Cow::Owned(resolve_cell_lines(raw_lines, frame, &txt))
+    };
     let measurer = text_measurer();
-    caret_rect_for_offset(lines, end_u16, cell_font, CELL_LINE_H_PX, &|f, s| {
+    caret_rect_for_offset(&lines, end_u16, cell_font, CELL_LINE_H_PX, &|f, s| {
       measurer(f, s)
     })
   });
 
-  // Hit-test pointer `(page_x, page_y)` to exact UTF-16 offset in this cell.
+  // Hit-test pointer `(local_x, local_y)` in `cell_box`-local coordinates
+  // (same coordinate space as `text_box.on_layout`'s `frame.origin`!) to the
+  // exact UTF-16 offset in this cell.
   let hit_offset = {
     let cl_hit = cell_layout.clone();
-    move |page_x: f32, page_y: f32| -> u32 {
-      let max_off = utf16_len(&live_text.get_untracked());
-      let (ref lines, frame) = *cl_hit.borrow();
-      if lines.is_empty() {
-        return max_off;
-      }
-      let lx = (page_x - frame.origin.x.0).max(0.0);
-      let ly = (page_y - frame.origin.y.0).max(0.0);
+    move |local_x: f32, local_y: f32| -> u32 {
+      let txt = live_text.get_untracked();
+      let max_off = utf16_len(&txt);
+      let (ref raw_lines, frame) = *cl_hit.borrow();
+      let lines: Cow<'_, [TextLine]> = if lines_usable_for_text(raw_lines, &txt) {
+        Cow::Borrowed(raw_lines.as_slice())
+      } else {
+        Cow::Owned(resolve_cell_lines(raw_lines, frame, &txt))
+      };
+      let origin_x = if frame.size.width.0 > 0.5 { frame.origin.x.0 } else { 12.0 };
+      let origin_y = if frame.size.height.0 > 0.5 { frame.origin.y.0 } else { 8.0 };
+      let lx = (local_x - origin_x).max(0.0);
+      let ly = (local_y - origin_y).max(0.0);
       let measurer = text_measurer();
-      offset_at_point(lines, lx, ly, cell_font, &|f, s| measurer(f, s)).min(max_off)
+      offset_at_point(&lines, lx, ly, cell_font, &|f, s| measurer(f, s)).min(max_off)
     }
   };
 
@@ -1351,7 +1387,13 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
     .relative()
     .w_full()
     .on_layout(move |b: &Bounds<Points>| {
-      cl_frame.borrow_mut().1 = *b;
+      let mut cl = cl_frame.borrow_mut();
+      let width_changed = (cl.1.size.width.0 - b.size.width.0).abs() > 0.5;
+      cl.1 = *b;
+      if width_changed && cl.0.is_empty() {
+        drop(cl);
+        layout_rev.update(|v| *v = v.wrapping_add(1));
+      }
     })
     // 1. Unified WYSIWYG rich cell text (identical in focused & unfocused states!)
     .child(dynamic(move || {
@@ -1374,8 +1416,12 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
         .text_color(move || palette(dark_mode.get()).text_primary)
         .on(EventKind::TextLayout, move |p: &EventPayload| {
           if let EventPayload::TextLayout(lines) = p {
-            cl_inner.borrow_mut().0 = lines.clone();
-            layout_rev.update(|v| *v = v.wrapping_add(1));
+            let mut cl = cl_inner.borrow_mut();
+            if !(lines.is_empty() && !cl.0.is_empty()) && cl.0 != *lines {
+              cl.0 = lines.clone();
+              drop(cl);
+              layout_rev.update(|v| *v = v.wrapping_add(1));
+            }
           }
         });
       t = match align_disp.as_str() {
@@ -1413,10 +1459,16 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
           let p = palette(dark);
           let mut layer = view().absolute().inset_0().pointer_events(PointerEvents::None);
           if s != e {
-            let (ref lines, _) = *cl_ov.borrow();
+            let txt = live_text.get_untracked();
+            let (ref raw_lines, frame) = *cl_ov.borrow();
+            let lines: Cow<'_, [TextLine]> = if lines_usable_for_text(raw_lines, &txt) {
+              Cow::Borrowed(raw_lines.as_slice())
+            } else {
+              Cow::Owned(resolve_cell_lines(raw_lines, frame, &txt))
+            };
             let measurer = text_measurer();
             let rects = selection_rects_for_range(
-              lines,
+              &lines,
               s.min(e),
               s.max(e),
               cell_font,
@@ -1427,6 +1479,7 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
               let inset_y = 1.5_f32;
               layer = layer.child(
                 view()
+                  .test_id("mica-table-cell-selection-rect")
                   .absolute()
                   .left(px(rx))
                   .top(px(ry + inset_y))
@@ -1465,7 +1518,12 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
         let br_s2 = br_s.clone();
         let bid_n2 = bid_n.clone();
         let init_val = live_text.get_untracked();
+        let cell_input_ref = element_ref();
+        let mount_synced = Rc::new(Cell::new(false));
+        let mount_synced_sel = mount_synced.clone();
+        let mount_synced_chg = mount_synced;
         input()
+          .element_ref(&cell_input_ref)
           .test_id(&format!("table-cell-input-{init_idx}-{r}-{c}"))
           .auto_focus(true)
           .absolute()
@@ -1487,8 +1545,36 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
             let _ = sel_push_rev.get();
             desired_sel.get()
           })
+          .on_focus(move || {
+            // Sync native RichEdit/input selection to the exact clicked/dragged
+            // offset so initial `default_value` mount cannot leave caret at end.
+            let (s, e) = desired_sel.get_untracked();
+            cell_input_ref.set_selection(s, e);
+          })
           .on_selection_change(move |sel: &Selection| {
-            visual_sel.set((sel.start, sel.end));
+            let reported = (sel.start, sel.end);
+            // Ignore asynchronous native selection echoes while the user is
+            // actively dragging with the mouse inside this cell.
+            if table_drag_anchor.get_untracked().is_some()
+              && cell_text_drag_anchor.get_untracked().is_some()
+            {
+              return;
+            }
+            // On Windows RichEdit, initial `default_value` (`set_value`) calls
+            // `EM_SETSEL` to end-of-text and emits `SelectionChange(end, end)`
+            // before `selected_range` / `on_focus` settles. Do not let that
+            // first spurious echo snap `visual_sel` back to the end of the cell.
+            if !mount_synced_sel.get() {
+              let desired = desired_sel.get_untracked();
+              if reported == desired {
+                mount_synced_sel.set(true);
+              } else {
+                mount_synced_sel.set(true);
+                cell_input_ref.set_selection(desired.0, desired.1);
+                return;
+              }
+            }
+            visual_sel.set(reported);
             blink_reset_rev.update(|v| *v = v.wrapping_add(1));
           })
           .on_composition_change(move |comp: &Composition| {
@@ -1500,6 +1586,8 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
             }
           })
           .on_change(move |v: &str| {
+            mount_synced_chg.set(true);
+            cell_text_drag_anchor.set(None);
             let prev = live_text.get_untracked();
             let next_marks = splice_cell_marks(&prev, &live_marks.get_untracked(), v);
             live_text.set(v.to_owned());
@@ -1534,6 +1622,10 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
       }
     }));
 
+  let handled_pointer_down = Rc::new(Cell::new(false));
+  let handled_down_flag = handled_pointer_down.clone();
+  let handled_press_flag = handled_pointer_down;
+
   let mut cell_box = view()
     .test_id(&format!("table-cell-{init_idx}-{r}-{c}"))
     .w(move || px(grid_w.get() * share_c))
@@ -1554,6 +1646,7 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
       hovered_cell.set(Some((r, c)));
     })
     .on_press_down(move |e: &PressEvent| {
+      handled_down_flag.set(true);
       drag_anchor.set(None);
       marquee_selected.set(None);
       br_down.clear_selection();
@@ -1561,16 +1654,30 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
       table_selection.set(None);
       table_drag_anchor.set(Some((bid_down.clone(), r, c)));
 
-      let off = hit_down(e.page_position.x.0, e.page_position.y.0);
-      cell_text_drag_anchor.set(Some(off));
-      desired_sel.set((off, off));
-      visual_sel.set((off, off));
+      let off = hit_down(e.position.x.0, e.position.y.0);
+      let txt = live_text.get_untracked();
+      let max_off = utf16_len(&txt);
+      let clicks = e.clicks.clamp(1, 3);
+      let (sel_start, sel_end, anchor) = if clicks == 3 {
+        (0, max_off, None)
+      } else if clicks == 2 {
+        let (ws, we) = crate::touch_selection::touch_word_bounds(&txt, off);
+        (ws, we, Some(ws))
+      } else {
+        (off, off, Some(off))
+      };
+      cell_text_drag_anchor.set(anchor);
+      desired_sel.set((sel_start, sel_end));
+      visual_sel.set((sel_start, sel_end));
       sel_push_rev.update(|v| *v = v.wrapping_add(1));
       blink_reset_rev.update(|v| *v = v.wrapping_add(1));
       focused_cell.set(Some((bid_down.clone(), r, c)));
     })
     .on_mouse_move(move |e: &MouseEvent| {
       if e.pressed_button != Some(MouseButton::Left) {
+        if cell_text_drag_anchor.get_untracked().is_some() {
+          cell_text_drag_anchor.set(None);
+        }
         return;
       }
       let Some((ref anchor_bid, ar, ac)) = table_drag_anchor.get_untracked() else {
@@ -1590,7 +1697,7 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
         }
       } else if let Some(a_off) = cell_text_drag_anchor.get_untracked() {
         // Intra-cell text selection drag while staying inside the same cell
-        let cur_off = hit_move(e.page_position.x.0, e.page_position.y.0);
+        let cur_off = hit_move(e.position.x.0, e.position.y.0);
         let range = (a_off.min(cur_off), a_off.max(cur_off));
         if visual_sel.get_untracked() != range {
           desired_sel.set(range);
@@ -1604,7 +1711,12 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
       cell_text_drag_anchor.set(None);
     })
     .on_press(move || {
-      // Headless `app.press("id:table-cell-...")` fallback
+      // Only handle non-pointer activation (e.g. keyboard/accessibility press);
+      // real pointer clicks/drags were already placed accurately by `on_press_down`
+      // and must NOT snap the caret back to the end of the cell on mouse-up!
+      if handled_press_flag.replace(false) {
+        return;
+      }
       if table_selection.get_untracked().is_none() {
         let end = utf16_len(&live_text.get_untracked());
         desired_sel.set((end, end));

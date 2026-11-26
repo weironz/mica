@@ -43,6 +43,7 @@
 
 - **反例 4（点击单元格切换成单行白底 `input()`）**：聚焦单元格时把换行富文本替换成单行不透明输入框，导致多行文字瞬间塌陷截断、表头出现白底且丢失粗体与行内格式。必须保持单一富文本展示层，仅叠加光标/选区与透明 IME 代理。
 - **反例 5（列宽拖拽条仅挂在首行表头）**：把 `ColResize` 句柄只放在 `r == 0` 的单元格内，用户在第 2..N 行悬停竖线时既无箭头提示也不能拖动调宽。列分隔线拖拽层必须覆盖表格网格全高（`top_0..bottom_0`）。
+- **反例 6（单元格点击与格内拖选始终跳到尾部）**：① `cell_box.on_press_down`/`on_mouse_move` 把窗口级 `e.page_position` 传入 `hit_offset` 后却减去 `text_box.on_layout` 的父级局部坐标 `frame.origin`，导致算出的 `lx/ly` 远超格宽并恒落到 `max_off`；② 鼠标抬起时触发的 `on_press` 又无条件将 `desired_sel`/`visual_sel` 覆写回 `(end, end)` 冲掉格内选区；③ 缺少 `TextLayout` 折行兜底与聚焦时 `set_selection` 同步。根治方案：统一用 `cell_box` 局部坐标 `e.position` 命中、接入 `synthesize_wrapped_lines` 兜底、支持双击选词与三击全选、指针按下后拦截 `on_press` 尾部覆写，并在透明 IME 代理 `on_focus` 时同步 `desired_sel`。
 
 ---
 
@@ -65,3 +66,4 @@
 - **2026-11-23**：沉淀内容自适应列宽、自由上下左右多单元格拖选与批量复制/清空规格（对应 `ff104b87`）。
 - **2026-11-23（补齐迭代）**：补齐单元格键盘导航（`Tab`/`Shift+Tab`/`Up`/`Down`/`Escape` 走 `TableModel::navigate`）、悬停条 `− 行`/`− 列`/`对齐` 切换与表头列分隔线拖拽调宽（`CAP-05-06` / `07`）。
 - **2026-11-24（全面对齐）**：独立拆出 `clients/mica_rust/src/table_view.rs`，统一所见即所得无跳变单元格编辑与行内 marks 保留、整表全高列宽/表宽拖拽、自适应横向滚动条，以及对齐旧版 Mica 的左上整表/行/列锚点菜单与右/底 `+` 扩展条。
+- **2026-11-27（单元格中间定位光标与格内拖选修复）**：修复 `table_view.rs` 命中坐标混用 `page_position` 与父级局部 `frame.origin` 及 `on_press` 松手将选区强行拉回尾部的问题，补齐双击选词、三击全选、`TextLayout` 折行兜底与 `on_focus` 选区同步，并新增无头回归测试 `regression_table_cell_mid_click_places_caret_in_middle_and_drag_selects_substring`。
