@@ -53,6 +53,8 @@ pub struct OutlineItem {
 type PersistCallback = Rc<dyn Fn(String, Option<Vec<u8>>)>;
 type CrdtDiffCallback = Rc<dyn Fn(Vec<u8>)>;
 
+pub type ImageAssetResolver = Rc<dyn Fn(&[EditorBlock]) -> BTreeMap<String, String>>;
+
 /// Reactive bridge connecting `mica_editor::EditorSession` to `virtual_list`
 /// and all outer Mica chrome (header, outline, find bar, slash menu, version history).
 pub struct MicaDocumentBridge {
@@ -78,6 +80,9 @@ pub struct MicaDocumentBridge {
   /// Incremental yrs CRDT diff callback invoked on every local content edit
   /// (drives real-time `/ws/` cloud sync without full-document `replace_all`).
   on_crdt_diff: RefCell<Option<CrdtDiffCallback>>,
+  /// Resolves `file_id -> permanent URL / CAS URI` during Markdown exports so
+  /// uploaded or local-CAS images never degrade into bare filenames.
+  image_asset_resolver: RefCell<Option<ImageAssetResolver>>,
   pending_persist: std::cell::Cell<bool>,
 
   // ── Reactive UI Signals ──────────────────────────────────────────────────
@@ -151,6 +156,7 @@ impl MicaDocumentBridge {
       on_persist: RefCell::new(None),
       on_dirty: RefCell::new(None),
       on_crdt_diff: RefCell::new(None),
+      image_asset_resolver: RefCell::new(None),
       pending_persist: std::cell::Cell::new(false),
       structure_rev: signal(0u64),
       selection_sig: signal(sel),
@@ -190,6 +196,13 @@ impl MicaDocumentBridge {
   /// [`Self::apply_remote_update`]).
   pub fn set_on_crdt_diff(&self, cb: Rc<dyn Fn(Vec<u8>)>) {
     *self.on_crdt_diff.borrow_mut() = Some(cb);
+  }
+
+  /// Registers a resolver mapping `file_id -> displayable/persistent URL` for
+  /// [`Self::export_markdown`] and [`Self::export_html`] so uploaded cloud
+  /// images and Desktop CAS images survive Markdown round-trips cleanly.
+  pub fn set_image_asset_resolver(&self, resolver: ImageAssetResolver) {
+    *self.image_asset_resolver.borrow_mut() = Some(resolver);
   }
 
   /// Current yrs state vector of the active editor document (used to compute
@@ -1628,14 +1641,25 @@ impl MicaDocumentBridge {
   }
 
   pub fn export_markdown(&self) -> String {
-    self.session.borrow().export_markdown(&BTreeMap::new())
+    let session = self.session.borrow();
+    let images = self
+      .image_asset_resolver
+      .borrow()
+      .as_ref()
+      .map(|f| f(session.blocks()))
+      .unwrap_or_default();
+    session.export_markdown(&images)
   }
 
   pub fn export_html(&self) -> String {
-    self
-      .session
+    let session = self.session.borrow();
+    let images = self
+      .image_asset_resolver
       .borrow()
-      .export_html(&BTreeMap::new(), HtmlProfile::Export)
+      .as_ref()
+      .map(|f| f(session.blocks()))
+      .unwrap_or_default();
+    session.export_html(&images, HtmlProfile::Export)
   }
 
   // ── Signal Getters (API-compatible with all shell consumers) ─────────────

@@ -841,12 +841,7 @@ async fn transfer_roots(
         continue;
       };
       for block in &payload.blocks {
-        if let Some(fid) = block
-          .data
-          .get("file_id")
-          .and_then(|v| v.as_str())
-          .and_then(|s| Uuid::parse_str(s).ok())
-        {
+        if let Some((fid, _)) = block_source_file_id(&block.data, Some(src_workspace_id)) {
           referenced_files.insert(fid);
         }
         for target in page_link_targets(&block.data) {
@@ -1065,6 +1060,7 @@ async fn transfer_roots(
       new_view_id,
       SubtreeNode {
         workspace_id: dest_workspace_id,
+        src_workspace_id: Some(src_workspace_id),
         user_id,
         dest_parent,
         name: &row.name,
@@ -1397,6 +1393,7 @@ pub async fn clone_view(
       new_view_id,
       SubtreeNode {
         workspace_id,
+        src_workspace_id: None,
         user_id,
         dest_parent,
         name: node_name,
@@ -1438,6 +1435,7 @@ use mica_app_core::sync::page_link_targets;
 /// implies. Everything else about inserting it is one sequence.
 struct SubtreeNode<'a> {
   workspace_id: Uuid,
+  src_workspace_id: Option<Uuid>,
   user_id: Uuid,
   dest_parent: Option<Uuid>,
   name: &'a str,
@@ -1483,7 +1481,7 @@ async fn insert_subtree_tx(
         blocks: Vec::new(),
       }
     });
-    rewrite_transferred_payload(&mut payload, file_map, view_map);
+    rewrite_transferred_payload(&mut payload, node.src_workspace_id, file_map, view_map);
     if let Some(title) = node.title {
       // Payload level, not `set_block_prop`: the document does not exist yet,
       // so there is no comment anchor to invalidate — the title rides in the
@@ -1556,31 +1554,62 @@ async fn insert_subtree_tx(
   Ok(())
 }
 
+/// Extract a Mica-owned source `file_id` (and optional filename) from a block's
+/// `data`: prefers canonical `data.file_id`, and also recognises Mica blob hrefs
+/// (`/api/workspaces/{src_ws}/files/{file_id}/blob[/{name}]`) left in `url`/`src`.
+fn block_source_file_id(
+  data: &serde_json::Value,
+  src_workspace_id: Option<Uuid>,
+) -> Option<(Uuid, Option<String>)> {
+  if let Some(fid) = data
+    .get("file_id")
+    .and_then(|v| v.as_str())
+    .and_then(|s| Uuid::parse_str(s).ok())
+  {
+    return Some((fid, None));
+  }
+  let src_ws = src_workspace_id?;
+  let raw_href = data
+    .get("url")
+    .and_then(|v| v.as_str())
+    .or_else(|| data.get("src").and_then(|v| v.as_str()))?;
+  let (fid_str, name) = super::export::parse_blob_href(raw_href, src_ws)?;
+  let fid = Uuid::parse_str(&fid_str).ok()?;
+  Some((fid, Some(name)))
+}
+
 /// Rewrite a transferred document's blocks for their new home: remap uploaded-
 /// image `file_id`s to the destination copies, and remap in-subtree page links to
 /// the new view ids. Links to pages left in the source keep their `mica://` href
 /// (they dangle — surfaced to the user as a warning before the move).
 fn rewrite_transferred_payload(
   payload: &mut DocumentSnapshotPayload,
+  src_workspace_id: Option<Uuid>,
   file_map: &std::collections::HashMap<Uuid, Uuid>,
   view_map: &std::collections::HashMap<Uuid, Uuid>,
 ) {
   const SCHEME: &str = "mica://page/";
   for block in &mut payload.blocks {
+    let source_file = block_source_file_id(&block.data, src_workspace_id);
     let Some(data) = block.data.as_object_mut() else {
       continue;
     };
-    // Image file_id → destination copy. Drop any cached blob `url` so the client
-    // re-resolves it against the destination workspace.
-    if let Some(new_id) = data
-      .get("file_id")
-      .and_then(|v| v.as_str())
-      .and_then(|s| Uuid::parse_str(s).ok())
-      .and_then(|old| file_map.get(&old))
+    // Image file_id (or source-workspace blob href) → destination copy. Drop any
+    // cached blob `url`/`src` so the client re-resolves it against the destination workspace.
+    if let Some((old_id, parsed_name)) = source_file
+      && let Some(&new_id) = file_map.get(&old_id)
     {
-      let new_id = *new_id;
       data.insert("file_id".into(), serde_json::json!(new_id.to_string()));
+      if !data
+        .get("name")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+        && let Some(name) = parsed_name
+      {
+        data.insert("name".into(), serde_json::json!(name));
+      }
       data.remove("url");
+      data.remove("src");
     }
     // In-subtree page links → new view ids.
     if let Some(marks) = data.get_mut("marks").and_then(|m| m.as_array_mut()) {
@@ -1665,7 +1694,11 @@ mod tests {
     let in_sub_new = Uuid::new_v4();
     let outside = Uuid::new_v4();
 
-    let file_map = std::collections::HashMap::from([(old_file, new_file)]);
+    let src_ws = Uuid::new_v4();
+    let url_only_old = Uuid::new_v4();
+    let url_only_new = Uuid::new_v4();
+    let file_map =
+      std::collections::HashMap::from([(old_file, new_file), (url_only_old, url_only_new)]);
     let view_map = std::collections::HashMap::from([(in_sub_old, in_sub_new)]);
 
     let mut payload = DocumentSnapshotPayload {
@@ -1675,7 +1708,8 @@ mod tests {
         image_block(serde_json::json!({
           "file_id": old_file.to_string(),
           "name": "x.png",
-          "url": format!("/api/workspaces/{}/files/{}/blob/x.png", Uuid::new_v4(), old_file),
+          "url": format!("/api/workspaces/{src_ws}/files/{old_file}/blob/x.png"),
+          "src": format!("/api/workspaces/{src_ws}/files/{old_file}/blob/x.png"),
         })),
         text_block(
           "t1",
@@ -1684,9 +1718,17 @@ mod tests {
             {"type": "link", "href": format!("mica://page/{outside}")},
           ]}),
         ),
+        image_block(serde_json::json!({
+          "url": format!("https://mica.example.com/api/workspaces/{src_ws}/files/{url_only_old}/blob/diagram.png"),
+        })),
       ],
     };
-    rewrite_transferred_payload(&mut payload, &file_map, &view_map);
+    assert_eq!(
+      block_source_file_id(&payload.blocks[2].data, Some(src_ws)),
+      Some((url_only_old, Some("diagram.png".to_string()))),
+      "blob href without file_id must still be discovered during pre-scan"
+    );
+    rewrite_transferred_payload(&mut payload, Some(src_ws), &file_map, &view_map);
 
     assert_eq!(
       payload.blocks[0].data["file_id"],
@@ -1694,9 +1736,19 @@ mod tests {
       "image file_id must point at the destination copy",
     );
     assert!(
-      payload.blocks[0].data.get("url").is_none(),
-      "stale cached blob url must be dropped so the client re-resolves",
+      payload.blocks[0].data.get("url").is_none() && payload.blocks[0].data.get("src").is_none(),
+      "stale cached blob url/src must be dropped so the client re-resolves",
     );
+    assert_eq!(
+      payload.blocks[2].data["file_id"],
+      serde_json::json!(url_only_new.to_string()),
+      "url-only source blob href must be promoted and remapped to destination file_id",
+    );
+    assert_eq!(
+      payload.blocks[2].data["name"],
+      serde_json::json!("diagram.png"),
+    );
+    assert!(payload.blocks[2].data.get("url").is_none());
     let marks = payload.blocks[1].data["marks"].as_array().unwrap();
     assert_eq!(
       marks[0]["href"],

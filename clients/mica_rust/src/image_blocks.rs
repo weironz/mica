@@ -284,34 +284,43 @@ pub fn resolve_image_block(block: &EditorBlock, ctx: &ImageContext) -> ResolvedI
   }
 
   if let Some(u) = raw_url {
-    // Handle server-relative `/api/workspaces/{ws}/files/{fid}/blob[/{name}]` URLs
-    // emitted by `GET /documents/{id}/markdown` before CRDT snapshot arrival!
-    if u.starts_with("/api/")
-      && let Some(orig) = ctx.effective_cloud_origin()
-    {
-      let abs = format!("{orig}{u}");
-      if let Some((_ws, fid, parsed_name)) = parse_mica_blob_link(&abs, &orig) {
-        let cas_uri = cas_blob_file_uri(&fid);
-        let display_uri = cas_uri.unwrap_or_else(|| abs.clone());
-        return ResolvedImage {
-          display_uri,
-          link_url: Some(abs),
-          file_id: Some(fid),
-          external_url: None,
-          file_name: parsed_name.unwrap_or(file_name),
-          caption,
-          is_cloud_stored: true,
-        };
-      }
-      return ResolvedImage {
-        display_uri: abs.clone(),
-        link_url: Some(abs),
-        file_id: None,
-        external_url: None,
-        file_name,
-        caption,
-        is_cloud_stored: true,
+    // Handle both server-relative `/api/workspaces/{ws}/files/{fid}/blob[/{name}]`
+    // and full `<origin>/api/workspaces/{ws}/files/{fid}/blob[/{name}]` URLs
+    // emitted by `GET /documents/{id}/markdown` or client Markdown persistence.
+    if let Some(orig) = ctx.effective_cloud_origin() {
+      let abs_opt = if u.starts_with("/api/") {
+        Some(format!("{orig}{u}"))
+      } else if is_http_url(&u) {
+        Some(u.clone())
+      } else {
+        None
       };
+      if let Some(abs) = abs_opt {
+        if let Some((_ws, fid, parsed_name)) = parse_mica_blob_link(&abs, &orig) {
+          let cas_uri = cas_blob_file_uri(&fid);
+          let display_uri = cas_uri.unwrap_or_else(|| abs.clone());
+          return ResolvedImage {
+            display_uri,
+            link_url: Some(abs),
+            file_id: Some(fid),
+            external_url: None,
+            file_name: parsed_name.unwrap_or(file_name),
+            caption,
+            is_cloud_stored: true,
+          };
+        }
+        if u.starts_with("/api/") {
+          return ResolvedImage {
+            display_uri: abs.clone(),
+            link_url: Some(abs),
+            file_id: None,
+            external_url: None,
+            file_name,
+            caption,
+            is_cloud_stored: true,
+          };
+        }
+      }
     }
 
     let external = is_http_url(&u).then(|| u.clone());
@@ -344,6 +353,51 @@ fn infer_filename_from_url(url: &str) -> Option<String> {
     return None;
   }
   Some(seg.to_string())
+}
+
+/// Build `file_id -> permanent URL` map directly from a slice of `EditorBlock`s
+/// so both synchronous exports (`MicaDocumentBridge::export_markdown`) and
+/// off-thread debounced persistence (`export_blocks_markdown`) preserve working
+/// cloud blob links (`/api/workspaces/{ws}/files/{fid}/blob/{name}`) and Desktop
+/// CAS URIs (`file:///...`) instead of degrading uploaded images to bare filenames.
+pub fn build_blocks_image_urls(
+  blocks: &[EditorBlock],
+  ws_id: Uuid,
+  cloud_origin: Option<&str>,
+) -> BTreeMap<String, String> {
+  let mut out = BTreeMap::new();
+  for block in blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let Some(fid) = block
+      .data
+      .get("file_id")
+      .and_then(Value::as_str)
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+    else {
+      continue;
+    };
+    if out.contains_key(fid) {
+      continue;
+    }
+    let name = block
+      .data
+      .get("name")
+      .and_then(Value::as_str)
+      .map(str::trim)
+      .filter(|s| !s.is_empty());
+    if !ws_id.is_nil()
+      && Uuid::parse_str(fid).is_ok()
+      && let Some(orig) = cloud_origin.filter(|s| !s.trim().is_empty())
+    {
+      out.insert(fid.to_string(), build_file_blob_url(orig, ws_id, fid, name));
+    } else if let Some(uri) = cas_blob_file_uri(fid) {
+      out.insert(fid.to_string(), uri);
+    }
+  }
+  out
 }
 
 /// Build `file_id -> permanent URL` map for every image block in the active
@@ -1942,6 +1996,41 @@ mod tests {
       assert_eq!(updated.data.get("align").and_then(Value::as_str), Some("center"));
       assert_eq!(updated.data.get("width").and_then(Value::as_f64), Some(420.0));
       assert_eq!(updated.data.get("caption").and_then(Value::as_str), Some("保留图注"));
+    });
+  }
+
+  #[test]
+  fn resolve_full_mica_blob_url_stays_cloud_stored_not_external() {
+    with_runtime(|| {
+      let ws = Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap();
+      let fid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+      let ctx = ImageContext::new(
+        signal(true),
+        signal("https://mica.cloudcele.com".to_string()),
+        signal(ws),
+        signal(None),
+        Rc::new(RefCell::new(CloudConnector::new(Default::default()))),
+        signal(true),
+      );
+      let mut blk = EditorBlock::new("img-3", "image", "");
+      blk.data = json!({
+        "url": format!("https://mica.cloudcele.com/api/workspaces/{ws}/files/{fid}/blob/arch.png")
+      });
+
+      let resolved = resolve_image_block(&blk, &ctx);
+      assert!(!resolved.is_external(), "own Mica blob URL must not be flagged as external");
+      assert!(resolved.is_cloud_stored);
+      assert_eq!(resolved.file_id.as_deref(), Some(fid));
+      assert_eq!(resolved.file_name, "arch.png");
+
+      // build_blocks_image_urls preserves permanent blob hrefs for off-thread markdown export.
+      let mut blk_fid = EditorBlock::new("img-4", "image", "");
+      blk_fid.data = json!({ "file_id": fid, "name": "arch.png" });
+      let map = build_blocks_image_urls(&[blk_fid], ws, Some("https://mica.cloudcele.com"));
+      assert_eq!(
+        map.get(fid).map(String::as_str),
+        Some("https://mica.cloudcele.com/api/workspaces/11111111-2222-3333-4444-555555555555/files/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/blob/arch.png")
+      );
     });
   }
 }

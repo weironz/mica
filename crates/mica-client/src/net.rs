@@ -271,6 +271,64 @@ fn percent_encode_path_segment(seg: &str) -> String {
   out
 }
 
+/// Request payload for `POST /api/workspaces/{ws}/views/batch-transfer`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferViewsRequest {
+  pub dest_workspace_id: Uuid,
+  pub parent_view_id: Option<Uuid>,
+  pub before_view_id: Option<Uuid>,
+  pub after_view_id: Option<Uuid>,
+  pub remove_source: bool,
+  pub dry_run: bool,
+  pub view_ids: Vec<Uuid>,
+}
+
+/// Summary returned by `POST /api/workspaces/{ws}/views/batch-transfer`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TransferViewsReport {
+  pub new_root_view_ids: Vec<Uuid>,
+  pub documents: usize,
+  pub folders: usize,
+  pub images: usize,
+  pub dangling_links: usize,
+  pub removed_source: bool,
+  pub dry_run: bool,
+}
+
+fn parse_transfer_views_report(raw: &str) -> Result<TransferViewsReport, String> {
+  let val: Value = serde_json::from_str(raw).map_err(|e| format!("invalid transfer JSON: {e}"))?;
+  let new_root_view_ids = val
+    .get("new_root_view_ids")
+    .and_then(Value::as_array)
+    .map(|arr| {
+      arr
+        .iter()
+        .filter_map(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok()))
+        .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+  let dangling_links = val
+    .get("dangling_links")
+    .and_then(Value::as_array)
+    .map(Vec::len)
+    .unwrap_or(0);
+  Ok(TransferViewsReport {
+    new_root_view_ids,
+    documents: val.get("documents").and_then(Value::as_u64).unwrap_or(0) as usize,
+    folders: val.get("folders").and_then(Value::as_u64).unwrap_or(0) as usize,
+    images: val.get("images").and_then(Value::as_u64).unwrap_or(0) as usize,
+    dangling_links,
+    removed_source: val
+      .get("removed_source")
+      .and_then(Value::as_bool)
+      .unwrap_or(false),
+    dry_run: val
+      .get("dry_run")
+      .and_then(Value::as_bool)
+      .unwrap_or(false),
+  })
+}
+
 /// Coordinates cloud HTTP auth/health probes, [`ClaimTracker`] ownership
 /// generations, cloud resource APIs, and per-document Sans-I/O [`SyncEngine`]
 /// instances.
@@ -851,7 +909,7 @@ impl CloudConnector {
     Ok(())
   }
 
-  /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
+    /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
   pub async fn reorder_views(
     &self,
     workspace_id: Uuid,
@@ -869,6 +927,39 @@ impl CloudConnector {
       )
       .await?;
     Ok(())
+  }
+
+  /// Move or copy one or more views (and their subtrees + images) into another
+  /// workspace on the same server (`POST /api/workspaces/{ws}/views/batch-transfer`).
+  pub async fn batch_transfer_views(
+    &self,
+    src_workspace_id: Uuid,
+    req: &TransferViewsRequest,
+  ) -> Result<TransferViewsReport, String> {
+    if req.view_ids.is_empty() {
+      return Err("未选择要转移的页面或文件夹".to_string());
+    }
+    let timeout = if req.dry_run {
+      API_TIMEOUT_SECS
+    } else {
+      API_TIMEOUT_SECS.max(120)
+    };
+    let body = self
+      .authed_post_json(
+        &format!("/api/workspaces/{src_workspace_id}/views/batch-transfer"),
+        &json!({
+          "dest_workspace_id": req.dest_workspace_id,
+          "parent_view_id": req.parent_view_id,
+          "before_view_id": req.before_view_id,
+          "after_view_id": req.after_view_id,
+          "remove_source": req.remove_source,
+          "dry_run": req.dry_run,
+          "view_ids": req.view_ids,
+        }),
+        timeout,
+      )
+      .await?;
+    parse_transfer_views_report(&body)
   }
 
   /// Register a new account via `POST /api/auth/register`.
@@ -3012,5 +3103,31 @@ mod tests {
     assert_eq!(parsed.file_id, "f-1");
     assert_eq!(parsed.name, "diagram.png");
     assert_eq!(parsed.download_url, "https://cdn.example/f-1");
+  }
+
+  #[test]
+  fn parse_transfer_views_report_matches_server_contract() {
+    let root_id = Uuid::new_v4();
+    let raw = json!({
+      "new_root_view_id": root_id,
+      "new_root_view_ids": [root_id],
+      "documents": 3,
+      "folders": 1,
+      "images": 4,
+      "dangling_links": [
+        { "document": "Note", "target_view_id": Uuid::new_v4() }
+      ],
+      "removed_source": true,
+      "dry_run": false
+    })
+    .to_string();
+    let rep = parse_transfer_views_report(&raw).expect("parse transfer report");
+    assert_eq!(rep.new_root_view_ids, vec![root_id]);
+    assert_eq!(rep.documents, 3);
+    assert_eq!(rep.folders, 1);
+    assert_eq!(rep.images, 4);
+    assert_eq!(rep.dangling_links, 1);
+    assert!(rep.removed_source);
+    assert!(!rep.dry_run);
   }
 }

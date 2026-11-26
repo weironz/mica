@@ -855,6 +855,24 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       })
     };
 
+    // Preserve uploaded cloud blob URLs and Desktop CAS URIs whenever Markdown is exported
+    // synchronously (flush, save, copy, export) so images never degrade into bare filenames.
+    bridge.set_image_asset_resolver(Rc::new(move |blocks: &[mica_editor::EditorBlock]| {
+      let ws_id = active_workspace_id.get_untracked();
+      let orig = active_origin.get_untracked();
+      let cloud_origin = if cloud_sync::is_cloud_origin(&orig) {
+        let srv = cloud_sync::canonicalize_cloud_url(&server_url.get_untracked());
+        if !srv.is_empty() {
+          Some(srv)
+        } else {
+          mica_client::web_runtime::web_origin()
+        }
+      } else {
+        None
+      };
+      image_blocks::build_blocks_image_urls(blocks, ws_id, cloud_origin.as_deref())
+    }));
+
     // Synchronous flush path (invoked by `flush_pending_persist` and `set_front_matter`)
     {
       let vault_s = vault_p.clone();
@@ -940,8 +958,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           let v_bg = (*vault_a).clone();
           let orig_bg = orig.clone();
           let seqs_bg = seqs_a.clone();
+          let cloud_origin_bg = if cloud_sync::is_cloud_origin(&orig) {
+            let srv = cloud_sync::canonicalize_cloud_url(&server_url.get_untracked());
+            if !srv.is_empty() {
+              Some(srv)
+            } else {
+              mica_client::web_runtime::web_origin()
+            }
+          } else {
+            None
+          };
           let md = net::run_blocking(move || {
-            let md = mica_editor::export_blocks_markdown(&blocks, &std::collections::BTreeMap::new());
+            let image_map = image_blocks::build_blocks_image_urls(
+              &blocks,
+              ws_id,
+              cloud_origin_bg.as_deref(),
+            );
+            let md = mica_editor::export_blocks_markdown(&blocks, &image_map);
             let still_latest = seqs_bg
               .lock()
               .ok()
@@ -3468,6 +3501,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let tree_graph = tree.clone();
   let br_embed = bridge.clone();
   let v_transfer = vault.clone();
+  let br_transfer = bridge.clone();
+  let docs_transfer = docs_store.clone();
+  let cc_transfer = cloud_connector.clone();
+  let cs_transfer = cloud_session.clone();
   let reload_transfer = reload_tree_from_vault.clone();
   let narrow_tab_count = signal(open_tabs.get_untracked().len().max(1));
   let narrow_tab_entries: Signal<Vec<responsive_shell::NarrowTabEntry>> = signal(Vec::new());
@@ -3772,10 +3809,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     // 9. Cross-Workspace Transfer Dialog (440px)
     .child(when(move || transfer_modal_open.get(), {
       let vt = v_transfer.clone();
+      let br = br_transfer.clone();
+      let docs = docs_transfer.clone();
+      let cc = cc_transfer.clone();
+      let cs = cs_transfer.clone();
       let rel = reload_transfer.clone();
       move || {
         let state = app_transfer_io::build_transfer_dialog_state(CrossWorkspaceTransferCtx {
+          app_owner,
           vault: vt.clone(),
+          bridge: br.clone(),
+          docs_store: docs.clone(),
+          cloud_connector: cc.clone(),
+          cloud_session: cs.clone(),
+          allow_local,
+          is_cloud_signed_in,
+          server_url,
+          account_email,
           reload_tree: rel.clone(),
           active_workspace_id,
           active_origin,

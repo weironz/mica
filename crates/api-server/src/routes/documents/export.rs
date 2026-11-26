@@ -1295,7 +1295,7 @@ pub(super) fn blob_asset_map(
 /// that owns the bytes — it would collect them and break this page. Left as a
 /// plain link, it stays exactly as honest as it is: a link to someone else's
 /// file.
-fn parse_blob_href(href: &str, workspace_id: Uuid) -> Option<(String, String)> {
+pub(super) fn parse_blob_href(href: &str, workspace_id: Uuid) -> Option<(String, String)> {
   let path = href.split(['?', '#']).next()?;
   let at = path.find("/api/workspaces/")?;
   let rest = &path[at + "/api/workspaces/".len()..];

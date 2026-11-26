@@ -124,6 +124,12 @@ pub struct TransferPreviewReport {
   pub dangling_links: usize,
 }
 
+pub type TransferLoadTreeFn = Rc<dyn Fn(Uuid, Signal<Vec<TransferDestinationNode>>)>;
+pub type TransferPreviewFn =
+  Rc<dyn Fn(Uuid, DestinationPick, Signal<Option<TransferPreviewReport>>, Signal<Option<String>>)>;
+pub type TransferConfirmFn =
+  Rc<dyn Fn(Uuid, DestinationPick, Signal<bool>, Signal<Option<String>>)>;
+
 /// State & callbacks driving [`transfer_dialog_modal`].
 pub struct TransferDialogState {
   /// `true` = copy (keep source); `false` = move (soft-delete source after copy).
@@ -132,12 +138,12 @@ pub struct TransferDialogState {
   pub item_count: usize,
   /// Available target workspaces (source workspace already excluded).
   pub destinations: Vec<TransferDestination>,
-  /// Load the live tree nodes of a selected destination workspace.
-  pub on_load_tree: Rc<dyn Fn(Uuid) -> Vec<TransferDestinationNode>>,
-  /// Dry-run preview against `(dest_workspace_id, pick)`.
-  pub on_preview: Rc<dyn Fn(Uuid, DestinationPick) -> Result<TransferPreviewReport, String>>,
-  /// Commit the transfer against `(dest_workspace_id, pick)`.
-  pub on_confirm: Rc<dyn Fn(Uuid, DestinationPick) -> Result<(), String>>,
+  /// Load the live tree nodes of a selected destination workspace (sync or async via signal).
+  pub on_load_tree: TransferLoadTreeFn,
+  /// Dry-run preview against `(dest_workspace_id, pick)` (sync or async via signals).
+  pub on_preview: TransferPreviewFn,
+  /// Commit the transfer against `(dest_workspace_id, pick)` (sync or async via signals).
+  pub on_confirm: TransferConfirmFn,
   /// Dismiss the modal.
   pub on_close: Rc<dyn Fn()>,
 }
@@ -282,6 +288,7 @@ pub fn transfer_dialog_modal(
   let selection: Signal<DestinationPick> = signal(DestinationPick::root());
   let preview: Signal<Option<TransferPreviewReport>> = signal(None);
   let error_msg: Signal<Option<String>> = signal(None);
+  let busy = signal(false);
 
   let close_bg = state.on_close.clone();
   let close_x = state.on_close.clone();
@@ -289,15 +296,8 @@ pub fn transfer_dialog_modal(
 
   let run_preview: Rc<dyn Fn(Uuid, DestinationPick)> = {
     let st = state.clone();
-    Rc::new(move |dest_id: Uuid, pick: DestinationPick| match (st.on_preview)(dest_id, pick) {
-      Ok(report) => {
-        preview.set(Some(report));
-        error_msg.set(None);
-      }
-      Err(err) => {
-        preview.set(None);
-        error_msg.set(Some(format!("转移失败：{err}")));
-      }
+    Rc::new(move |dest_id: Uuid, pick: DestinationPick| {
+      (st.on_preview)(dest_id, pick, preview, error_msg);
     })
   };
 
@@ -306,12 +306,12 @@ pub fn transfer_dialog_modal(
     let run_p = run_preview.clone();
     Rc::new(move |dest_id: Uuid| {
       selected_dest.set(Some(dest_id));
-      let nodes = (st.on_load_tree)(dest_id);
-      dest_tree.set(nodes);
+      dest_tree.set(Vec::new());
       tree_filter.set(String::new());
       expanded_folders.set(HashSet::new());
       let root_pick = DestinationPick::root();
       selection.set(root_pick.clone());
+      (st.on_load_tree)(dest_id, dest_tree);
       run_p(dest_id, root_pick);
     })
   };
@@ -334,14 +334,15 @@ pub fn transfer_dialog_modal(
   let on_confirm_press: Rc<dyn Fn()> = {
     let st = state.clone();
     Rc::new(move || {
+      if busy.get_untracked() {
+        return;
+      }
       let Some(dest_id) = selected_dest.get_untracked() else {
         return;
       };
       let pick = selection.get_untracked();
-      match (st.on_confirm)(dest_id, pick) {
-        Ok(()) => (st.on_close)(),
-        Err(err) => error_msg.set(Some(format!("转移失败：{err}"))),
-      }
+      error_msg.set(None);
+      (st.on_confirm)(dest_id, pick, busy, error_msg);
     })
   };
 
@@ -690,7 +691,7 @@ pub fn transfer_dialog_modal(
                 .rounded(px(6.0))
                 .bg(move || {
                   let p = palette(dark_mode.get());
-                  if selected_dest.get().is_some() {
+                  if selected_dest.get().is_some() && !busy.get() {
                     p.accent
                   } else {
                     p.surface_sunken
@@ -698,12 +699,18 @@ pub fn transfer_dialog_modal(
                 })
                 .on_press(move || on_confirm_press())
                 .child(
-                  text(confirm_label)
+                  text(move || {
+                    if busy.get() {
+                      if is_copy { "复制中…" } else { "移动中…" }
+                    } else {
+                      confirm_label
+                    }
+                  })
                     .text_size(px(13.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(move || {
                       let p = palette(dark_mode.get());
-                      if selected_dest.get().is_some() {
+                      if selected_dest.get().is_some() && !busy.get() {
                         p.on_primary
                       } else {
                         p.text_ghost

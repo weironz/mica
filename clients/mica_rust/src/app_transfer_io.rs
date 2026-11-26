@@ -4,20 +4,25 @@
 //! cross-workspace subtree transfer stay cohesive and keep `lib.rs` well below
 //! the 4,000-line soft size gate.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+  cell::RefCell,
+  collections::{HashMap, HashSet},
+  rc::Rc,
+};
 
-use mica_client::PageTreeModel;
+use mica_client::{PageTreeModel, TransferViewsRequest};
 use nsh_core::prelude::*;
 use uuid::Uuid;
 
 use crate::{
   WorkspaceEntry, cloud_sync, collect_all_views,
   editor_bridge::MicaDocumentBridge,
+  net::CloudConnector,
   storage::{DEFAULT_ORIGIN, VaultStore},
   transfer::{self, ArchiveExportFormat, ImportedPageSpec},
   transfer_dialog::{
-    DestinationPick, TransferDestination, TransferDestinationNode, TransferDialogState,
-    TransferPreviewReport,
+    DestinationPick, TransferConfirmFn, TransferDestination, TransferDestinationNode,
+    TransferDialogState, TransferLoadTreeFn, TransferPreviewFn, TransferPreviewReport,
   },
 };
 
@@ -488,7 +493,16 @@ pub(crate) fn build_transfer_handlers(ctx: AppTransferContext) -> AppTransferHan
 }
 
 pub(crate) struct CrossWorkspaceTransferCtx {
+  pub(crate) app_owner: Owner,
   pub(crate) vault: Rc<VaultStore>,
+  pub(crate) bridge: Rc<MicaDocumentBridge>,
+  pub(crate) docs_store: Rc<RefCell<HashMap<Uuid, String>>>,
+  pub(crate) cloud_connector: Rc<RefCell<CloudConnector>>,
+  pub(crate) cloud_session: cloud_sync::CloudSessionHandles,
+  pub(crate) allow_local: bool,
+  pub(crate) is_cloud_signed_in: Signal<bool>,
+  pub(crate) server_url: Signal<String>,
+  pub(crate) account_email: Signal<String>,
   pub(crate) reload_tree: Rc<dyn Fn()>,
   pub(crate) active_workspace_id: Signal<Uuid>,
   pub(crate) active_origin: Signal<String>,
@@ -499,9 +513,27 @@ pub(crate) struct CrossWorkspaceTransferCtx {
 }
 
 /// Build the `TransferDialogState` for the 440px cross-workspace copy/move modal.
+///
+/// - **Cloud workspaces**: calls the authoritative server endpoints
+///   (`GET /api/workspaces/{dest}/views` for the live folder picker and
+///   `POST /api/workspaces/{src}/views/batch-transfer` for both `dry_run` preview
+///   and atomic commit so blobs are physically copied into the destination
+///   workspace and `file_id`s are rewritten before the source is soft-deleted).
+/// - **Local workspaces**: filters views strictly by workspace ID, flushes pending
+///   editor changes first, counts real local subtree stats, and clones Markdown
+///   preserving on-device CAS image URIs.
 pub(crate) fn build_transfer_dialog_state(ctx: CrossWorkspaceTransferCtx) -> TransferDialogState {
   let CrossWorkspaceTransferCtx {
+    app_owner,
     vault,
+    bridge,
+    docs_store,
+    cloud_connector,
+    cloud_session,
+    allow_local,
+    is_cloud_signed_in,
+    server_url,
+    account_email,
     reload_tree,
     active_workspace_id,
     active_origin,
@@ -512,77 +544,337 @@ pub(crate) fn build_transfer_dialog_state(ctx: CrossWorkspaceTransferCtx) -> Tra
   } = ctx;
 
   let cur_ws = active_workspace_id.get_untracked();
+  let cur_orig = active_origin.get_untracked();
   let dests: Vec<TransferDestination> = workspaces
     .get_untracked()
     .into_iter()
-    .filter(|w| w.id != cur_ws)
+    .filter(|w| w.id != cur_ws && w.origin == cur_orig)
     .map(|w| TransferDestination {
       id: w.id,
       name: w.name,
     })
     .collect();
-  let vt1 = vault.clone();
-  let vt2 = vault;
   let src_ids = transfer_source_ids.get_untracked();
   let copy_mode = transfer_copy_mode.get_untracked();
 
-  TransferDialogState {
-    copy: copy_mode,
-    item_count: src_ids.len().max(1),
-    destinations: dests,
-    on_load_tree: Rc::new(move |dest_ws: Uuid| {
+  let load_gen = signal(0u64);
+  let preview_gen = signal(0u64);
+  let confirm_gen = signal(0u64);
+
+  let vt_load = vault.clone();
+  let cc_load = cloud_connector.clone();
+  let on_load_tree: TransferLoadTreeFn =
+    Rc::new(move |dest_ws: Uuid, dest_tree: Signal<Vec<TransferDestinationNode>>| {
+      let epoch = load_gen.get_untracked().wrapping_add(1);
+      load_gen.set(epoch);
       let orig = workspaces
         .get_untracked()
         .into_iter()
         .find(|w| w.id == dest_ws)
         .map(|w| w.origin)
         .unwrap_or_else(|| DEFAULT_ORIGIN.to_string());
-      vt1
-        .list_views(&orig)
+
+      // Seed immediately from cached/local views scoped strictly to `dest_ws`.
+      let cached: Vec<TransferDestinationNode> = vt_load
+        .list_workspace_views(&orig, dest_ws)
         .into_iter()
         .filter(|v| !v.is_deleted)
         .map(|v| TransferDestinationNode::from(&v))
-        .collect()
-    }),
-    on_preview: Rc::new(move |_dest_ws: Uuid, _pick: DestinationPick| {
-      Ok(TransferPreviewReport {
-        documents: src_ids.len().max(1),
-        folders: 0,
-        images: 0,
-        dangling_links: 0,
-      })
-    }),
-    on_confirm: Rc::new(move |dest_ws: Uuid, pick: DestinationPick| {
+        .collect();
+      dest_tree.set(cached);
+
+      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() {
+        let cc = cc_load.clone();
+        let vt = vt_load.clone();
+        let srv_req = server_url.get_untracked();
+        let email_req = account_email.get_untracked();
+        let expected_orig = orig.clone();
+        app_owner.run(move || {
+          spawn(async move {
+            let mut conn = cc.borrow().clone();
+            let res = cloud_sync::with_auto_refresh(&mut conn, |c| async move {
+              c.list_views(dest_ws).await
+            })
+            .await;
+            if load_gen.get_untracked() != epoch
+              || active_origin.get_untracked() != expected_orig
+              || !transfer_modal_open.get_untracked()
+            {
+              return;
+            }
+            if let Ok((views, rot)) = res {
+              if rot.is_some() {
+                *cc.borrow_mut() = conn;
+                if allow_local {
+                  cloud_sync::persist_refreshed_tokens(&vt, &srv_req, &email_req, rot);
+                }
+              }
+              let nodes: Vec<TransferDestinationNode> = views
+                .into_iter()
+                .filter(|v| !v.is_deleted && v.workspace_id == dest_ws)
+                .map(|v| TransferDestinationNode::from(&v))
+                .collect();
+              dest_tree.set(nodes);
+            }
+          });
+        });
+      }
+    });
+
+  let vt_prev = vault.clone();
+  let cc_prev = cloud_connector.clone();
+  let on_preview: TransferPreviewFn = Rc::new(
+    move |dest_ws: Uuid,
+          pick: DestinationPick,
+          preview_sig: Signal<Option<TransferPreviewReport>>,
+          error_sig: Signal<Option<String>>| {
+      let epoch = preview_gen.get_untracked().wrapping_add(1);
+      preview_gen.set(epoch);
       let src_orig = active_origin.get_untracked();
-      let dest_orig = workspaces
-        .get_untracked()
-        .into_iter()
-        .find(|w| w.id == dest_ws)
-        .map(|w| w.origin)
-        .ok_or_else(|| "未找到目标工作区".to_string())?;
-      let src_views = vt2.list_views(&src_orig);
-      for sid in transfer_source_ids.get_untracked() {
-        if let Some(vrow) = src_views.iter().find(|r| r.id == sid || r.object_id == sid) {
-          clone_subtree_to_dest(
-            &vt2,
-            &src_orig,
-            &dest_orig,
-            dest_ws,
-            &src_views,
-            vrow,
-            pick.parent_view_id,
-          );
-          if !copy_mode {
-            let _ = vt2.trash_view_subtree(&src_orig, vrow.id);
+      let src_ws = active_workspace_id.get_untracked();
+      let view_ids = transfer_source_ids.get_untracked();
+
+      if cloud_sync::is_cloud_origin(&src_orig) {
+        if !is_cloud_signed_in.get_untracked() {
+          preview_sig.set(None);
+          error_sig.set(Some("云端登录已过期，请重新登录后再转移页面。".to_string()));
+          return;
+        }
+        let req = TransferViewsRequest {
+          dest_workspace_id: dest_ws,
+          parent_view_id: pick.parent_view_id,
+          before_view_id: pick.before_view_id,
+          after_view_id: pick.after_view_id,
+          remove_source: !copy_mode,
+          dry_run: true,
+          view_ids,
+        };
+        let cc = cc_prev.clone();
+        let vt = vt_prev.clone();
+        let srv_req = server_url.get_untracked();
+        let email_req = account_email.get_untracked();
+        app_owner.run(move || {
+          spawn(async move {
+            let mut conn = cc.borrow().clone();
+            let res = cloud_sync::with_auto_refresh(&mut conn, |c| {
+              let req = req.clone();
+              async move { c.batch_transfer_views(src_ws, &req).await }
+            })
+            .await;
+            if preview_gen.get_untracked() != epoch
+              || active_origin.get_untracked() != src_orig
+              || active_workspace_id.get_untracked() != src_ws
+              || !transfer_modal_open.get_untracked()
+            {
+              return;
+            }
+            match res {
+              Ok((rep, rot)) => {
+                if rot.is_some() {
+                  *cc.borrow_mut() = conn;
+                  if allow_local {
+                    cloud_sync::persist_refreshed_tokens(&vt, &srv_req, &email_req, rot);
+                  }
+                }
+                preview_sig.set(Some(TransferPreviewReport {
+                  documents: rep.documents,
+                  folders: rep.folders,
+                  images: rep.images,
+                  dangling_links: rep.dangling_links,
+                }));
+                error_sig.set(None);
+              }
+              Err(err) => {
+                preview_sig.set(None);
+                error_sig.set(Some(format!("预览失败：{err}")));
+              }
+            }
+          });
+        });
+        return;
+      }
+
+      // Local offline workspace dry-run count.
+      let src_views = vt_prev.list_workspace_views(&src_orig, src_ws);
+      let rep = compute_local_transfer_preview(&vt_prev, &src_orig, &src_views, &view_ids);
+      preview_sig.set(Some(rep));
+      error_sig.set(None);
+    },
+  );
+
+  let vt_conf = vault;
+  let br_conf = bridge;
+  let docs_conf = docs_store;
+  let cc_conf = cloud_connector;
+  let cs_conf = cloud_session;
+  let on_confirm: TransferConfirmFn =
+    Rc::new(
+      move |dest_ws: Uuid,
+            pick: DestinationPick,
+            busy_sig: Signal<bool>,
+            error_sig: Signal<Option<String>>| {
+        br_conf.flush_pending_persist();
+        let src_orig = active_origin.get_untracked();
+        let src_ws = active_workspace_id.get_untracked();
+        let view_ids = transfer_source_ids.get_untracked();
+
+        if cloud_sync::is_cloud_origin(&src_orig) {
+          if !is_cloud_signed_in.get_untracked() {
+            error_sig.set(Some("云端登录已过期，请重新登录后再转移页面。".to_string()));
+            return;
+          }
+          let epoch = confirm_gen.get_untracked().wrapping_add(1);
+          confirm_gen.set(epoch);
+          busy_sig.set(true);
+          error_sig.set(None);
+
+          let req = TransferViewsRequest {
+            dest_workspace_id: dest_ws,
+            parent_view_id: pick.parent_view_id,
+            before_view_id: pick.before_view_id,
+            after_view_id: pick.after_view_id,
+            remove_source: !copy_mode,
+            dry_run: false,
+            view_ids: view_ids.clone(),
+          };
+          let cc = cc_conf.clone();
+          let vt = vt_conf.clone();
+          let docs = docs_conf.clone();
+          let cs = cs_conf.clone();
+          let br = br_conf.clone();
+          let srv_req = server_url.get_untracked();
+          let email_req = account_email.get_untracked();
+          app_owner.run(move || {
+            spawn(async move {
+              let mut conn = cc.borrow().clone();
+              let res = cloud_sync::with_auto_refresh(&mut conn, |c| {
+                let req = req.clone();
+                async move { c.batch_transfer_views(src_ws, &req).await }
+              })
+              .await;
+              if confirm_gen.get_untracked() != epoch
+                || active_origin.get_untracked() != src_orig
+                || active_workspace_id.get_untracked() != src_ws
+              {
+                busy_sig.set(false);
+                return;
+              }
+              busy_sig.set(false);
+              match res {
+                Ok((rep, rot)) => {
+                  if rot.is_some() {
+                    *cc.borrow_mut() = conn;
+                    if allow_local {
+                      cloud_sync::persist_refreshed_tokens(&vt, &srv_req, &email_req, rot);
+                    }
+                  }
+                  if !copy_mode {
+                    let mut ds = docs.borrow_mut();
+                    for sid in &view_ids {
+                      ds.remove(sid);
+                    }
+                  }
+                  transfer_modal_open.set(false);
+                  cs.refresh_views_only(srv_req, src_orig, src_ws);
+                  let verb = if copy_mode { "已复制" } else { "已移动" };
+                  let img_note = if rep.images > 0 {
+                    format!("（含 {} 张图片）", rep.images)
+                  } else {
+                    String::new()
+                  };
+                  br.set_status_flash(format!("{verb}到目标工作区{img_note}"));
+                }
+                Err(err) => {
+                  error_sig.set(Some(format!("转移失败：{err}")));
+                }
+              }
+            });
+          });
+          return;
+        }
+
+        // Local offline workspace transfer (atomic local SQLite copy + optional trash).
+        let Some(dest_orig) = workspaces
+          .get_untracked()
+          .into_iter()
+          .find(|w| w.id == dest_ws)
+          .map(|w| w.origin)
+        else {
+          error_sig.set(Some("转移失败：未找到目标工作区".to_string()));
+          return;
+        };
+        let src_views = vt_conf.list_workspace_views(&src_orig, src_ws);
+        for sid in view_ids {
+          if let Some(vrow) = src_views
+            .iter()
+            .find(|r| !r.is_deleted && (r.id == sid || r.object_id == sid))
+          {
+            clone_subtree_to_dest(
+              &vt_conf,
+              &src_orig,
+              &dest_orig,
+              dest_ws,
+              &src_views,
+              vrow,
+              pick.parent_view_id,
+            );
+            if !copy_mode {
+              let _ = vt_conf.trash_view_subtree(&src_orig, vrow.id);
+            }
           }
         }
-      }
-      reload_tree();
-      transfer_modal_open.set(false);
-      Ok(())
-    }),
+        reload_tree();
+        transfer_modal_open.set(false);
+      },
+    );
+
+  TransferDialogState {
+    copy: copy_mode,
+    item_count: src_ids.len().max(1),
+    destinations: dests,
+    on_load_tree,
+    on_preview,
+    on_confirm,
     on_close: Rc::new(move || transfer_modal_open.set(false)),
   }
+}
+
+fn compute_local_transfer_preview(
+  vt: &VaultStore,
+  src_orig: &str,
+  src_views: &[mica_api_types::View],
+  root_ids: &[Uuid],
+) -> TransferPreviewReport {
+  let mut visited = HashSet::new();
+  let mut report = TransferPreviewReport::default();
+  let mut stack: Vec<&mica_api_types::View> = root_ids
+    .iter()
+    .filter_map(|sid| {
+      src_views
+        .iter()
+        .find(|r| !r.is_deleted && (r.id == *sid || r.object_id == *sid))
+    })
+    .collect();
+  while let Some(vrow) = stack.pop() {
+    if !visited.insert(vrow.id) {
+      continue;
+    }
+    if cloud_sync::is_page_view(vrow) {
+      report.documents += 1;
+      if let Some(md) = vt.load_markdown(src_orig, vrow.object_id) {
+        report.images += md.matches("![").count();
+      }
+    } else {
+      report.folders += 1;
+      for child in src_views
+        .iter()
+        .filter(|c| !c.is_deleted && c.parent_view_id == Some(vrow.id))
+      {
+        stack.push(child);
+      }
+    }
+  }
+  report
 }
 
 fn clone_subtree_to_dest(
