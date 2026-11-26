@@ -2808,6 +2808,25 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     });
   }
 
+  let world_start_in_auth = signal(false);
+
+  let on_enter_local_world: Rc<dyn Fn()> = {
+    let logout = do_cloud_logout.clone();
+    Rc::new(move || {
+      logout();
+      world_start_in_auth.set(false);
+      world_switcher_open.set(false);
+    })
+  };
+
+  let on_enter_signed_in_world: Rc<dyn Fn(String)> = {
+    let cs = cloud_session.clone();
+    Rc::new(move |origin: String| {
+      let cs_run = cs.clone();
+      app_owner.run(move || cs_run.enter_origin(origin, true));
+    })
+  };
+
   let account_menu_state = AccountMenuState {
     allow_local,
     is_local: signal(allow_local),
@@ -2815,12 +2834,19 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     show_cloud_signin: signal(true),
     display_name: account_name,
     email: account_email,
+    active_origin: world_active_origin,
+    signed_in_origins: signed_in_origins_sig,
     app_version: APP_VERSION,
     update_status,
     on_open_settings: on_open_settings.clone(),
     on_open_usage_stats: Some(on_open_usage_stats.clone()),
+    on_enter_local: on_enter_local_world.clone(),
+    on_enter_signed_in: on_enter_signed_in_world.clone(),
     on_switch_world: Rc::new(move || {
       account_menu_open.set(false);
+      world_error.set(String::new());
+      world_info.set(String::new());
+      world_start_in_auth.set(false);
       world_switcher_open.set(true);
     }),
     on_check_update: {
@@ -2830,6 +2856,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_sign_out: do_cloud_logout.clone(),
     on_sign_in: Rc::new(move || {
       account_menu_open.set(false);
+      world_start_in_auth.set(true);
       world_switcher_open.set(true);
     }),
   };
@@ -2883,6 +2910,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     open: world_switcher_open,
     can_close: world_can_close,
     allow_local,
+    initial_auth_view: world_start_in_auth,
     dark_mode,
     app_version: APP_VERSION,
     active_origin: world_active_origin,
@@ -2893,14 +2921,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     busy: world_busy,
     error_msg: world_error,
     info_msg: world_info,
-    on_close: Rc::new(move || world_switcher_open.set(false)),
-    on_enter_local: {
-      let logout = do_cloud_logout.clone();
-      Rc::new(move || {
-        logout();
-        world_switcher_open.set(false);
-      })
-    },
+    on_close: Rc::new(move || {
+      world_start_in_auth.set(false);
+      world_switcher_open.set(false);
+    }),
+    on_enter_local: on_enter_local_world,
     on_select_server: Rc::new(move |origin: String| {
       selected_cloud_origin.set(origin.clone());
       server_url.set(origin);
@@ -2932,13 +2957,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         signed_in_origins_sig.set(creds);
       })
     },
-    on_enter_signed_in: {
-      let cs = cloud_session.clone();
-      Rc::new(move |origin: String| {
-        let cs_run = cs.clone();
-        app_owner.run(move || cs_run.enter_origin(origin, true));
-      })
-    },
+    on_enter_signed_in: on_enter_signed_in_world,
     on_login: do_cloud_login,
     on_register: {
       let cs = cloud_session.clone();
@@ -3556,6 +3575,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                     if cloud_sync::is_cloud_origin(&srv) {
                       selected_cloud_origin.set(srv);
                     }
+                    world_start_in_auth.set(true);
                     world_switcher_open.set(true);
                   }),
                 )
@@ -3598,6 +3618,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                           if cloud_sync::is_cloud_origin(&srv) {
                             selected_cloud_origin.set(srv);
                           }
+                          world_start_in_auth.set(true);
                           world_switcher_open.set(true);
                         }),
                         Rc::new(move || {

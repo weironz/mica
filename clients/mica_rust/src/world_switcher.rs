@@ -1,21 +1,28 @@
-//! Full-window split-screen World Switcher / Cloud Sign-In overlay.
+//! Centered World / Server Switcher modal (Desktop) and single-card Cloud
+//! Sign-In page (Web).
 //!
-//! 1:1 visual and semantic parity with:
-//! - `main:clients/mica_flutter/lib/ui/sign_in_screen.dart`
-//! - `main:clients/mica_flutter/lib/ui/sign_in_hero.dart`
-//! - `main:clients/mica_flutter/lib/ui/sign_in_pane.dart`
-//! - `main:clients/mica_flutter/lib/ui/auth_form.dart`
-//! - `main:clients/mica_flutter/lib/server_list.dart`
-//! - `main:clients/mica_flutter/lib/local/cache_stats.dart`
+//! Layout strategy:
+//! - **Desktop (`allow_local == true`)**: Never takes over the viewport with a
+//!   full-screen marketing poster. Opens as a centered 440px modal over a
+//!   dimmed workspace backdrop with two clean views:
+//!   - **View A (`world-env-list`)**: Flat unified list containing the on-device
+//!     local vault (`本地离线库`) and every configured self-hosted server, plus
+//!     inline `+ 添加自托管服务器` creation and per-server removal.
+//!   - **View B (`world-auth-form`)**: Single-server Sign-In / Register form
+//!     with a `←` back button to View A, a compact server health chip, and
+//!     bottom text links instead of stacked segmented tabs.
+//! - **Web (`allow_local == false`)**: Clean centered 396px single-card sign-in
+//!   page on the warm paper backdrop — no dark hero poster, no local mode, and
+//!   no multi-server dropdown.
 
 use std::rc::Rc;
 
 use nsh_base::{button, input};
 use nsh_core::{
   SubmitBehavior,
-  color::{rgb, rgba, white},
+  color::{rgb, white},
   element::{ImageSrc, Svg, svg},
-  geometry::px,
+  geometry::{px, relative},
   prelude::*,
 };
 
@@ -26,16 +33,16 @@ const MICA_LOGO_SVG: &str = include_str!("../../../assets/mica-logo.svg");
 /// Origin string representing the on-device local workspace.
 pub const LOCAL_ORIGIN: &str = "local";
 
-/// Minimum viewport width to display the split-screen brand hero panel beside the form.
-pub const SIGN_IN_SPLIT_MIN_WIDTH: f32 = 900.0;
+/// Width of the centered environment switcher modal on Desktop.
+pub const WORLD_MODAL_WIDTH: f32 = 440.0;
 
-/// Fixed width of the right-hand form column on wide desktop viewports.
-pub const SIGN_IN_FORM_WIDTH: f32 = 420.0;
+/// Width of the centered sign-in card on Web cloud-only builds.
+pub const WEB_SIGN_IN_CARD_WIDTH: f32 = 396.0;
 
 const AUTH_MODE_LOGIN: u8 = 0;
 const AUTH_MODE_REGISTER: u8 = 1;
 
-/// Reactive state and callbacks driving the full-window World Switcher overlay.
+/// Reactive state and callbacks driving the World Switcher modal / Web Sign-In.
 #[derive(Clone)]
 pub struct WorldSwitcherState {
   pub open: Signal<bool>,
@@ -43,6 +50,9 @@ pub struct WorldSwitcherState {
   /// Whether the on-device local workspace mode and multi-server switcher are
   /// available (`true` on Desktop, `false` on Web cloud-only same-origin builds).
   pub allow_local: bool,
+  /// When `true` on Desktop open, jump directly into View B (single-server auth
+  /// form) for `selected_cloud_origin` instead of View A (environment list).
+  pub initial_auth_view: Signal<bool>,
   pub dark_mode: Signal<bool>,
   pub app_version: &'static str,
   pub active_origin: Signal<String>,
@@ -67,8 +77,8 @@ pub struct WorldSwitcherState {
 
 /// Extracts a human-readable host label from a server origin URL.
 ///
-/// Mirrors `serverLabel` in `server_list.dart`: `https://mica.example.com:8443/mica`
-/// renders as `mica.example.com`; unparseable inputs fall back to the raw string.
+/// `https://mica.example.com:8443/mica` renders as `mica.example.com`;
+/// unparseable inputs fall back to the raw string.
 pub fn server_label(origin: &str) -> String {
   let trimmed = origin.trim();
   if trimmed.is_empty() {
@@ -110,7 +120,6 @@ pub fn server_label(origin: &str) -> String {
 
 /// Normalizes a cloud server base URL into canonical `scheme://host[:port][path]` form.
 ///
-/// Mirrors `normalizeServerUrl` in `cache_stats.dart`:
 /// - Requires absolute `http://` or `https://` with a non-empty host.
 /// - Lowercases scheme and host.
 /// - Drops default ports (`:80` for http, `:443` for https) and trailing slashes.
@@ -232,392 +241,171 @@ fn effective_cloud_origin_untracked(state: &WorldSwitcherState) -> String {
   servers.first().cloned().unwrap_or_default()
 }
 
-/// Full-window World Switcher / Cloud Sign-In overlay matching `sign_in_screen.dart`.
+/// Centered World Switcher modal (Desktop) or centered single-card Sign-In page (Web).
 pub fn world_switcher_overlay(state: WorldSwitcherState) -> impl IntoElement {
   when(move || state.open.get(), {
     let state = state.clone();
     move || {
       let st = state.clone();
       let allow_local = st.allow_local;
-      let dark_mode = st.dark_mode;
-      let can_close = st.can_close;
-      let app_version = st.app_version;
 
-      // Responsive width tracked via `on_layout`; starts wide to avoid a narrow flash.
-      let viewport_width = signal(1200.0_f32);
-
-      // Pane-local state preserved across viewport width crossings.
-      let cloud_tab = signal(!allow_local || st.active_origin.get_untracked() != LOCAL_ORIGIN);
-      let servers_open = signal(false);
-      let adding_server = signal(false);
-      let new_server_url = signal(String::new());
-      let add_server_err = signal(String::new());
-      let confirm_remove_origin: Signal<Option<String>> = signal(None);
-
-      // Auth form drafts preserved across resize / re-renders.
+      // Form drafts live per modal session so typing survives health-probe refreshes.
       let auth_mode = signal(AUTH_MODE_LOGIN);
       let email_draft = signal(String::new());
       let display_name_draft = signal(String::new());
       let password_draft = signal(String::new());
+      let local_err = signal(String::new());
 
-      let close_btn = st.on_close.clone();
-
-      view()
-        .test_id("world-switcher-overlay")
-        .absolute()
-        .inset_0()
-        .z_index(70)
-        .flex_row()
-        .bg(move || palette(dark_mode.get()).surface_base)
-        .on_layout(move |b: &Bounds<Points>| {
-          let w = f32::from(b.size.width);
-          if w > 0.0 && (viewport_width.get_untracked() - w).abs() > 1.0 {
-            viewport_width.set(w);
-          }
-        })
-        .child(when(
-          move || viewport_width.get() >= SIGN_IN_SPLIT_MIN_WIDTH,
-          move || sign_in_hero(app_version, allow_local),
-        ))
-        .child(
-          view()
-            .test_id("world-switcher-form-pane")
-            .relative()
-            .h_full()
-            .flex_shrink_0()
-            .w(move || {
-              let w = viewport_width.get();
-              if w >= SIGN_IN_SPLIT_MIN_WIDTH {
-                px(SIGN_IN_FORM_WIDTH)
-              } else {
-                px(w.max(320.0))
-              }
-            })
-            .bg(move || palette(dark_mode.get()).surface_base)
-            .child(
-              scroll().w_full().flex_1().min_h(px(0.0)).child(
-                view()
-                  .w_full()
-                  .px(px(28.0))
-                  .pt(px(80.0))
-                  .pb(px(48.0))
-                  .items_center()
-                  .child(
-                    view()
-                      .w_full()
-                      .max_w(px(364.0))
-                      .gap(px(24.0))
-                      .child(when(move || allow_local, {
-                        let st = st.clone();
-                        move || world_tabs(st.clone(), cloud_tab)
-                      }))
-                      .child(when(move || !allow_local || cloud_tab.get(), {
-                        let st = st.clone();
-                        move || {
-                          cloud_pane(
-                            st.clone(),
-                            servers_open,
-                            adding_server,
-                            new_server_url,
-                            add_server_err,
-                            confirm_remove_origin,
-                            auth_mode,
-                            email_draft,
-                            display_name_draft,
-                            password_draft,
-                          )
-                        }
-                      }))
-                      .child(when(move || allow_local && !cloud_tab.get(), {
-                        let st = st.clone();
-                        move || local_pane(st.clone())
-                      })),
-                  ),
-              ),
-            )
-            .child(when(move || can_close.get(), {
-              let close_btn = close_btn.clone();
-              move || {
-                let close_btn = close_btn.clone();
-                button()
-                  .test_id("world-switcher-close")
-                  .accessibility_label("返回")
-                  .absolute()
-                  .top(px(40.0))
-                  .right(px(16.0))
-                  .z_index(72)
-                  .h(px(32.0))
-                  .px(px(10.0))
-                  .rounded(px(6.0))
-                  .flex_row()
-                  .items_center()
-                  .gap(px(5.0))
-                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                  .on_press(move || close_btn())
-                  .child(dynamic(move || {
-                    mica_icons::close_sm(palette(dark_mode.get()).text_muted_hex)
-                  }))
-                  .child(
-                    text("返回")
-                      .text_size(px(13.0))
-                      .font_weight(FontWeight::MEDIUM)
-                      .text_color(move || palette(dark_mode.get()).text_primary),
-                  )
-              }
-            })),
+      if !allow_local {
+        web_sign_in_page(
+          st,
+          auth_mode,
+          email_draft,
+          display_name_draft,
+          password_draft,
+          local_err,
         )
+        .into_element()
+      } else {
+        let start_in_auth =
+          st.initial_auth_view.get_untracked() || !st.error_msg.get_untracked().is_empty();
+        let in_auth_view = signal(start_in_auth);
+        let adding_server = signal(false);
+        let new_server_url = signal(String::new());
+        let add_server_err = signal(String::new());
+        let confirm_remove_origin: Signal<Option<String>> = signal(None);
+
+        desktop_switcher_modal(
+          st,
+          in_auth_view,
+          adding_server,
+          new_server_url,
+          add_server_err,
+          confirm_remove_origin,
+          auth_mode,
+          email_draft,
+          display_name_draft,
+          password_draft,
+          local_err,
+        )
+        .into_element()
+      }
     }
   })
 }
 
-/// Left dark brand hero panel matching `sign_in_hero.dart`.
-fn sign_in_hero(app_version: &'static str, allow_local: bool) -> impl IntoElement {
-  let features = if allow_local {
-    [
-      "离线也能写，联网后自动同步",
-      "实时协作：多人同时编辑，能看见彼此的光标",
-      "块编辑器 · 代码高亮 · 数学公式 · 表格",
-    ]
-  } else {
-    [
-      "云端实时同步，多端设备无缝衔接",
-      "实时协作：多人同时编辑，能看见彼此的光标",
-      "块编辑器 · 代码高亮 · 数学公式 · 表格",
-    ]
-  };
-  let headline = if allow_local {
-    "本地优先的\n协作知识库"
-  } else {
-    "云端协作\n知识库"
-  };
-  let subtitle = if allow_local {
-    "块编辑器、实时协作。改动经 CRDT 合并，多台设备之间不会互相覆盖。"
-  } else {
-    "打开浏览器即写。改动经 CRDT 实时同步，多人协作不会互相覆盖。"
-  };
-  let footer_tag = if allow_local {
-    format!("CRDT SYNC · OFFLINE-FIRST · v{app_version}")
-  } else {
-    format!("CRDT SYNC · CLOUD WORKSPACE · v{app_version}")
-  };
-
-  let mut feature_col = view().w_full().gap(px(12.0));
-  for line in features {
-    feature_col = feature_col.child(
-      view()
-        .w_full()
-        .flex_row()
-        .items_start()
-        .gap(px(10.0))
-        .child(
-          view()
-            .w(px(22.0))
-            .h(px(22.0))
-            .rounded_full()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .bg(rgba(0x2563_EB38))
-            .child(hero_check_icon("#93C5FD")),
-        )
-        .child(
-          text(line)
-            .flex_1()
-            .text_size(px(13.0))
-            .text_color(rgb(0xE2E8F0)),
-        ),
-    );
-  }
+/// Web (`allow_local == false`): minimal centered 396px single-card sign-in page.
+fn web_sign_in_page(
+  state: WorldSwitcherState,
+  auth_mode: Signal<u8>,
+  email_draft: Signal<String>,
+  display_name_draft: Signal<String>,
+  password_draft: Signal<String>,
+  local_err: Signal<String>,
+) -> impl IntoElement {
+  let dark_mode = state.dark_mode;
+  let can_close = state.can_close;
+  let on_close = state.on_close.clone();
+  let app_version = state.app_version;
 
   view()
-    .test_id("world-switcher-hero")
-    .flex_1()
-    .h_full()
+    .test_id("world-switcher-overlay")
+    .absolute()
+    .inset_0()
+    .z_index(80)
     .items_center()
     .justify_center()
-    .bg(rgb(0x0B1220))
-    .bg_radial()
-    .gradient_from(rgb(0x1E293B))
-    .gradient_to(rgb(0x0B1220))
+    .p(px(20.0))
+    .bg(move || palette(dark_mode.get()).surface_raised)
     .child(
-      scroll().w_full().child(
-        view()
-          .w_full()
-          .px(px(48.0))
-          .py(px(40.0))
-          .items_center()
-          .child(
-            view()
-              .w_full()
-              .max_w(px(460.0))
-              .child(
-                // Brand row: 34px MicaLogo + "Mica" 26px w600
-                view()
-                  .flex_row()
-                  .items_center()
-                  .gap(px(11.0))
-                  .child(mica_logo_sized(34.0))
-                  .child(
-                    text("Mica")
-                      .text_size(px(26.0))
-                      .font_weight(FontWeight::SEMIBOLD)
-                      .text_color(white()),
-                  ),
-              )
-              .child(view().h(px(26.0)))
-              .child(
-                text(headline)
-                  .text_size(px(34.0))
-                  .font_weight(FontWeight::SEMIBOLD)
-                  .text_color(white()),
-              )
-              .child(view().h(px(14.0)))
-              .child(
-                text(subtitle)
-                  .text_size(px(14.0))
-                  .text_color(rgb(0x94A3B8)),
-              )
-              .child(view().h(px(26.0)))
-              .child(feature_col)
-              .child(view().h(px(26.0)))
-              .child(
-                text(footer_tag)
-                  .text_size(px(11.0))
-                  .text_color(rgb(0x64748B)),
-              ),
-          ),
-      ),
-    )
-}
-
-/// Top segmented tab control (`云端账户` / `本地模式`).
-fn world_tabs(state: WorldSwitcherState, cloud_tab: Signal<bool>) -> impl IntoElement {
-  let dark_mode = state.dark_mode;
-  let transparent = rgba(0x0000_0000);
-  let st_cloud = state.clone();
-
-  view()
-    .w_full()
-    .p(px(3.0))
-    .rounded(px(8.0))
-    .bg(move || palette(dark_mode.get()).surface_sunken)
-    .flex_row()
-    .gap(px(2.0))
-    .child(
-      button()
-        .test_id("world-tab-cloud")
-        .accessibility_label("云端账户")
-        .flex_1()
-        .h(px(32.0))
-        .rounded(px(6.0))
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap(px(7.0))
+      view()
+        .test_id("world-switcher-form-pane")
+        .relative()
+        .w(px(WEB_SIGN_IN_CARD_WIDTH))
+        .max_w(relative(0.94))
+        .p(px(28.0))
+        .gap(px(18.0))
+        .rounded(px(16.0))
         .border_1()
-        .border_color(move || {
-          if cloud_tab.get() {
-            palette(dark_mode.get()).border_normal
-          } else {
-            transparent
-          }
-        })
-        .bg(move || {
-          if cloud_tab.get() {
-            palette(dark_mode.get()).surface_base
-          } else {
-            transparent
-          }
-        })
-        .on_press(move || {
-          let was_local = !cloud_tab.get_untracked();
-          cloud_tab.set(true);
-          if was_local {
-            let origin = effective_cloud_origin_untracked(&st_cloud);
-            if !origin.is_empty() {
-              (st_cloud.on_probe_server)(origin);
-            }
-          }
-        })
-        .child(dynamic(move || {
-          let p = palette(dark_mode.get());
-          let hex = if cloud_tab.get() {
-            p.text_primary_hex
-          } else {
-            p.text_muted_hex
-          };
-          mica_icons::cloud(hex)
-        }))
+        .border_color(move || palette(dark_mode.get()).border_normal)
+        .bg(move || palette(dark_mode.get()).surface_overlay)
+        .shadow_lg()
         .child(
-          text("云端账户")
-            .text_size(px(13.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(move || {
-              let p = palette(dark_mode.get());
-              if cloud_tab.get() {
-                p.text_primary
-              } else {
-                p.text_muted
-              }
-            }),
-        ),
-    )
-    .child(
-      button()
-        .test_id("world-tab-local")
-        .accessibility_label("本地模式")
-        .flex_1()
-        .h(px(32.0))
-        .rounded(px(6.0))
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap(px(7.0))
-        .border_1()
-        .border_color(move || {
-          if !cloud_tab.get() {
-            palette(dark_mode.get()).border_normal
-          } else {
-            transparent
-          }
-        })
-        .bg(move || {
-          if !cloud_tab.get() {
-            palette(dark_mode.get()).surface_base
-          } else {
-            transparent
-          }
-        })
-        .on_press(move || cloud_tab.set(false))
-        .child(dynamic(move || {
-          let p = palette(dark_mode.get());
-          let hex = if !cloud_tab.get() {
-            p.text_primary_hex
-          } else {
-            p.text_muted_hex
-          };
-          computer_icon(hex)
-        }))
+          // Brand header + optional close button (hidden on unauthenticated Web gate)
+          view()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .child(
+              view()
+                .flex_row()
+                .items_center()
+                .gap(px(12.0))
+                .min_w(px(0.0))
+                .child(mica_logo_sized(34.0))
+                .child(
+                  view()
+                    .gap(px(2.0))
+                    .min_w(px(0.0))
+                    .child(
+                      text(move || {
+                        if auth_mode.get() == AUTH_MODE_REGISTER {
+                          "创建 Mica 账号"
+                        } else {
+                          "登录到 Mica"
+                        }
+                      })
+                      .text_size(px(18.0))
+                      .font_weight(FontWeight::BOLD)
+                      .text_color(move || palette(dark_mode.get()).text_primary),
+                    )
+                    .child(
+                      text("云端协作知识库")
+                        .text_size(px(12.5))
+                        .text_color(move || palette(dark_mode.get()).text_muted),
+                    ),
+                ),
+            )
+            .child(when(
+              move || can_close.get(),
+              {
+                let on_close = on_close.clone();
+                move || close_icon_button(dark_mode, on_close.clone())
+              },
+            )),
+        )
+        .child(server_status_chip(state.clone()))
+        .child(auth_form(
+          state,
+          auth_mode,
+          email_draft,
+          display_name_draft,
+          password_draft,
+          local_err,
+        ))
         .child(
-          text("本地模式")
-            .text_size(px(13.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(move || {
-              let p = palette(dark_mode.get());
-              if !cloud_tab.get() {
-                p.text_primary
-              } else {
-                p.text_muted
-              }
-            }),
+          view()
+            .pt(px(4.0))
+            .border_t_1()
+            .border_color(move || palette(dark_mode.get()).border_subtle)
+            .items_center()
+            .child(
+              text(format!(
+                "Mica Web v{app_version} · 安全会话（365 天滑动续期）"
+              ))
+              .text_size(px(11.0))
+              .text_color(move || palette(dark_mode.get()).text_faint),
+            ),
         ),
     )
 }
 
+/// Desktop (`allow_local == true`): centered 440px modal over dimmed backdrop.
 #[allow(clippy::too_many_arguments)]
-fn cloud_pane(
+fn desktop_switcher_modal(
   state: WorldSwitcherState,
-  servers_open: Signal<bool>,
+  in_auth_view: Signal<bool>,
   adding_server: Signal<bool>,
   new_server_url: Signal<String>,
   add_server_err: Signal<String>,
@@ -626,413 +414,345 @@ fn cloud_pane(
   email_draft: Signal<String>,
   display_name_draft: Signal<String>,
   password_draft: Signal<String>,
+  local_err: Signal<String>,
 ) -> impl IntoElement {
-  let servers = state.servers;
-  let signed_in_origins = state.signed_in_origins;
-
-  let st_card = state.clone();
-  let st_empty = state.clone();
-  let st_signed = state.clone();
-  let st_auth = state.clone();
-  let st_check = state.clone();
+  let dark_mode = state.dark_mode;
+  let can_close = state.can_close;
+  let on_close = state.on_close.clone();
 
   view()
-    .w_full()
-    .gap(px(24.0))
-    .child(when(move || servers.get().is_empty(), {
-      let st = st_empty.clone();
-      move || {
-        add_server_row(
-          st.clone(),
-          adding_server,
-          new_server_url,
-          add_server_err,
-          true,
-        )
-      }
-    }))
-    .child(when(move || !servers.get().is_empty(), {
-      let st = st_card.clone();
-      move || {
-        server_selector_section(
-          st.clone(),
-          servers_open,
-          adding_server,
-          new_server_url,
-          add_server_err,
-          confirm_remove_origin,
-        )
-      }
-    }))
-    .child(when(
-      move || {
-        if servers.get().is_empty() {
-          return false;
-        }
-        let origin = effective_cloud_origin(&st_check);
-        signed_in_origins
-          .get()
-          .iter()
-          .any(|(o, _)| o == &origin)
-      },
-      {
-        let st = st_signed.clone();
-        move || signed_in_card(st.clone())
-      },
-    ))
-    .child(when(
-      move || {
-        if servers.get().is_empty() {
-          return false;
-        }
-        let origin = effective_cloud_origin(&state);
-        !signed_in_origins
-          .get()
-          .iter()
-          .any(|(o, _)| o == &origin)
-      },
-      {
-        let st = st_auth.clone();
-        move || {
-          auth_form_card(
-            st.clone(),
-            auth_mode,
-            email_draft,
-            display_name_draft,
-            password_draft,
-          )
-        }
-      },
-    ))
+    .test_id("world-switcher-overlay")
+    .absolute()
+    .inset_0()
+    .z_index(80)
+    .items_center()
+    .justify_center()
+    .p(px(20.0))
+    .bg(move || palette(dark_mode.get()).backdrop)
+    .child(
+      button()
+        .test_id("world-switcher-backdrop")
+        .accessibility_label("关闭切换弹窗")
+        .absolute()
+        .inset_0()
+        .on_press({
+          let on_close = on_close.clone();
+          move || {
+            if can_close.get_untracked() {
+              on_close();
+            }
+          }
+        }),
+    )
+    .child(
+      view()
+        .test_id("world-switcher-modal")
+        .relative()
+        .z_index(81)
+        .w(px(WORLD_MODAL_WIDTH))
+        .max_w(relative(0.94))
+        .max_h(relative(0.88))
+        .rounded(px(14.0))
+        .border_1()
+        .border_color(move || palette(dark_mode.get()).border_normal)
+        .bg(move || palette(dark_mode.get()).surface_overlay)
+        .shadow_lg()
+        .overflow_hidden()
+        .child(dynamic({
+          let st = state.clone();
+          move || {
+            if in_auth_view.get() {
+              desktop_auth_view(
+                st.clone(),
+                in_auth_view,
+                auth_mode,
+                email_draft,
+                display_name_draft,
+                password_draft,
+                local_err,
+              )
+              .into_element()
+            } else {
+              desktop_env_list_view(
+                st.clone(),
+                in_auth_view,
+                adding_server,
+                new_server_url,
+                add_server_err,
+                confirm_remove_origin,
+                auth_mode,
+                local_err,
+              )
+              .into_element()
+            }
+          }
+        })),
+    )
 }
 
-fn server_selector_section(
+/// View A on Desktop: flat unified list of Local Vault + all configured servers.
+#[allow(clippy::too_many_arguments)]
+fn desktop_env_list_view(
   state: WorldSwitcherState,
-  servers_open: Signal<bool>,
+  in_auth_view: Signal<bool>,
   adding_server: Signal<bool>,
   new_server_url: Signal<String>,
   add_server_err: Signal<String>,
   confirm_remove_origin: Signal<Option<String>>,
+  auth_mode: Signal<u8>,
+  local_err: Signal<String>,
 ) -> impl IntoElement {
-  let allow_local = state.allow_local;
   let dark_mode = state.dark_mode;
-  let health_status = state.health_status;
-  let st_label = state.clone();
-  let st_retry = state.clone();
-  let st_list = state.clone();
-  let st_add = state.clone();
+  let can_close = state.can_close;
+  let on_close = state.on_close.clone();
+  let app_version = state.app_version;
+  let active_origin = state.active_origin;
+  let servers = state.servers;
+  let signed_in_origins = state.signed_in_origins;
+  let error_msg = state.error_msg;
+  let info_msg = state.info_msg;
+  let busy = state.busy;
+
+  let on_enter_local = state.on_enter_local.clone();
+  let on_select_server = state.on_select_server.clone();
+  let on_probe_server = state.on_probe_server.clone();
+  let on_add_server = state.on_add_server.clone();
+  let on_remove_server = state.on_remove_server.clone();
+  let on_enter_signed_in = state.on_enter_signed_in.clone();
 
   view()
+    .test_id("world-env-list")
     .w_full()
-    .gap(px(8.0))
     .child(
-      // Collapsed server health card
+      // Modal header
       view()
-        .test_id("world-server-card")
-        .w_full()
-        .px(px(14.0))
-        .py(px(11.0))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(move || palette(dark_mode.get()).border_normal)
-        .bg(move || palette(dark_mode.get()).surface_raised)
+        .px(px(20.0))
+        .py(px(15.0))
+        .border_b_1()
+        .border_color(move || palette(dark_mode.get()).border_subtle)
         .flex_row()
         .items_center()
-        .gap(px(8.0))
+        .justify_between()
+        .gap(px(12.0))
         .child(
+          view()
+            .flex_row()
+            .items_center()
+            .gap(px(9.0))
+            .child(mica_logo_sized(20.0))
+            .child(
+              text("切换服务器与本地库")
+                .text_size(px(15.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(move || palette(dark_mode.get()).text_primary),
+            ),
+        )
+        .child(when(
+          move || can_close.get(),
+          {
+            let on_close = on_close.clone();
+            move || close_icon_button(dark_mode, on_close.clone())
+          },
+        )),
+    )
+    .child(
+      // Body list
+      view()
+        .p(px(12.0))
+        .gap(px(6.0))
+        .child(
+          // 1. On-device Local Vault row
           button()
-            .test_id("world-server-toggle")
-            .accessibility_label(if allow_local { "展开或收起服务器列表" } else { "当前服务器" })
-            .flex_1()
-            .min_w(px(0.0))
-            .on_press(move || {
-              if !allow_local {
-                return;
+            .test_id("world-enter-local-btn")
+            .accessibility_label("本地离线库")
+            .w_full()
+            .px(px(12.0))
+            .py(px(10.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(move || {
+              let p = palette(dark_mode.get());
+              if active_origin.get() == LOCAL_ORIGIN {
+                p.accent
+              } else {
+                p.border_subtle
               }
-              let next = !servers_open.get_untracked();
-              servers_open.set(next);
-              if !next {
-                confirm_remove_origin.set(None);
-                adding_server.set(false);
-                add_server_err.set(String::new());
+            })
+            .bg(move || {
+              let p = palette(dark_mode.get());
+              if active_origin.get() == LOCAL_ORIGIN {
+                p.accent_soft
+              } else {
+                p.surface_overlay
+              }
+            })
+            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .on_press({
+              let on_enter_local = on_enter_local.clone();
+              let on_close = on_close.clone();
+              move || {
+                if busy.get_untracked() {
+                  return;
+                }
+                if active_origin.get_untracked() == LOCAL_ORIGIN {
+                  on_close();
+                } else {
+                  on_enter_local();
+                }
               }
             })
             .child(
               view()
-                .w_full()
-                .gap(px(3.0))
+                .flex_1()
+                .min_w(px(0.0))
+                .flex_row()
+                .items_center()
+                .gap(px(11.0))
                 .child(
                   view()
-                    .flex_row()
+                    .w(px(34.0))
+                    .h(px(34.0))
+                    .rounded(px(8.0))
+                    .flex_shrink_0()
                     .items_center()
-                    .gap(px(6.0))
-                    .child(
-                      // 6x6 status dot
-                      view()
-                        .w(px(6.0))
-                        .h(px(6.0))
-                        .rounded_full()
-                        .flex_shrink_0()
-                        .bg(move || {
-                          let p = palette(dark_mode.get());
-                          match health_status.get().as_str() {
-                            "reachable" => p.success,
-                            "unreachable" => p.danger,
-                            _ => p.border_strong,
-                          }
-                        }),
-                    )
-                    .child(
-                      text(move || match health_status.get().as_str() {
-                        "reachable" => "已连接到服务器",
-                        "unreachable" => "连不上服务器",
-                        _ => "正在检测…",
-                      })
-                      .text_size(px(12.0))
-                      .font_weight(FontWeight::MEDIUM)
-                      .text_color(move || {
-                        let p = palette(dark_mode.get());
-                        if health_status.get() == "reachable" {
-                          p.success
-                        } else {
-                          p.text_muted
-                        }
-                      }),
-                    ),
+                    .justify_center()
+                    .bg(move || {
+                      let p = palette(dark_mode.get());
+                      if active_origin.get() == LOCAL_ORIGIN {
+                        p.accent_soft
+                      } else {
+                        p.surface_sunken
+                      }
+                    })
+                    .child(dynamic(move || {
+                      let p = palette(dark_mode.get());
+                      let color = if active_origin.get() == LOCAL_ORIGIN {
+                        p.accent_hex
+                      } else {
+                        p.text_muted_hex
+                      };
+                      computer_icon(color)
+                    })),
                 )
                 .child(
-                  text(move || server_label(&effective_cloud_origin(&st_label)))
-                    .truncate()
-                    .font_family("monospace")
-                    .text_size(px(12.0))
-                    .text_color(move || palette(dark_mode.get()).text_primary),
-                ),
-            ),
-        )
-        .child(when(
-          move || health_status.get() == "unreachable",
-          {
-            let st_retry = st_retry.clone();
-            move || {
-              let st_retry = st_retry.clone();
-              button()
-                .test_id("world-server-retry")
-                .accessibility_label("重试连接服务器")
-                .w(px(28.0))
-                .h(px(28.0))
-                .rounded(px(6.0))
-                .items_center()
-                .justify_center()
-                .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                .on_press(move || {
-                  let origin = effective_cloud_origin_untracked(&st_retry);
-                  if !origin.is_empty() {
-                    (st_retry.on_probe_server)(origin);
-                  }
-                })
-                .child(dynamic(move || {
-                  refresh_icon(palette(dark_mode.get()).text_muted_hex)
-                }))
-            }
-          },
-        ))
-        .child(when(move || allow_local, move || {
-          button()
-            .test_id("world-server-chevron")
-            .accessibility_label("切换服务器列表")
-            .w(px(24.0))
-            .h(px(24.0))
-            .rounded(px(6.0))
-            .items_center()
-            .justify_center()
-            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-            .on_press(move || servers_open.set(!servers_open.get_untracked()))
-            .child(dynamic(move || {
-              let hex = palette(dark_mode.get()).text_muted_hex;
-              if servers_open.get() {
-                chevron_up_icon(hex)
-              } else {
-                mica_icons::chevron_down(hex)
-              }
-            }))
-        })),
-    )
-    .child(when(move || allow_local && servers_open.get(), {
-      let st_list = st_list.clone();
-      let st_add = st_add.clone();
-      move || {
-        let st_list = st_list.clone();
-        let st_add = st_add.clone();
-        view()
-          .test_id("world-server-list")
-          .w_full()
-          .rounded(px(8.0))
-          .border_1()
-          .border_color(move || palette(dark_mode.get()).border_normal)
-          .bg(move || palette(dark_mode.get()).surface_base)
-          .overflow_hidden()
-          .child(
-            view()
-              .px(px(14.0))
-              .pt(px(10.0))
-              .pb(px(6.0))
-              .child(
-                text("服务器")
-                  .text_size(px(11.0))
-                  .font_weight(FontWeight::MEDIUM)
-                  .text_color(move || palette(dark_mode.get()).text_faint),
-              ),
-          )
-          .child(dynamic({
-            let st_list = st_list.clone();
-            move || {
-              let origins = st_list.servers.get();
-              let signed_in = st_list.signed_in_origins.get();
-              let current = effective_cloud_origin(&st_list);
-              let confirming = confirm_remove_origin.get();
-              let p = palette(dark_mode.get());
-
-              let mut rows = view().w_full();
-              for (idx, origin) in origins.into_iter().enumerate() {
-                let is_selected = origin == current;
-                let is_signed_in = signed_in.iter().any(|(o, _)| o == &origin);
-                let is_confirming = confirming.as_deref() == Some(origin.as_str());
-                let host = server_label(&origin);
-
-                let origin_sel = origin.clone();
-                let st_sel = st_list.clone();
-                let origin_del = origin.clone();
-                let origin_confirm = origin.clone();
-                let st_del = st_list.clone();
-
-                let mut row_group = view().w_full().child(
                   view()
-                    .w_full()
-                    .px(px(14.0))
-                    .py(px(8.0))
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.0))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .gap(px(2.0))
                     .child(
-                      button()
-                        .test_id(&format!("world-server-row-{idx}"))
-                        .accessibility_label(format!("选择服务器 {host}"))
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .h(px(28.0))
-                        .px(px(4.0))
-                        .rounded(px(6.0))
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.0))
-                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                        .on_press(move || {
-                          st_sel.selected_cloud_origin.set(origin_sel.clone());
-                          servers_open.set(false);
-                          confirm_remove_origin.set(None);
-                          (st_sel.on_select_server)(origin_sel.clone());
-                          (st_sel.on_probe_server)(origin_sel.clone());
-                        })
-                        .child(
-                          view()
-                            .w(px(18.0))
-                            .h(px(18.0))
-                            .flex_shrink_0()
-                            .items_center()
-                            .justify_center()
-                            .child(when(move || is_selected, move || {
-                              mica_icons::check_icon(p.text_primary_hex)
-                            })),
-                        )
-                        .child(
-                          text(host.clone())
-                            .flex_1()
-                            .truncate()
-                            .font_family("monospace")
-                            .text_size(px(12.0))
-                            .text_color(p.text_primary),
-                        )
-                        .child(when(move || is_signed_in, move || {
-                          text("已登录")
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(p.success)
-                        })),
+                      text("本地离线库")
+                        .text_size(px(13.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || palette(dark_mode.get()).text_primary),
                     )
                     .child(
-                      button()
-                        .test_id(&format!("world-server-remove-{idx}"))
-                        .accessibility_label(format!("删除服务器 {host}"))
-                        .w(px(28.0))
-                        .h(px(28.0))
-                        .rounded(px(6.0))
-                        .items_center()
-                        .justify_center()
-                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).danger_wash))
-                        .on_press(move || {
-                          if is_confirming {
-                            confirm_remove_origin.set(None);
-                          } else {
-                            confirm_remove_origin.set(Some(origin_del.clone()));
-                          }
-                        })
-                        .child(mica_icons::trash_icon(p.danger_hex)),
+                      text("数据保存在这台设备")
+                        .truncate()
+                        .text_size(px(11.5))
+                        .text_color(move || palette(dark_mode.get()).text_muted),
                     ),
-                );
+                ),
+            )
+            .child(dynamic(move || {
+              let p = palette(dark_mode.get());
+              if active_origin.get() == LOCAL_ORIGIN {
+                status_badge("当前", p.accent_soft, p.accent)
+              } else {
+                status_badge("离线可用", p.surface_sunken, p.text_muted)
+              }
+            })),
+        )
+        .child(
+          // 2. Configured self-hosted servers
+          dynamic({
+            let on_select_server = on_select_server.clone();
+            let on_probe_server = on_probe_server.clone();
+            let on_remove_server = on_remove_server.clone();
+            let on_enter_signed_in = on_enter_signed_in.clone();
+            let on_close = on_close.clone();
+            move || {
+              let list = servers.get();
+              let active = active_origin.get();
+              let signed_in = signed_in_origins.get();
+              let confirming = confirm_remove_origin.get();
+
+              let mut col = view().w_full().gap(px(6.0));
+              for (idx, origin) in list.iter().enumerate() {
+                let origin_owned = origin.clone();
+                let host = server_label(origin);
+                let is_active = active == *origin;
+                let signed_email = signed_in
+                  .iter()
+                  .find(|(o, _)| o == origin)
+                  .map(|(_, e)| e.clone());
+                let is_signed_in = signed_email.is_some();
+                let is_confirming = confirming.as_deref() == Some(origin.as_str());
 
                 if is_confirming {
-                  row_group = row_group.child(
+                  col = col.child(
                     view()
-                      .test_id(&format!("world-server-confirm-remove-{idx}"))
-                      .mx(px(12.0))
-                      .mb(px(8.0))
-                      .p(px(10.0))
-                      .rounded(px(7.0))
+                      .test_id(&format!("world-server-confirm-{idx}"))
+                      .w_full()
+                      .px(px(12.0))
+                      .py(px(10.0))
+                      .rounded(px(10.0))
                       .border_1()
-                      .border_color(p.danger)
-                      .bg(p.danger_wash)
+                      .border_color(move || palette(dark_mode.get()).danger)
+                      .bg(move || palette(dark_mode.get()).danger_wash)
+                      .flex_row()
+                      .items_center()
+                      .justify_between()
                       .gap(px(8.0))
                       .child(
-                        text(format!("删除 {host}？将清除本机登录状态与离线镜像。"))
-                          .text_size(px(11.5))
-                          .text_color(p.danger),
+                        text(format!("移除 {host} 及其凭据？"))
+                          .truncate()
+                          .text_size(px(12.5))
+                          .font_weight(FontWeight::MEDIUM)
+                          .text_color(move || palette(dark_mode.get()).danger),
                       )
                       .child(
                         view()
                           .flex_row()
-                          .justify_end()
-                          .gap(px(8.0))
+                          .items_center()
+                          .gap(px(6.0))
+                          .flex_shrink_0()
                           .child(
                             button()
-                              .test_id(&format!("world-server-cancel-remove-{idx}"))
-                              .accessibility_label("取消删除服务器")
+                              .test_id(&format!("world-server-remove-cancel-{idx}"))
                               .h(px(26.0))
-                              .px(px(10.0))
-                              .rounded(px(5.0))
+                              .px(px(8.0))
+                              .rounded(px(6.0))
                               .border_1()
-                              .border_color(p.border_normal)
-                              .bg(p.surface_base)
+                              .border_color(move || palette(dark_mode.get()).border_normal)
+                              .bg(move || palette(dark_mode.get()).surface_overlay)
                               .on_press(move || confirm_remove_origin.set(None))
                               .child(
                                 text("取消")
                                   .text_size(px(11.5))
-                                  .text_color(p.text_primary),
+                                  .text_color(move || palette(dark_mode.get()).text_primary),
                               ),
                           )
                           .child(
                             button()
-                              .test_id(&format!("world-server-do-remove-{idx}"))
-                              .accessibility_label("确认删除服务器")
+                              .test_id(&format!("world-server-remove-ok-{idx}"))
                               .h(px(26.0))
                               .px(px(10.0))
-                              .rounded(px(5.0))
-                              .bg(p.danger)
-                              .on_press(move || {
-                                confirm_remove_origin.set(None);
-                                (st_del.on_remove_server)(origin_confirm.clone());
+                              .rounded(px(6.0))
+                              .bg(move || palette(dark_mode.get()).danger)
+                              .on_press({
+                                let on_remove_server = on_remove_server.clone();
+                                let origin_del = origin_owned.clone();
+                                move || {
+                                  confirm_remove_origin.set(None);
+                                  on_remove_server(origin_del.clone());
+                                }
                               })
                               .child(
-                                text("确认删除")
+                                text("移除")
                                   .text_size(px(11.5))
                                   .font_weight(FontWeight::MEDIUM)
                                   .text_color(white()),
@@ -1040,587 +760,821 @@ fn server_selector_section(
                           ),
                       ),
                   );
-                }
+                } else {
+                  let subtitle = match &signed_email {
+                    Some(email) if !email.trim().is_empty() => email.clone(),
+                    Some(_) => "已登录".to_string(),
+                    None if is_active => "登录已过期 · 点击重新登录".to_string(),
+                    None => "未登录 · 点击登录".to_string(),
+                  };
 
-                rows = rows.child(row_group);
+                  let on_select = on_select_server.clone();
+                  let on_probe = on_probe_server.clone();
+                  let on_enter = on_enter_signed_in.clone();
+                  let on_close_row = on_close.clone();
+                  let origin_click = origin_owned.clone();
+                  let origin_rm = origin_owned.clone();
+
+                  let mut row = view()
+                    .test_id(&format!("world-server-row-{idx}"))
+                    .w_full()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(move || {
+                      let p = palette(dark_mode.get());
+                      if is_active { p.accent } else { p.border_subtle }
+                    })
+                    .bg(move || {
+                      let p = palette(dark_mode.get());
+                      if is_active {
+                        p.accent_soft
+                      } else {
+                        p.surface_overlay
+                      }
+                    })
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.0))
+                    .pr(px(8.0))
+                    .child(
+                      button()
+                        .test_id(&format!("world-server-enter-{idx}"))
+                        .accessibility_label(format!("切换到服务器 {host}"))
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .rounded(px(9.0))
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(10.0))
+                        .on_press(move || {
+                          if busy.get_untracked() {
+                            return;
+                          }
+                          on_select(origin_click.clone());
+                          if is_signed_in {
+                            if is_active {
+                              on_close_row();
+                            } else {
+                              on_enter(origin_click.clone());
+                            }
+                          } else {
+                            error_msg.set(String::new());
+                            info_msg.set(String::new());
+                            local_err.set(String::new());
+                            auth_mode.set(AUTH_MODE_LOGIN);
+                            on_probe(origin_click.clone());
+                            in_auth_view.set(true);
+                          }
+                        })
+                        .child(
+                          view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex_row()
+                            .items_center()
+                            .gap(px(11.0))
+                            .child(
+                              view()
+                                .w(px(34.0))
+                                .h(px(34.0))
+                                .rounded(px(8.0))
+                                .flex_shrink_0()
+                                .items_center()
+                                .justify_center()
+                                .bg(move || {
+                                  let p = palette(dark_mode.get());
+                                  if is_active {
+                                    p.accent_soft
+                                  } else {
+                                    p.surface_sunken
+                                  }
+                                })
+                                .child(dynamic(move || {
+                                  let p = palette(dark_mode.get());
+                                  let color = if is_active || is_signed_in {
+                                    p.accent_hex
+                                  } else {
+                                    p.text_muted_hex
+                                  };
+                                  mica_icons::cloud(color)
+                                })),
+                            )
+                            .child(
+                              view()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .gap(px(2.0))
+                                .child(
+                                  text(host.clone())
+                                    .truncate()
+                                    .text_size(px(13.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || palette(dark_mode.get()).text_primary),
+                                )
+                                .child(
+                                  view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(5.0))
+                                    .min_w(px(0.0))
+                                    .child(
+                                      view()
+                                        .w(px(6.0))
+                                        .h(px(6.0))
+                                        .rounded_full()
+                                        .flex_shrink_0()
+                                        .bg(move || {
+                                          let p = palette(dark_mode.get());
+                                          if is_signed_in {
+                                            rgb(0x22C55E)
+                                          } else if is_active {
+                                            p.warning
+                                          } else {
+                                            p.text_faint
+                                          }
+                                        }),
+                                    )
+                                    .child(
+                                      text(subtitle)
+                                        .truncate()
+                                        .text_size(px(11.5))
+                                        .text_color(move || {
+                                          let p = palette(dark_mode.get());
+                                          if is_active && !is_signed_in {
+                                            p.warning
+                                          } else {
+                                            p.text_muted
+                                          }
+                                        }),
+                                    ),
+                                ),
+                            ),
+                        )
+                        .child(dynamic(move || {
+                          let p = palette(dark_mode.get());
+                          if is_active && is_signed_in {
+                            status_badge("当前", p.accent_soft, p.accent)
+                          } else if is_active {
+                            status_badge("需重登", p.warning_wash, p.warning)
+                          } else if is_signed_in {
+                            status_badge("已登录", p.success_wash, p.success)
+                          } else {
+                            status_badge("登录 →", p.surface_sunken, p.text_muted)
+                          }
+                        })),
+                    );
+
+                  if !is_active {
+                    row = row.child(
+                      button()
+                        .test_id(&format!("world-server-remove-{idx}"))
+                        .accessibility_label(format!("移除服务器 {host}"))
+                        .w(px(26.0))
+                        .h(px(26.0))
+                        .rounded(px(6.0))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).danger_wash))
+                        .on_press(move || confirm_remove_origin.set(Some(origin_rm.clone())))
+                        .child(dynamic(move || {
+                          mica_icons::close_sm(palette(dark_mode.get()).text_faint_hex)
+                        })),
+                    );
+                  }
+
+                  col = col.child(row);
+                }
               }
-              rows
+              col
             }
-          }))
-          .child(
-            view()
-              .w_full()
-              .border_t_1()
-              .border_color(move || palette(dark_mode.get()).border_subtle)
-              .child(add_server_row(
-                st_add.clone(),
-                adding_server,
-                new_server_url,
-                add_server_err,
-                false,
-              )),
-          )
-      }
-    }))
-}
-
-fn add_server_row(
-  state: WorldSwitcherState,
-  adding_server: Signal<bool>,
-  new_server_url: Signal<String>,
-  add_server_err: Signal<String>,
-  boxed: bool,
-) -> impl IntoElement {
-  let dark_mode = state.dark_mode;
-
-  let submit_add: Rc<dyn Fn()> = {
-    let st = state.clone();
-    Rc::new(move || {
-      let raw = new_server_url.get_untracked();
-      match normalize_server_url(&raw) {
-        Ok(normalized) => match (st.on_add_server)(normalized.clone()) {
-          Ok(()) => {
-            new_server_url.set(String::new());
-            add_server_err.set(String::new());
-            adding_server.set(false);
-            st.selected_cloud_origin.set(normalized.clone());
-            (st.on_probe_server)(normalized);
-          }
-          Err(err) => add_server_err.set(err),
-        },
-        Err(err) => add_server_err.set(err),
-      }
-    })
-  };
-
-  let inner = view()
-    .w_full()
-    .child(when(move || !adding_server.get(), move || {
-      button()
-        .test_id("world-add-server-toggle")
-        .accessibility_label("添加服务器")
-        .w_full()
-        .px(px(14.0))
-        .py(px(11.0))
-        .flex_row()
-        .items_center()
-        .gap(px(9.0))
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-        .on_press(move || {
-          add_server_err.set(String::new());
-          adding_server.set(true);
-        })
-        .child(dynamic(move || {
-          mica_icons::plus(palette(dark_mode.get()).text_primary_hex)
-        }))
-        .child(
-          text("添加服务器…")
-            .text_size(px(13.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(move || palette(dark_mode.get()).accent),
+          }),
         )
-    }))
-    .child(when(move || adding_server.get(), {
-      let submit_enter = submit_add.clone();
-      let submit_btn = submit_add.clone();
-      move || {
-        let submit_enter = submit_enter.clone();
-        let submit_btn = submit_btn.clone();
-        view()
-          .test_id("world-add-server-form")
-          .w_full()
-          .p(px(12.0))
-          .gap(px(8.0))
-          .child(
-            input()
-              .test_id("world-add-server-input")
-              .auto_focus(true)
-              .submit_behavior(SubmitBehavior::Submit)
-              .placeholder("https://mica.example.com")
-              .w_full()
-              .px(px(10.0))
-              .py(px(8.0))
-              .rounded(px(6.0))
-              .border_1()
-              .border_color(move || palette(dark_mode.get()).border_normal)
-              .bg(move || palette(dark_mode.get()).surface_base)
-              .text_size(px(12.5))
-              .text_color(move || palette(dark_mode.get()).text_primary)
-              .value(move || new_server_url.get())
-              .on_change(move |v: &str| {
-                new_server_url.set(v.to_owned());
-                if !add_server_err.get_untracked().is_empty() {
-                  add_server_err.set(String::new());
-                }
-              })
-              .on_submit(move |_: &str| submit_enter()),
-          )
-          .child(when(
-            move || !add_server_err.get().is_empty(),
+        .child(
+          // Error banner on View A (e.g., if entering a signed-in server failed)
+          when(
+            move || !error_msg.get().trim().is_empty(),
             move || {
-              text(move || add_server_err.get())
-                .text_size(px(11.5))
-                .text_color(move || palette(dark_mode.get()).danger)
+              view()
+                .test_id("world-list-error")
+                .w_full()
+                .px(px(11.0))
+                .py(px(8.0))
+                .rounded(px(8.0))
+                .bg(move || palette(dark_mode.get()).danger_wash)
+                .flex_row()
+                .items_center()
+                .gap(px(7.0))
+                .child(dynamic(move || {
+                  error_circle_icon(palette(dark_mode.get()).danger_hex)
+                }))
+                .child(
+                  text(move || error_msg.get())
+                    .flex_1()
+                    .text_size(px(12.0))
+                    .text_color(move || palette(dark_mode.get()).danger),
+                )
             },
-          ))
-          .child(
-            view()
-              .flex_row()
-              .justify_end()
-              .gap(px(8.0))
-              .child(
+          ),
+        )
+        .child(
+          // 3. Inline "+ 添加自托管服务器" section
+          dynamic({
+            let on_add_server = on_add_server.clone();
+            let on_select_server = on_select_server.clone();
+            let on_probe_server = on_probe_server.clone();
+            move || {
+              if !adding_server.get() {
                 button()
-                  .test_id("world-add-server-cancel")
-                  .accessibility_label("取消添加服务器")
-                  .h(px(28.0))
-                  .px(px(10.0))
-                  .rounded(px(6.0))
+                  .test_id("world-add-server-btn")
+                  .accessibility_label("添加自托管服务器")
+                  .w_full()
+                  .h(px(38.0))
+                  .px(px(12.0))
+                  .rounded(px(10.0))
                   .border_1()
                   .border_color(move || palette(dark_mode.get()).border_normal)
-                  .bg(move || palette(dark_mode.get()).surface_base)
+                  .bg(move || palette(dark_mode.get()).surface_raised)
                   .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                  .flex_row()
+                  .items_center()
+                  .justify_center()
+                  .gap(px(6.0))
                   .on_press(move || {
-                    adding_server.set(false);
+                    adding_server.set(true);
+                    new_server_url.set(String::new());
                     add_server_err.set(String::new());
                   })
                   .child(
-                    text("取消")
-                      .text_size(px(12.0))
-                      .text_color(move || palette(dark_mode.get()).text_primary),
-                  ),
-              )
-              .child(
-                button()
-                  .test_id("world-add-server-submit")
-                  .accessibility_label("添加服务器")
-                  .h(px(28.0))
-                  .px(px(12.0))
-                  .rounded(px(6.0))
-                  .bg(move || palette(dark_mode.get()).accent)
-                  .on_press(move || submit_btn())
+                    text("+ 添加自托管服务器")
+                      .text_size(px(13.0))
+                      .font_weight(FontWeight::MEDIUM)
+                      .text_color(move || palette(dark_mode.get()).text_muted),
+                  )
+                  .into_element()
+              } else {
+                let submit_add = {
+                  let on_add_server = on_add_server.clone();
+                  let on_select_server = on_select_server.clone();
+                  let on_probe_server = on_probe_server.clone();
+                  Rc::new(move || {
+                    let raw = new_server_url.get_untracked();
+                    match normalize_server_url(&raw) {
+                      Ok(url) => match on_add_server(url.clone()) {
+                        Ok(()) => {
+                          adding_server.set(false);
+                          new_server_url.set(String::new());
+                          add_server_err.set(String::new());
+                          error_msg.set(String::new());
+                          info_msg.set(String::new());
+                          local_err.set(String::new());
+                          auth_mode.set(AUTH_MODE_LOGIN);
+                          on_select_server(url.clone());
+                          on_probe_server(url);
+                          in_auth_view.set(true);
+                        }
+                        Err(e) => add_server_err.set(e),
+                      },
+                      Err(e) => add_server_err.set(e),
+                    }
+                  })
+                };
+
+                view()
+                  .test_id("world-add-server-panel")
+                  .w_full()
+                  .p(px(12.0))
+                  .gap(px(8.0))
+                  .rounded(px(10.0))
+                  .border_1()
+                  .border_color(move || palette(dark_mode.get()).border_normal)
+                  .bg(move || palette(dark_mode.get()).surface_raised)
                   .child(
-                    text("添加")
+                    text("输入自托管服务器地址")
                       .text_size(px(12.0))
                       .font_weight(FontWeight::MEDIUM)
-                      .text_color(white()),
-                  ),
-              ),
-          )
-      }
-    }));
-
-  if boxed {
-    view()
-      .w_full()
-      .rounded(px(8.0))
-      .border_1()
-      .border_color(move || palette(dark_mode.get()).border_normal)
-      .bg(move || palette(dark_mode.get()).surface_raised)
-      .overflow_hidden()
-      .child(inner)
-  } else {
-    inner
-  }
+                      .text_color(move || palette(dark_mode.get()).text_muted),
+                  )
+                  .child(
+                    input()
+                      .test_id("world-add-server-input")
+                      .value(move || new_server_url.get())
+                      .placeholder("https://mica.example.com")
+                      .submit_behavior(SubmitBehavior::Submit)
+                      .on_change(move |v: &str| {
+                        new_server_url.set(v.to_owned());
+                        if !add_server_err.get_untracked().is_empty() {
+                          add_server_err.set(String::new());
+                        }
+                      })
+                      .on_submit({
+                        let submit_add = submit_add.clone();
+                        move |_: &str| submit_add()
+                      })
+                      .w_full()
+                      .h(px(36.0))
+                      .px(px(10.0))
+                      .rounded(px(7.0))
+                      .border_1()
+                      .border_color(move || palette(dark_mode.get()).border_normal)
+                      .bg(move || palette(dark_mode.get()).surface_overlay)
+                      .text_size(px(13.0))
+                      .text_color(move || palette(dark_mode.get()).text_primary),
+                  )
+                  .child(when(
+                    move || !add_server_err.get().is_empty(),
+                    move || {
+                      text(move || add_server_err.get())
+                        .text_size(px(11.5))
+                        .text_color(move || palette(dark_mode.get()).danger)
+                    },
+                  ))
+                  .child(
+                    view()
+                      .flex_row()
+                      .justify_end()
+                      .gap(px(8.0))
+                      .child(
+                        button()
+                          .test_id("world-add-server-cancel")
+                          .h(px(30.0))
+                          .px(px(12.0))
+                          .rounded(px(7.0))
+                          .border_1()
+                          .border_color(move || palette(dark_mode.get()).border_normal)
+                          .bg(move || palette(dark_mode.get()).surface_overlay)
+                          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                          .on_press(move || {
+                            adding_server.set(false);
+                            add_server_err.set(String::new());
+                          })
+                          .child(
+                            text("取消")
+                              .text_size(px(12.5))
+                              .text_color(move || palette(dark_mode.get()).text_muted),
+                          ),
+                      )
+                      .child(
+                        button()
+                          .test_id("world-add-server-confirm")
+                          .h(px(30.0))
+                          .px(px(14.0))
+                          .rounded(px(7.0))
+                          .bg(move || palette(dark_mode.get()).accent)
+                          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
+                          .on_press(move || submit_add())
+                          .child(
+                            text("连接并登录")
+                              .text_size(px(12.5))
+                              .font_weight(FontWeight::MEDIUM)
+                              .text_color(white()),
+                          ),
+                      ),
+                  )
+                  .into_element()
+              }
+            }
+          }),
+        ),
+    )
+    .child(
+      // Isolation footer
+      view()
+        .px(px(20.0))
+        .py(px(10.0))
+        .border_t_1()
+        .border_color(move || palette(dark_mode.get()).border_subtle)
+        .bg(move || palette(dark_mode.get()).surface_raised)
+        .child(
+          text(format!(
+            "各服务器与本地库的数据和凭据严格隔离 · Mica v{app_version}"
+          ))
+          .text_size(px(11.0))
+          .text_color(move || palette(dark_mode.get()).text_faint),
+        ),
+    )
 }
 
-/// Card shown when the selected cloud origin already has a stored session (`auth_form.dart: SignedInCard`).
-fn signed_in_card(state: WorldSwitcherState) -> impl IntoElement {
+/// View B on Desktop: single-server sign-in / register form inside the centered modal.
+fn desktop_auth_view(
+  state: WorldSwitcherState,
+  in_auth_view: Signal<bool>,
+  auth_mode: Signal<u8>,
+  email_draft: Signal<String>,
+  display_name_draft: Signal<String>,
+  password_draft: Signal<String>,
+  local_err: Signal<String>,
+) -> impl IntoElement {
   let dark_mode = state.dark_mode;
-  let active_origin = state.active_origin;
-  let signed_in_origins = state.signed_in_origins;
-
-  let st_body = state.clone();
-  let st_btn_label = state.clone();
-  let st_btn_click = state.clone();
-  let st_hint = state.clone();
+  let can_close = state.can_close;
+  let on_close = state.on_close.clone();
+  let error_msg = state.error_msg;
+  let info_msg = state.info_msg;
 
   view()
-    .test_id("world-signed-in-card")
     .w_full()
     .child(
-      text("你已经登录了")
-        .text_size(px(20.0))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(move || palette(dark_mode.get()).text_primary),
+      // Header: Back arrow + "登录到 {host}" + Close button
+      view()
+        .px(px(14.0))
+        .py(px(13.0))
+        .border_b_1()
+        .border_color(move || palette(dark_mode.get()).border_subtle)
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(px(8.0))
+        .child(
+          view()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+              button()
+                .test_id("world-auth-back-btn")
+                .accessibility_label("返回环境列表")
+                .w(px(28.0))
+                .h(px(28.0))
+                .rounded(px(7.0))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                .on_press(move || {
+                  error_msg.set(String::new());
+                  info_msg.set(String::new());
+                  local_err.set(String::new());
+                  in_auth_view.set(false);
+                })
+                .child(dynamic(move || {
+                  arrow_back_icon(palette(dark_mode.get()).text_muted_hex)
+                })),
+            )
+            .child(
+              text({
+                let st = state.clone();
+                move || {
+                  let host = server_label(&effective_cloud_origin(&st));
+                  let host_disp = if host.is_empty() {
+                    "Mica 云端".to_string()
+                  } else {
+                    host
+                  };
+                  if auth_mode.get() == AUTH_MODE_REGISTER {
+                    format!("注册账号 · {host_disp}")
+                  } else {
+                    format!("登录到 {host_disp}")
+                  }
+                }
+              })
+              .truncate()
+              .text_size(px(15.0))
+              .font_weight(FontWeight::SEMIBOLD)
+              .text_color(move || palette(dark_mode.get()).text_primary),
+            ),
+        )
+        .child(when(
+          move || can_close.get(),
+          {
+            let on_close = on_close.clone();
+            move || close_icon_button(dark_mode, on_close.clone())
+          },
+        )),
     )
-    .child(view().h(px(10.0)))
     .child(
       view()
-        .w_full()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .child(dynamic(move || {
-          check_circle_icon(palette(dark_mode.get()).success_hex)
-        }))
-        .child(
-          text(move || {
-            let origin = effective_cloud_origin(&st_body);
-            let name = signed_in_origins
-              .get()
-              .into_iter()
-              .find(|(o, _)| o == &origin)
-              .map(|(_, n)| n)
-              .unwrap_or_default();
-            let host = server_label(&origin);
-            if name.trim().is_empty() {
-              host
-            } else {
-              format!("{name} · {host}")
-            }
-          })
-          .flex_1()
-          .truncate()
-          .text_size(px(13.5))
-          .text_color(move || palette(dark_mode.get()).text_primary),
-        ),
-    )
-    .child(view().h(px(18.0)))
-    .child(
-      button()
-        .test_id("world-enter-signed-in-btn")
-        .accessibility_label("进入已登录服务器")
-        .w_full()
-        .h(px(40.0))
-        .rounded(px(8.0))
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap(px(8.0))
-        .bg(move || palette(dark_mode.get()).accent)
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
-        .on_press(move || {
-          let origin = effective_cloud_origin_untracked(&st_btn_click);
-          if !origin.is_empty() {
-            (st_btn_click.on_enter_signed_in)(origin);
-          }
-        })
-        .child(arrow_back_icon("#FFFFFF"))
-        .child(
-          text(move || {
-            let origin = effective_cloud_origin(&st_btn_label);
-            if origin == active_origin.get() {
-              "返回"
-            } else {
-              "进入"
-            }
-          })
-          .text_size(px(13.5))
-          .font_weight(FontWeight::MEDIUM)
-          .text_color(white()),
-        ),
-    )
-    .child(view().h(px(14.0)))
-    .child(
-      text(move || {
-        let origin = effective_cloud_origin(&st_hint);
-        if origin == active_origin.get() {
-          if st_hint.allow_local {
-            "要去别处的话，在上面选另一个服务器或本地模式；否则点「返回」回到刚才的页面。"
-          } else {
-            "点击「返回」回到刚才的云端工作区。"
-          }
-        } else {
-          "凭据还在，点「进入」直接用这台服务器，不用再输密码。"
-        }
-      })
-      .text_size(px(12.0))
-      .text_color(move || palette(dark_mode.get()).text_muted),
+        .p(px(20.0))
+        .gap(px(16.0))
+        .child(server_status_chip(state.clone()))
+        .child(auth_form(
+          state,
+          auth_mode,
+          email_draft,
+          display_name_draft,
+          password_draft,
+          local_err,
+        )),
     )
 }
 
-/// Cloud login/register credentials card (`auth_form.dart: AuthFormCard`).
-fn auth_form_card(
+/// Compact server connectivity chip (`test_id("world-server-card")`) with status
+/// dot, host label, connectivity text, and manual retry button.
+fn server_status_chip(state: WorldSwitcherState) -> impl IntoElement {
+  let dark_mode = state.dark_mode;
+  let health_status = state.health_status;
+  let on_probe_server = state.on_probe_server.clone();
+
+  view()
+    .test_id("world-server-card")
+    .w_full()
+    .px(px(12.0))
+    .py(px(9.0))
+    .rounded(px(9.0))
+    .border_1()
+    .border_color(move || palette(dark_mode.get()).border_normal)
+    .bg(move || palette(dark_mode.get()).surface_raised)
+    .flex_row()
+    .items_center()
+    .justify_between()
+    .gap(px(10.0))
+    .child(
+      view()
+        .flex_1()
+        .min_w(px(0.0))
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .child(
+          view()
+            .w(px(8.0))
+            .h(px(8.0))
+            .rounded_full()
+            .flex_shrink_0()
+            .bg(move || {
+              let p = palette(dark_mode.get());
+              match health_status.get().as_str() {
+                "reachable" => rgb(0x22C55E),
+                "unreachable" => p.danger,
+                _ => p.text_faint,
+              }
+            }),
+        )
+        .child(
+          text({
+            let st = state.clone();
+            move || {
+              let host = server_label(&effective_cloud_origin(&st));
+              if host.is_empty() {
+                "未选择服务器".to_string()
+              } else {
+                host
+              }
+            }
+          })
+          .truncate()
+          .text_size(px(12.5))
+          .font_weight(FontWeight::MEDIUM)
+          .text_color(move || palette(dark_mode.get()).text_primary),
+        )
+        .child(
+          text(move || match health_status.get().as_str() {
+            "reachable" => "· 已连接",
+            "unreachable" => "· 连不上服务器",
+            _ => "· 正在检测…",
+          })
+          .text_size(px(11.5))
+          .flex_shrink_0()
+          .text_color(move || {
+            let p = palette(dark_mode.get());
+            match health_status.get().as_str() {
+              "reachable" => p.success,
+              "unreachable" => p.danger,
+              _ => p.text_muted,
+            }
+          }),
+        ),
+    )
+    .child(
+      button()
+        .test_id("world-server-refresh-btn")
+        .accessibility_label("重新检测服务器连接")
+        .w(px(26.0))
+        .h(px(26.0))
+        .rounded(px(6.0))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+        .on_press({
+          let st = state.clone();
+          move || {
+            let origin = effective_cloud_origin_untracked(&st);
+            if !origin.is_empty() {
+              on_probe_server(origin);
+            }
+          }
+        })
+        .child(dynamic(move || {
+          refresh_icon(palette(dark_mode.get()).text_muted_hex)
+        })),
+    )
+}
+
+/// Clean Email + Password auth form without stacked segmented tabs; switches
+/// between Sign-In and Register via bottom text links.
+fn auth_form(
   state: WorldSwitcherState,
   auth_mode: Signal<u8>,
   email_draft: Signal<String>,
   display_name_draft: Signal<String>,
   password_draft: Signal<String>,
+  local_err: Signal<String>,
 ) -> impl IntoElement {
   let dark_mode = state.dark_mode;
   let busy = state.busy;
   let error_msg = state.error_msg;
   let info_msg = state.info_msg;
-  let transparent = rgba(0x0000_0000);
 
-  let submit: Rc<dyn Fn()> = {
+  let submit_form = {
     let st = state.clone();
+    let on_login = state.on_login.clone();
+    let on_register = state.on_register.clone();
     Rc::new(move || {
-      if st.busy.get_untracked() {
+      if busy.get_untracked() {
         return;
       }
       let origin = effective_cloud_origin_untracked(&st);
       if origin.is_empty() {
+        local_err.set("请先选择或添加一台服务器".to_string());
         return;
       }
       let email = email_draft.get_untracked().trim().to_string();
       let password = password_draft.get_untracked();
+      if email.is_empty() || !email.contains('@') {
+        local_err.set("请输入有效的邮箱地址".to_string());
+        return;
+      }
       if auth_mode.get_untracked() == AUTH_MODE_REGISTER {
-        let display_name = display_name_draft.get_untracked().trim().to_string();
-        (st.on_register)(origin, email, display_name, password);
+        if password.len() < 8 {
+          local_err.set("密码至少需要 8 位字符".to_string());
+          return;
+        }
+        local_err.set(String::new());
+        let name = display_name_draft.get_untracked().trim().to_string();
+        on_register(origin, email, name, password);
       } else {
-        (st.on_login)(origin, email, password);
+        if password.is_empty() {
+          local_err.set("请输入密码".to_string());
+          return;
+        }
+        local_err.set(String::new());
+        on_login(origin, email, password);
       }
     })
   };
 
-  let submit_email = submit.clone();
-  let submit_name = submit.clone();
-  let submit_pwd = submit.clone();
-  let submit_btn = submit.clone();
-  let st_forgot = state.clone();
+  let trigger_forgot = {
+    let st = state.clone();
+    let on_forgot = state.on_forgot_password.clone();
+    Rc::new(move || {
+      if busy.get_untracked() {
+        return;
+      }
+      let origin = effective_cloud_origin_untracked(&st);
+      let email = email_draft.get_untracked().trim().to_string();
+      if origin.is_empty() {
+        local_err.set("请先选择一台服务器".to_string());
+        return;
+      }
+      if email.is_empty() || !email.contains('@') {
+        local_err.set("请先在上方填写您的邮箱地址，再点击忘记密码".to_string());
+        return;
+      }
+      local_err.set(String::new());
+      on_forgot(origin, email);
+    })
+  };
+
+  let combined_error = move || {
+    let loc = local_err.get();
+    if !loc.trim().is_empty() {
+      loc
+    } else {
+      error_msg.get()
+    }
+  };
 
   view()
     .test_id("world-auth-form")
     .w_full()
+    .gap(px(12.0))
     .child(
-      text("登录到 Mica")
-        .text_size(px(20.0))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(move || palette(dark_mode.get()).text_primary),
-    )
-    .child(view().h(px(16.0)))
-    .child(
-      // 登录 / 注册 segmented toggle
-      view()
-        .w_full()
-        .p(px(3.0))
-        .rounded(px(8.0))
-        .bg(move || palette(dark_mode.get()).surface_sunken)
-        .flex_row()
-        .gap(px(2.0))
-        .child(
-          button()
-            .test_id("world-auth-mode-login")
-            .accessibility_label("登录模式")
-            .flex_1()
-            .h(px(32.0))
-            .rounded(px(6.0))
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .gap(px(6.0))
-            .disabled(move || busy.get())
-            .border_1()
-            .border_color(move || {
-              if auth_mode.get() == AUTH_MODE_LOGIN {
-                palette(dark_mode.get()).border_normal
-              } else {
-                transparent
-              }
-            })
-            .bg(move || {
-              if auth_mode.get() == AUTH_MODE_LOGIN {
-                palette(dark_mode.get()).surface_base
-              } else {
-                transparent
-              }
-            })
-            .on_press(move || auth_mode.set(AUTH_MODE_LOGIN))
-            .child(
-              text("登录")
-                .text_size(px(13.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(move || {
-                  let p = palette(dark_mode.get());
-                  if auth_mode.get() == AUTH_MODE_LOGIN {
-                    p.text_primary
-                  } else {
-                    p.text_muted
-                  }
-                }),
-            ),
-        )
-        .child(
-          button()
-            .test_id("world-auth-mode-register")
-            .accessibility_label("注册模式")
-            .flex_1()
-            .h(px(32.0))
-            .rounded(px(6.0))
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .gap(px(6.0))
-            .disabled(move || busy.get())
-            .border_1()
-            .border_color(move || {
-              if auth_mode.get() == AUTH_MODE_REGISTER {
-                palette(dark_mode.get()).border_normal
-              } else {
-                transparent
-              }
-            })
-            .bg(move || {
-              if auth_mode.get() == AUTH_MODE_REGISTER {
-                palette(dark_mode.get()).surface_base
-              } else {
-                transparent
-              }
-            })
-            .on_press(move || auth_mode.set(AUTH_MODE_REGISTER))
-            .child(
-              text("注册")
-                .text_size(px(13.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(move || {
-                  let p = palette(dark_mode.get());
-                  if auth_mode.get() == AUTH_MODE_REGISTER {
-                    p.text_primary
-                  } else {
-                    p.text_muted
-                  }
-                }),
-            ),
-        ),
-    )
-    .child(view().h(px(16.0)))
-    .child(
-      // Email input
-      view()
-        .w_full()
-        .gap(px(5.0))
-        .child(
-          text("邮箱")
-            .text_size(px(12.0))
-            .text_color(move || palette(dark_mode.get()).text_muted),
-        )
-        .child(
-          input()
-            .test_id("world-auth-email")
-            .placeholder("you@example.com")
-            .readonly(move || busy.get())
-            .submit_behavior(SubmitBehavior::Submit)
-            .w_full()
-            .px(px(12.0))
-            .py(px(9.0))
-            .rounded(px(7.0))
-            .border_1()
-            .border_color(move || palette(dark_mode.get()).border_normal)
-            .bg(move || palette(dark_mode.get()).surface_base)
-            .text_size(px(13.5))
-            .text_color(move || palette(dark_mode.get()).text_primary)
-            .value(move || email_draft.get())
-            .on_change(move |v: &str| email_draft.set(v.to_owned()))
-            .on_submit(move |_: &str| submit_email()),
-        ),
-    )
-    .child(when(move || auth_mode.get() == AUTH_MODE_REGISTER, {
-      let submit_name = submit_name.clone();
-      move || {
-        let submit_name = submit_name.clone();
-        view()
+      // Email field
+      form_field(
+        "邮箱",
+        dark_mode,
+        input()
+          .test_id("world-auth-email")
+          .value(move || email_draft.get())
+          .placeholder("you@example.com")
+          .readonly(move || busy.get())
+          .submit_behavior(SubmitBehavior::Submit)
+          .on_change(move |v: &str| {
+            email_draft.set(v.to_owned());
+            if !local_err.get_untracked().is_empty() {
+              local_err.set(String::new());
+            }
+          })
+          .on_submit({
+            let submit = submit_form.clone();
+            move |_: &str| submit()
+          })
           .w_full()
-          .pt(px(12.0))
-          .gap(px(5.0))
-          .child(
-            text("昵称")
-              .text_size(px(12.0))
-              .text_color(move || palette(dark_mode.get()).text_muted),
-          )
-          .child(
+          .h(px(38.0))
+          .px(px(11.0))
+          .rounded(px(8.0))
+          .border_1()
+          .border_color(move || palette(dark_mode.get()).border_normal)
+          .bg(move || palette(dark_mode.get()).surface_base)
+          .text_size(px(13.5))
+          .text_color(move || palette(dark_mode.get()).text_primary),
+      ),
+    )
+    .child(when(
+      move || auth_mode.get() == AUTH_MODE_REGISTER,
+      {
+        let submit = submit_form.clone();
+        move || {
+          form_field(
+            "显示名称（可选）",
+            dark_mode,
             input()
               .test_id("world-auth-display-name")
-              .placeholder("显示名称")
+              .value(move || display_name_draft.get())
+              .placeholder("怎么称呼你")
               .readonly(move || busy.get())
               .submit_behavior(SubmitBehavior::Submit)
+              .on_change(move |v: &str| display_name_draft.set(v.to_owned()))
+              .on_submit({
+                let submit = submit.clone();
+                move |_: &str| submit()
+              })
               .w_full()
-              .px(px(12.0))
-              .py(px(9.0))
-              .rounded(px(7.0))
+              .h(px(38.0))
+              .px(px(11.0))
+              .rounded(px(8.0))
               .border_1()
               .border_color(move || palette(dark_mode.get()).border_normal)
               .bg(move || palette(dark_mode.get()).surface_base)
               .text_size(px(13.5))
-              .text_color(move || palette(dark_mode.get()).text_primary)
-              .value(move || display_name_draft.get())
-              .on_change(move |v: &str| display_name_draft.set(v.to_owned()))
-              .on_submit(move |_: &str| submit_name()),
+              .text_color(move || palette(dark_mode.get()).text_primary),
           )
-      }
-    }))
-    .child(view().h(px(12.0)))
+        }
+      },
+    ))
     .child(
-      // Masked password input
-      view()
-        .w_full()
-        .gap(px(5.0))
-        .child(
-          text("密码")
-            .text_size(px(12.0))
-            .text_color(move || palette(dark_mode.get()).text_muted),
-        )
-        .child(
-          input()
-            .test_id("world-auth-password")
-            .placeholder("输入密码")
-            .masked(true)
-            .readonly(move || busy.get())
-            .submit_behavior(SubmitBehavior::Submit)
-            .w_full()
-            .px(px(12.0))
-            .py(px(9.0))
-            .rounded(px(7.0))
-            .border_1()
-            .border_color(move || palette(dark_mode.get()).border_normal)
-            .bg(move || palette(dark_mode.get()).surface_base)
-            .text_size(px(13.5))
-            .text_color(move || palette(dark_mode.get()).text_primary)
-            .value(move || password_draft.get())
-            .on_change(move |v: &str| password_draft.set(v.to_owned()))
-            .on_submit(move |_: &str| submit_pwd()),
-        ),
-    )
-    .child(view().h(px(16.0)))
-    .child(
-      // Primary submit button
-      button()
-        .test_id("world-auth-submit")
-        .accessibility_label("提交登录或注册")
-        .w_full()
-        .h(px(40.0))
-        .rounded(px(8.0))
-        .items_center()
-        .justify_center()
-        .disabled(move || busy.get())
-        .bg(move || palette(dark_mode.get()).accent)
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
-        .on_press(move || submit_btn())
-        .child(
-          text(move || {
-            if busy.get() {
-              "处理中…"
-            } else if auth_mode.get() == AUTH_MODE_REGISTER {
-              "注册"
+      // Password field
+      form_field(
+        "密码",
+        dark_mode,
+        input()
+          .test_id("world-auth-password")
+          .value(move || password_draft.get())
+          .placeholder(move || {
+            if auth_mode.get() == AUTH_MODE_REGISTER {
+              "设置密码（至少 8 位）"
             } else {
-              "登录"
+              "输入密码"
             }
           })
+          .masked(true)
+          .readonly(move || busy.get())
+          .submit_behavior(SubmitBehavior::Submit)
+          .on_change(move |v: &str| {
+            password_draft.set(v.to_owned());
+            if !local_err.get_untracked().is_empty() {
+              local_err.set(String::new());
+            }
+          })
+          .on_submit({
+            let submit = submit_form.clone();
+            move |_: &str| submit()
+          })
+          .w_full()
+          .h(px(38.0))
+          .px(px(11.0))
+          .rounded(px(8.0))
+          .border_1()
+          .border_color(move || palette(dark_mode.get()).border_normal)
+          .bg(move || palette(dark_mode.get()).surface_base)
           .text_size(px(13.5))
-          .font_weight(FontWeight::MEDIUM)
-          .text_color(white()),
-        ),
+          .text_color(move || palette(dark_mode.get()).text_primary),
+      ),
     )
     .child(when(
-      move || !error_msg.get().is_empty(),
+      move || !combined_error().trim().is_empty(),
       move || {
         view()
           .test_id("world-auth-error")
           .w_full()
-          .mt(px(12.0))
-          .p(px(10.0))
+          .px(px(11.0))
+          .py(px(8.0))
           .rounded(px(8.0))
-          .border_1()
-          .border_color(move || palette(dark_mode.get()).danger)
           .bg(move || palette(dark_mode.get()).danger_wash)
           .flex_row()
-          .items_start()
+          .items_center()
           .gap(px(7.0))
           .child(dynamic(move || {
             error_circle_icon(palette(dark_mode.get()).danger_hex)
           }))
           .child(
-            text(move || error_msg.get())
+            text(combined_error)
               .flex_1()
               .text_size(px(12.0))
               .text_color(move || palette(dark_mode.get()).danger),
@@ -1628,101 +1582,183 @@ fn auth_form_card(
       },
     ))
     .child(when(
-      move || !info_msg.get().is_empty(),
+      move || !info_msg.get().trim().is_empty(),
       move || {
         view()
           .test_id("world-auth-info")
           .w_full()
-          .mt(px(12.0))
-          .p(px(10.0))
+          .px(px(11.0))
+          .py(px(8.0))
           .rounded(px(8.0))
-          .border_1()
-          .border_color(move || palette(dark_mode.get()).accent)
-          .bg(move || palette(dark_mode.get()).accent_soft)
+          .bg(move || palette(dark_mode.get()).success_wash)
           .flex_row()
-          .items_start()
+          .items_center()
           .gap(px(7.0))
           .child(dynamic(move || {
-            mica_icons::info_icon(palette(dark_mode.get()).accent_hex)
+            check_circle_icon(palette(dark_mode.get()).success_hex)
           }))
           .child(
             text(move || info_msg.get())
               .flex_1()
               .text_size(px(12.0))
-              .text_color(move || palette(dark_mode.get()).text_primary),
+              .text_color(move || palette(dark_mode.get()).success),
           )
       },
     ))
-    .child(when(move || auth_mode.get() == AUTH_MODE_LOGIN, {
-      let st_forgot = st_forgot.clone();
-      move || {
-        let st_forgot = st_forgot.clone();
-        view().w_full().pt(px(8.0)).flex_row().child(
-          button()
-            .test_id("world-auth-forgot")
-            .accessibility_label("忘记密码")
-            .h(px(28.0))
-            .px(px(6.0))
-            .rounded(px(5.0))
-            .disabled(move || busy.get())
-            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-            .on_press(move || {
-              if st_forgot.busy.get_untracked() {
-                return;
-              }
-              let origin = effective_cloud_origin_untracked(&st_forgot);
-              let email = email_draft.get_untracked().trim().to_string();
-              (st_forgot.on_forgot_password)(origin, email);
-            })
-            .child(
-              text("忘记密码？")
-                .text_size(px(12.5))
-                .text_color(move || palette(dark_mode.get()).accent),
-            ),
-        )
-      }
+    .child(
+      // Primary submit CTA
+      button()
+        .test_id("world-auth-submit")
+        .accessibility_label("提交登录或注册")
+        .w_full()
+        .h(px(40.0))
+        .mt(px(2.0))
+        .rounded(px(8.0))
+        .bg(move || {
+          let p = palette(dark_mode.get());
+          if busy.get() { p.accent_hover } else { p.accent }
+        })
+        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
+        .items_center()
+        .justify_center()
+        .on_press(move || submit_form())
+        .child(
+          text(move || {
+            if busy.get() {
+              "请稍候…"
+            } else if auth_mode.get() == AUTH_MODE_REGISTER {
+              "创建账号"
+            } else {
+              "登录"
+            }
+          })
+          .text_size(px(14.0))
+          .font_weight(FontWeight::MEDIUM)
+          .text_color(white()),
+        ),
+    )
+    .child(
+      // Bottom helper links: "忘记密码？" on left, "没有账号？注册" / "已有账号？去登录" on right
+      view()
+        .w_full()
+        .pt(px(2.0))
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .child(dynamic({
+          let trigger_forgot = trigger_forgot.clone();
+          move || {
+            if auth_mode.get() == AUTH_MODE_LOGIN {
+              button()
+                .test_id("world-auth-forgot")
+                .accessibility_label("忘记密码")
+                .py(px(4.0))
+                .px(px(2.0))
+                .on_press({
+                  let tf = trigger_forgot.clone();
+                  move || tf()
+                })
+                .child(
+                  text("忘记密码？")
+                    .text_size(px(12.5))
+                    .text_color(move || palette(dark_mode.get()).text_muted),
+                )
+                .into_element()
+            } else {
+              view().into_element()
+            }
+          }
+        }))
+        .child(dynamic(move || {
+          if auth_mode.get() == AUTH_MODE_LOGIN {
+            button()
+              .test_id("world-auth-mode-register")
+              .accessibility_label("切换到注册账号")
+              .py(px(4.0))
+              .px(px(2.0))
+              .on_press(move || {
+                error_msg.set(String::new());
+                info_msg.set(String::new());
+                local_err.set(String::new());
+                auth_mode.set(AUTH_MODE_REGISTER);
+              })
+              .child(
+                text("没有账号？注册")
+                  .text_size(px(12.5))
+                  .font_weight(FontWeight::MEDIUM)
+                  .text_color(move || palette(dark_mode.get()).accent),
+              )
+              .into_element()
+          } else {
+            button()
+              .test_id("world-auth-mode-login")
+              .accessibility_label("返回登录")
+              .py(px(4.0))
+              .px(px(2.0))
+              .on_press(move || {
+                error_msg.set(String::new());
+                info_msg.set(String::new());
+                local_err.set(String::new());
+                auth_mode.set(AUTH_MODE_LOGIN);
+              })
+              .child(
+                text("已有账号？去登录")
+                  .text_size(px(12.5))
+                  .font_weight(FontWeight::MEDIUM)
+                  .text_color(move || palette(dark_mode.get()).accent),
+              )
+              .into_element()
+          }
+        })),
+    )
+}
+
+fn form_field(
+  label: &'static str,
+  dark_mode: Signal<bool>,
+  field: impl IntoElement + 'static,
+) -> impl IntoElement {
+  view()
+    .w_full()
+    .gap(px(5.0))
+    .child(
+      text(label)
+        .text_size(px(12.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(move || palette(dark_mode.get()).text_muted),
+    )
+    .child(field)
+}
+
+fn close_icon_button(dark_mode: Signal<bool>, on_close: Rc<dyn Fn()>) -> impl IntoElement {
+  button()
+    .test_id("world-switcher-close")
+    .accessibility_label("关闭")
+    .w(px(28.0))
+    .h(px(28.0))
+    .rounded(px(7.0))
+    .flex_shrink_0()
+    .items_center()
+    .justify_center()
+    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+    .on_press(move || on_close())
+    .child(dynamic(move || {
+      mica_icons::close_sm(palette(dark_mode.get()).text_muted_hex)
     }))
 }
 
-/// On-device local mode tab panel matching `sign_in_pane.dart: _localPanel`.
-fn local_pane(state: WorldSwitcherState) -> impl IntoElement {
-  let dark_mode = state.dark_mode;
-  let on_enter_local = state.on_enter_local;
-
+fn status_badge(label: &'static str, bg: nsh_core::color::Rgba, fg: nsh_core::color::Rgba) -> View {
   view()
-    .test_id("world-local-panel")
-    .w_full()
+    .px(px(8.0))
+    .py(px(3.0))
+    .rounded(px(999.0))
+    .flex_shrink_0()
+    .bg(bg)
     .child(
-      text("在此设备上使用")
-        .text_size(px(22.0))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(move || palette(dark_mode.get()).text_primary),
-    )
-    .child(view().h(px(8.0)))
-    .child(
-      text("无需账户，内容只保存在这台设备上。随时可以再登录云端账户来同步和协作。")
-        .text_size(px(13.5))
-        .text_color(move || palette(dark_mode.get()).text_muted),
-    )
-    .child(view().h(px(24.0)))
-    .child(
-      button()
-        .test_id("world-enter-local-btn")
-        .accessibility_label("开始使用本地模式")
-        .w_full()
-        .h(px(46.0))
-        .rounded(px(8.0))
-        .items_center()
-        .justify_center()
-        .bg(move || palette(dark_mode.get()).accent)
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).accent_hover))
-        .on_press(move || on_enter_local())
-        .child(
-          text("开始使用")
-            .text_size(px(14.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(white()),
-        ),
+      text(label)
+        .text_size(px(11.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(fg),
     )
 }
 
@@ -1741,13 +1777,9 @@ fn stroked_icon(size_px: f32, color: &str, inner: &str) -> Svg {
     .h(px(size_px))
 }
 
-fn hero_check_icon(color: &str) -> Svg {
-  stroked_icon(13.0, color, r##"<path d="M4.5 10.5L8.2 14.2L15.5 6.3"/>"##)
-}
-
 fn computer_icon(color: &str) -> Svg {
   stroked_icon(
-    15.0,
+    16.0,
     color,
     r##"<rect x="3" y="4" width="14" height="9.5" rx="1.6"/><path d="M7.5 16.5H12.5M10 13.5V16.5"/>"##,
   )
@@ -1755,19 +1787,15 @@ fn computer_icon(color: &str) -> Svg {
 
 fn refresh_icon(color: &str) -> Svg {
   stroked_icon(
-    16.0,
+    15.0,
     color,
     r##"<path d="M15.8 10A5.8 5.8 0 1 1 14 5.8L16.2 7.8M16.2 4.5V7.8H12.9"/>"##,
   )
 }
 
-fn chevron_up_icon(color: &str) -> Svg {
-  stroked_icon(12.0, color, r##"<path d="M5 12.5L10 7.5L15 12.5"/>"##)
-}
-
 fn check_circle_icon(color: &str) -> Svg {
   stroked_icon(
-    16.0,
+    15.0,
     color,
     r##"<circle cx="10" cy="10" r="7"/><path d="M6.8 10.2L9 12.4L13.5 7.8"/>"##,
   )

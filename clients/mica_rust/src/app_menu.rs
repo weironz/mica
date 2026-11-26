@@ -719,10 +719,14 @@ pub struct AccountMenuState {
   pub show_cloud_signin: Signal<bool>,
   pub display_name: Signal<String>,
   pub email: Signal<String>,
+  pub active_origin: Signal<String>,
+  pub signed_in_origins: Signal<Vec<(String, String)>>,
   pub app_version: &'static str,
   pub update_status: Signal<String>,
   pub on_open_settings: Rc<dyn Fn()>,
   pub on_open_usage_stats: Option<Rc<dyn Fn()>>,
+  pub on_enter_local: Rc<dyn Fn()>,
+  pub on_enter_signed_in: Rc<dyn Fn(String)>,
   pub on_switch_world: Rc<dyn Fn()>,
   pub on_check_update: Rc<dyn Fn()>,
   pub on_sign_out: Rc<dyn Fn()>,
@@ -813,10 +817,14 @@ pub fn account_menu_popover(
       let show_cloud_signin = st.show_cloud_signin;
       let display_name = st.display_name;
       let email = st.email;
+      let active_origin = st.active_origin;
+      let signed_in_origins = st.signed_in_origins;
       let app_version = st.app_version;
       let update_status = st.update_status;
       let on_open_settings = st.on_open_settings.clone();
       let on_open_usage_stats = st.on_open_usage_stats.clone();
+      let on_enter_local = st.on_enter_local.clone();
+      let on_enter_signed_in = st.on_enter_signed_in.clone();
       let on_switch_world = st.on_switch_world.clone();
       let on_check_update = st.on_check_update.clone();
       let on_sign_out = st.on_sign_out.clone();
@@ -929,6 +937,158 @@ pub fn account_menu_popover(
                   ),
               ),
             )
+            .child(when(
+              {
+                let allow_local = st.allow_local;
+                move || allow_local
+              },
+              {
+                let on_enter_local = on_enter_local.clone();
+                let on_enter_signed_in = on_enter_signed_in.clone();
+                move || {
+                  let on_enter_local = on_enter_local.clone();
+                  let on_enter_signed_in = on_enter_signed_in.clone();
+                  account_card(dark_mode)
+                    .test_id("account-quick-switch-card")
+                    .child(
+                      view()
+                        .px(px(10.0))
+                        .pt(px(5.0))
+                        .pb(px(3.0))
+                        .child(
+                          text("切换环境")
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(move || palette(dark_mode.get()).text_faint),
+                        ),
+                    )
+                    .child(
+                      button()
+                        .test_id("account-quick-local-btn")
+                        .accessibility_label("切换到本地离线库")
+                        .w_full()
+                        .h(px(34.0))
+                        .px(px(10.0))
+                        .rounded(px(7.0))
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.0))
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .on_press({
+                          let on_enter_local = on_enter_local.clone();
+                          move || {
+                            open.set(false);
+                            if active_origin.get_untracked() != crate::world_switcher::LOCAL_ORIGIN {
+                              on_enter_local();
+                            }
+                          }
+                        })
+                        .child(
+                          view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex_row()
+                            .items_center()
+                            .gap(px(9.0))
+                            .child(dynamic(move || {
+                              let p = palette(dark_mode.get());
+                              let c = if active_origin.get() == crate::world_switcher::LOCAL_ORIGIN {
+                                p.accent_hex
+                              } else {
+                                p.text_muted_hex
+                              };
+                              computer_small_icon(c)
+                            }))
+                            .child(
+                              text("本地离线库")
+                                .truncate()
+                                .text_size(px(13.0))
+                                .text_color(move || palette(dark_mode.get()).text_primary),
+                            ),
+                        )
+                        .child(when(
+                          move || active_origin.get() == crate::world_switcher::LOCAL_ORIGIN,
+                          move || {
+                            text("✓")
+                              .text_size(px(12.5))
+                              .font_weight(FontWeight::SEMIBOLD)
+                              .text_color(move || palette(dark_mode.get()).accent)
+                          },
+                        )),
+                    )
+                    .child(dynamic({
+                      let on_enter_signed_in = on_enter_signed_in.clone();
+                      move || {
+                        let creds = signed_in_origins.get();
+                        let cur = active_origin.get();
+                        let mut list = view().w_full().gap(px(1.0));
+                        for (idx, (origin, _email)) in creds.into_iter().enumerate() {
+                          let host = crate::world_switcher::server_label(&origin);
+                          let is_cur = cur == origin;
+                          let on_enter = on_enter_signed_in.clone();
+                          let origin_click = origin.clone();
+                          list = list.child(
+                            button()
+                              .test_id(&format!("account-quick-server-{idx}"))
+                              .accessibility_label(format!("切换到服务器 {host}"))
+                              .w_full()
+                              .h(px(34.0))
+                              .px(px(10.0))
+                              .rounded(px(7.0))
+                              .flex_row()
+                              .items_center()
+                              .justify_between()
+                              .gap(px(8.0))
+                              .hover(move |s| {
+                                s.bg(palette(dark_mode.get_untracked()).surface_hover)
+                              })
+                              .on_press(move || {
+                                open.set(false);
+                                if active_origin.get_untracked() != origin_click {
+                                  on_enter(origin_click.clone());
+                                }
+                              })
+                              .child(
+                                view()
+                                  .flex_1()
+                                  .min_w(px(0.0))
+                                  .flex_row()
+                                  .items_center()
+                                  .gap(px(9.0))
+                                  .child(dynamic(move || {
+                                    let p = palette(dark_mode.get());
+                                    let c = if is_cur {
+                                      p.accent_hex
+                                    } else {
+                                      p.text_muted_hex
+                                    };
+                                    mica_icons::cloud(c)
+                                  }))
+                                  .child(
+                                    text(host)
+                                      .truncate()
+                                      .text_size(px(13.0))
+                                      .text_color(move || palette(dark_mode.get()).text_primary),
+                                  ),
+                              )
+                              .child(when(
+                                move || is_cur,
+                                move || {
+                                  text("✓")
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || palette(dark_mode.get()).accent)
+                                },
+                              )),
+                          );
+                        }
+                        list
+                      }
+                    }))
+                }
+              },
+            ))
             .child(
               // Card 2: Actions (38px rows)
               account_card(dark_mode)
@@ -972,7 +1132,7 @@ pub fn account_menu_popover(
                     move || {
                       account_action_row(
                         "account-switch-world-btn",
-                        "切换世界…",
+                        "切换服务器 / 本地库…",
                         String::new,
                         swap_horiz_icon,
                         open,
@@ -1151,6 +1311,14 @@ fn swap_horiz_icon(color: &str) -> Svg {
     18.0,
     color,
     r##"<path d="M5.5 7.5H15.5M12.5 4.5L15.5 7.5L12.5 10.5M14.5 12.5H4.5M7.5 9.5L4.5 12.5L7.5 15.5"/>"##,
+  )
+}
+
+fn computer_small_icon(color: &str) -> Svg {
+  stroked_icon(
+    16.0,
+    color,
+    r##"<rect x="3" y="4" width="14" height="9.5" rx="1.6"/><path d="M7.5 16.5H12.5M10 13.5V16.5"/>"##,
   )
 }
 

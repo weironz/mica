@@ -27,10 +27,12 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.wait_for("反向链接").unwrap();
   app.press("id:right-sidebar-close").unwrap();
 
-  // 3. Bottom Account Menu opens 1:1 stacked-card popover (`本地工作区` / `这台设备` / `切换世界…`) and closes cleanly
+  // 3. Bottom Account Menu opens stacked-card popover (with Desktop quick-switch + `切换服务器 / 本地库…`) and closes cleanly
   app.press("id:account-menu-btn").unwrap();
   app.wait_for("这台设备").unwrap();
-  app.wait_for("切换世界…").unwrap();
+  app.wait_for("id:account-quick-switch-card").unwrap();
+  app.wait_for("id:account-quick-local-btn").unwrap();
+  app.wait_for("切换服务器 / 本地库…").unwrap();
   app.press("id:account-menu-btn").unwrap();
 
   // 4. 320px Workspace Switcher popover opens and lists active workspace + import submenu
@@ -203,22 +205,32 @@ fn flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips() {
   app.wait_for("帮助").unwrap();
   app.press_key("escape").unwrap();
 
-  // 2. Bottom Account Menu -> `切换世界…` -> Full-window split World Switcher
+  // 2. Bottom Account Menu -> `切换服务器 / 本地库…` -> Centered 440px Environment Switcher Modal
   app.press("id:account-menu-btn").unwrap();
   app.wait_for("id:account-switch-world-btn").unwrap();
   app.press("id:account-switch-world-btn").unwrap();
-  app.wait_for("id:world-tab-cloud").unwrap();
-  app.wait_for("id:world-tab-local").unwrap();
+  app.wait_for("id:world-switcher-modal").unwrap();
+  app.wait_for("id:world-env-list").unwrap();
+  app.wait_for("切换服务器与本地库").unwrap();
+  app.wait_for("id:world-enter-local-btn").unwrap();
+  app.wait_for("id:world-server-enter-0").unwrap();
   let t0 = std::time::Instant::now();
-  app.press("id:world-tab-cloud").unwrap();
-  app.wait_for("登录到 Mica").unwrap();
+  app.press("id:world-server-enter-0").unwrap();
+  app.wait_for("id:world-auth-form").unwrap();
+  app.wait_for("id:world-server-card").unwrap();
+  app.wait_for("id:world-auth-mode-register").unwrap();
   assert!(
     t0.elapsed() < std::time::Duration::from_millis(1500),
-    "switching to 云端账户 must not block the UI thread on HTTP health probe (took {:?})",
+    "entering server auth view must not block the UI thread on HTTP health probe (took {:?})",
     t0.elapsed()
   );
-  app.press("id:world-tab-local").unwrap();
-  app.wait_for("在此设备上使用").unwrap();
+  // Switch between Login and Register via bottom text links (no stacked segmented tabs)
+  app.press("id:world-auth-mode-register").unwrap();
+  app.wait_for("id:world-auth-display-name").unwrap();
+  app.press("id:world-auth-mode-login").unwrap();
+  // Return to flat environment list and re-enter local vault
+  app.press("id:world-auth-back-btn").unwrap();
+  app.wait_for("id:world-env-list").unwrap();
   app.press("id:world-enter-local-btn").unwrap();
 
   // 3. Sidebar top row -> Knowledge Graph (900×640) & Workspace Settings (440px)
@@ -960,6 +972,7 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
         open: signal(true),
         can_close: signal(false),
         allow_local: false,
+        initial_auth_view: signal(false),
         dark_mode: signal(false),
         app_version: "0.14.11",
         active_origin: signal("https://mica.example.com".to_string()),
@@ -994,13 +1007,17 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
   let mut app = Headless::start(config).unwrap();
 
   app.wait_for("id:world-switcher-overlay").unwrap();
+  app.wait_for("id:world-switcher-form-pane").unwrap();
   app.wait_for("id:world-server-card").unwrap();
   app.wait_for("mica.example.com").unwrap();
-  app.wait_for("云端协作\n知识库").unwrap();
+  app.wait_for("登录到 Mica").unwrap();
+  app.wait_for("云端协作知识库").unwrap();
+  assert!(!app.shows("id:world-env-list"), "Web must not show multi-host environment list");
   assert!(!app.shows("id:world-tab-local"), "Web must not show local mode tab");
   assert!(!app.shows("id:world-tab-cloud"), "Web must not show world tabs switcher");
   assert!(!app.shows("id:world-server-chevron"), "Web same-origin must not show server dropdown");
   assert!(!app.shows("id:world-switcher-close"), "Unauthenticated Web sign-in must not be dismissible");
+  assert!(!app.shows("本地离线库"), "Web must not mention local vault");
   assert!(!app.shows("本地模式"), "Web must not mention local mode");
   assert!(!app.shows("本地工作区"), "Web must not mention local workspace");
 
@@ -1017,10 +1034,17 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
         show_cloud_signin: signal(true),
         display_name: signal("demo@mica.dev".to_string()),
         email: signal("demo@mica.dev".to_string()),
+        active_origin: signal("https://mica.example.com".to_string()),
+        signed_in_origins: signal(vec![(
+          "https://mica.example.com".to_string(),
+          "demo@mica.dev".to_string(),
+        )]),
         app_version: "0.14.11",
         update_status: signal(String::new()),
         on_open_settings: Rc::new(|| {}),
         on_open_usage_stats: Some(Rc::new(|| {})),
+        on_enter_local: Rc::new(|| {}),
+        on_enter_signed_in: Rc::new(|_| {}),
         on_switch_world: Rc::new(|| {}),
         on_check_update: Rc::new(|| {}),
         on_sign_out: Rc::new(|| {}),
@@ -1046,8 +1070,12 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
   menu_app.wait_for("id:account-menu-usage-stats-btn").unwrap();
   menu_app.wait_for("id:account-menu-signout-btn").unwrap();
   assert!(
+    !menu_app.shows("id:account-quick-switch-card"),
+    "Web account menu must hide multi-environment quick switcher"
+  );
+  assert!(
     !menu_app.shows("id:account-switch-world-btn"),
-    "Web account menu must hide '切换世界…'"
+    "Web account menu must hide '切换服务器 / 本地库…'"
   );
   assert!(!menu_app.shows("本地工作区"));
 }

@@ -1,0 +1,1240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mica — 登录与多主机切换 UI 交互原型</title>
+  <style>
+    :root {
+      --bg-base: #ffffff;
+      --bg-raised: #f7f7f5;
+      --bg-sunken: #f1f1ef;
+      --bg-hover: #efefed;
+      --bg-overlay: #ffffff;
+      --text-primary: #37352f;
+      --text-muted: #5f5e5b;
+      --text-faint: #787774;
+      --text-ghost: #9b9a97;
+      --border-subtle: #f1f1ef;
+      --border-normal: #e9e9e7;
+      --border-strong: #d3d2ce;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --on-primary: #ffffff;
+      --success: #16a34a;
+      --success-wash: #f0fdf4;
+      --warning: #b45309;
+      --warning-wash: #fffbeb;
+      --danger: #dc2626;
+      --danger-wash: #fef2f2;
+      --backdrop: rgba(15, 23, 42, 0.34);
+      --shadow-card: 0 12px 32px rgba(15, 23, 42, 0.10), 0 2px 8px rgba(15, 23, 42, 0.05);
+      --shadow-popover: 0 10px 28px rgba(15, 23, 42, 0.12), 0 1px 4px rgba(15, 23, 42, 0.06);
+      --highlight-bg: rgba(253, 224, 71, 0.42);
+    }
+
+    html.dark {
+      --bg-base: #191919;
+      --bg-raised: #202020;
+      --bg-sunken: #262626;
+      --bg-hover: #2c2c2c;
+      --bg-overlay: #242424;
+      --text-primary: #e0e0e0;
+      --text-muted: #a6a6a6;
+      --text-faint: #8e8e8e;
+      --text-ghost: #6b6b6b;
+      --border-subtle: #262626;
+      --border-normal: #2f2f2f;
+      --border-strong: #3f3f3f;
+      --accent: #4c8df6;
+      --accent-hover: #6ba1f8;
+      --accent-soft: rgba(76, 141, 246, 0.14);
+      --on-primary: #ffffff;
+      --success: #4ade80;
+      --success-wash: rgba(74, 222, 128, 0.12);
+      --warning: #eab308;
+      --warning-wash: rgba(234, 179, 8, 0.14);
+      --danger: #f87171;
+      --danger-wash: rgba(248, 113, 113, 0.12);
+      --backdrop: rgba(0, 0, 0, 0.56);
+      --shadow-card: 0 16px 40px rgba(0, 0, 0, 0.45), 0 2px 10px rgba(0, 0, 0, 0.30);
+      --shadow-popover: 0 14px 34px rgba(0, 0, 0, 0.50);
+      --highlight-bg: rgba(234, 179, 8, 0.30);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg-raised);
+      color: var(--text-primary);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Demo top bar */
+    .demo-bar {
+      height: 44px;
+      padding: 0 16px;
+      background: #14161f;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12.5px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      flex-shrink: 0;
+      z-index: 100;
+    }
+    .demo-bar-left { display: flex; align-items: center; gap: 10px; }
+    .demo-pill-tag {
+      background: rgba(99, 102, 241, 0.22);
+      color: #c7d2fe;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+    .demo-scenes { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .demo-btn {
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.04);
+      color: #cbd5e1;
+      padding: 5px 11px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.14s ease;
+    }
+    .demo-btn:hover { background: rgba(255,255,255,0.11); color: #fff; }
+    .demo-btn.active {
+      background: #2563eb;
+      border-color: #3b82f6;
+      color: #fff;
+      font-weight: 500;
+    }
+    .demo-bar-right { display: flex; align-items: center; gap: 8px; }
+
+    /* Stage */
+    .stage {
+      flex: 1;
+      position: relative;
+      display: flex;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Realistic Mica Desktop App Backdrop */
+    .mica-app {
+      flex: 1;
+      display: flex;
+      background: var(--bg-base);
+      min-width: 0;
+    }
+    .mica-sidebar {
+      width: 248px;
+      background: var(--bg-raised);
+      border-right: 1px solid var(--border-normal);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .sb-top {
+      padding: 12px 12px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .sb-ws {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 13.5px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      cursor: default;
+    }
+    .sb-ws-badge {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-faint);
+      background: var(--bg-sunken);
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+    .sb-tree {
+      flex: 1;
+      padding: 6px 8px;
+      overflow-y: auto;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .sb-item {
+      padding: 6px 10px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 1px;
+      cursor: pointer;
+    }
+    .sb-item:hover { background: var(--bg-hover); }
+    .sb-item.active {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+    .sb-item.indent-1 { padding-left: 24px; }
+    .sb-footer {
+      border-top: 1px solid var(--border-normal);
+      padding: 8px;
+      position: relative;
+    }
+    .sb-account-btn {
+      width: 100%;
+      border: none;
+      background: transparent;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 8px;
+      border-radius: 7px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s;
+    }
+    .sb-account-btn:hover { background: var(--bg-hover); }
+    .avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: var(--bg-sunken);
+      border: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      flex-shrink: 0;
+    }
+    .sb-account-meta { min-width: 0; flex: 1; }
+    .sb-account-name {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sb-account-env {
+      font-size: 11px;
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* Main editor canvas */
+    .mica-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      position: relative;
+    }
+    .relogin-banner {
+      height: 36px;
+      padding: 0 18px;
+      background: var(--warning-wash);
+      border-bottom: 1px solid var(--border-normal);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12.5px;
+      color: var(--warning);
+    }
+    .mica-header {
+      height: 44px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+      color: var(--text-faint);
+    }
+    .mica-doc {
+      flex: 1;
+      padding: 40px 56px;
+      max-width: 780px;
+      width: 100%;
+      margin: 0 auto;
+      overflow-y: auto;
+    }
+    .mica-doc h1 { font-size: 28px; font-weight: 700; margin-bottom: 16px; }
+    .mica-doc p { font-size: 15px; line-height: 1.75; color: var(--text-primary); margin-bottom: 14px; }
+    .mica-doc mark {
+      background: var(--highlight-bg);
+      color: inherit;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .mica-doc code {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 13px;
+      background: var(--bg-sunken);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    .mica-callout {
+      border-left: 3px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 12px 14px;
+      border-radius: 0 6px 6px 0;
+      font-size: 13.5px;
+      line-height: 1.65;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+    }
+
+    /* Status dot */
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .dot.green { background: var(--success); }
+    .dot.amber { background: var(--warning); }
+    .dot.gray { background: var(--text-ghost); }
+    .dot.red { background: var(--danger); }
+
+    /* Account stacked popover (with quick environment switching!) */
+    .account-popover {
+      position: absolute;
+      left: 10px;
+      bottom: 54px;
+      width: 268px;
+      background: var(--bg-overlay);
+      border: 1px solid var(--border-normal);
+      border-radius: 12px;
+      box-shadow: var(--shadow-popover);
+      padding: 6px;
+      z-index: 30;
+      animation: fadeUp 0.14s ease;
+    }
+    .pop-section {
+      padding: 4px 0;
+    }
+    .pop-section + .pop-section {
+      border-top: 1px solid var(--border-subtle);
+      margin-top: 4px;
+      padding-top: 6px;
+    }
+    .pop-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-ghost);
+      padding: 4px 10px 4px;
+      letter-spacing: 0.02em;
+    }
+    .pop-row {
+      width: 100%;
+      border: none;
+      background: transparent;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 7px;
+      font-size: 13px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .pop-row:hover { background: var(--bg-hover); }
+    .pop-row-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .pop-row-sub {
+      font-size: 11.5px;
+      color: var(--text-faint);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .check-mark { color: var(--accent); font-weight: 700; font-size: 13px; }
+
+    /* Modal Backdrop & Centered Compact Modal (Desktop Switcher) */
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: var(--backdrop);
+      backdrop-filter: blur(2px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 50;
+      animation: fadeIn 0.14s ease;
+    }
+    .modal-card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--bg-overlay);
+      border: 1px solid var(--border-normal);
+      border-radius: 14px;
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      animation: scaleIn 0.16s ease;
+    }
+    .modal-header {
+      padding: 16px 20px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .modal-title-row { display: flex; align-items: center; gap: 8px; }
+    .modal-title { font-size: 15.5px; font-weight: 600; color: var(--text-primary); }
+    .icon-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+    .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .modal-body { padding: 14px 16px 16px; }
+    .modal-footer-note {
+      padding: 10px 18px 12px;
+      background: var(--bg-raised);
+      border-top: 1px solid var(--border-subtle);
+      font-size: 11.5px;
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Flat Environment List */
+    .env-list { display: flex; flex-direction: column; gap: 6px; }
+    .env-row {
+      width: 100%;
+      border: 1px solid var(--border-normal);
+      background: var(--bg-base);
+      border-radius: 10px;
+      padding: 11px 13px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 0.12s, background 0.12s;
+      color: var(--text-primary);
+    }
+    .env-row:hover {
+      background: var(--bg-raised);
+      border-color: var(--border-strong);
+    }
+    .env-row.current {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .env-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: var(--bg-sunken);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .env-row.current .env-icon {
+      background: var(--bg-base);
+    }
+    .env-info { flex: 1; min-width: 0; }
+    .env-name-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .env-sub-line {
+      margin-top: 2px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-faint);
+    }
+    .env-badge {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 7px;
+      border-radius: 999px;
+      flex-shrink: 0;
+    }
+    .env-badge.active { background: var(--accent); color: var(--on-primary); }
+    .env-badge.ready { background: var(--success-wash); color: var(--success); }
+    .env-badge.expired { background: var(--warning-wash); color: var(--warning); }
+    .env-badge.unsigned { background: var(--bg-sunken); color: var(--text-muted); }
+
+    .add-server-trigger {
+      margin-top: 10px;
+      width: 100%;
+      border: 1px dashed var(--border-strong);
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 9px;
+      padding: 10px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.12s;
+    }
+    .add-server-trigger:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .add-server-box {
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border-normal);
+    }
+
+    /* Clean Auth Form (used in BOTH Desktop View B and Web Single Card!) */
+    .server-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border-normal);
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .form-group { margin-bottom: 13px; }
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+    }
+    .form-input {
+      width: 100%;
+      height: 38px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-size: 13.5px;
+      outline: none;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    .form-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .btn-primary {
+      width: 100%;
+      height: 38px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: var(--on-primary);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-sm {
+      height: 26px;
+      padding: 0 11px;
+      border: none;
+      border-radius: 6px;
+      background: var(--accent);
+      color: var(--on-primary);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-sm:hover { background: var(--accent-hover); }
+    .btn-ghost {
+      height: 32px;
+      padding: 0 11px;
+      border: 1px solid var(--border-normal);
+      border-radius: 7px;
+      background: var(--bg-base);
+      color: var(--text-muted);
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .form-links {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+      color: var(--text-faint);
+    }
+    .link-btn {
+      border: none;
+      background: none;
+      color: var(--accent);
+      font-size: 12.5px;
+      cursor: pointer;
+      padding: 0;
+    }
+    .link-btn:hover { text-decoration: underline; }
+    .inline-msg {
+      padding: 8px 10px;
+      border-radius: 7px;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+    .inline-msg.warn { background: var(--warning-wash); color: var(--warning); }
+    .inline-msg.ok { background: var(--success-wash); color: var(--success); }
+
+    /* Web Pure-Cloud Centered Sign-In Canvas (NO 70% Dark Marketing Poster!) */
+    .web-signin-stage {
+      flex: 1;
+      background: var(--bg-raised);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      position: relative;
+    }
+    .web-card {
+      width: 100%;
+      max-width: 396px;
+      background: var(--bg-overlay);
+      border: 1px solid var(--border-normal);
+      border-radius: 14px;
+      box-shadow: var(--shadow-card);
+      padding: 28px 28px 24px;
+    }
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .mica-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #2563eb, #6366f1);
+      color: #fff;
+      font-weight: 800;
+      font-size: 17px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      letter-spacing: -0.04em;
+    }
+    .brand-title { font-size: 19px; font-weight: 700; color: var(--text-primary); }
+    .brand-sub { font-size: 12px; color: var(--text-faint); margin-top: 1px; }
+    .web-footer {
+      margin-top: 18px;
+      font-size: 11.5px;
+      color: var(--text-ghost);
+    }
+
+    /* Doc load error overlay (for Scene 3) */
+    .doc-error-overlay {
+      position: absolute;
+      inset: 36px 0 0 0;
+      background: var(--bg-base);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 10;
+    }
+    .doc-error-card {
+      width: 100%;
+      max-width: 440px;
+      padding: 24px;
+      border-radius: 12px;
+      border: 1px solid var(--border-normal);
+      background: var(--bg-raised);
+    }
+    .doc-error-card h2 { font-size: 16px; margin-bottom: 8px; }
+    .doc-error-card p { font-size: 13px; color: var(--text-muted); line-height: 1.65; margin-bottom: 16px; }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 18px;
+      right: 18px;
+      background: #1e293b;
+      color: #f8fafc;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      z-index: 200;
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: all 0.18s ease;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes scaleIn { from { opacity: 0; transform: scale(0.97) translateY(4px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <!-- Prototype Scene Switcher -->
+  <div class="demo-bar">
+    <div class="demo-bar-left">
+      <span class="demo-pill-tag">UI 原型 Demo</span>
+      <div class="demo-scenes">
+        <button class="demo-btn active" data-scene="desktop-modal">1. 桌面端：居中切换弹窗（多主机 + 本地）</button>
+        <button class="demo-btn" data-scene="desktop-quick">2. 桌面端：左下角菜单一键快切</button>
+        <button class="demo-btn" data-scene="desktop-expired">3. 桌面端：掉登横幅 → 单服重登</button>
+        <button class="demo-btn" data-scene="web-signin">4. Web 端：极简居中登录卡</button>
+      </div>
+    </div>
+    <div class="demo-bar-right">
+      <button class="demo-btn" id="toggle-theme">🌙 切换深色</button>
+    </div>
+  </div>
+
+  <div class="stage" id="stage"></div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = {
+      scene: 'desktop-modal',
+      dark: false,
+      activeEnvId: 'cloud-main',
+      modalOpen: true,
+      modalView: 'list', // 'list' | 'auth'
+      modalAuthMode: 'login', // 'login' | 'register' | 'forgot'
+      selectedHostId: null,
+      addingServer: false,
+      newServerUrl: '',
+      accountPopoverOpen: false,
+      webAuthMode: 'login',
+      envs: [
+        { id: 'local', type: 'local', label: '本地离线库', sub: '数据保存在这台设备（SQLite Vault）', status: 'local', signedIn: true },
+        { id: 'cloud-main', type: 'cloud', host: 'mica.cloudcele.com', email: 'willzhmic@outlook.com', health: 'reachable', signedIn: true, expired: false },
+        { id: 'cloud-lab', type: 'cloud', host: 'lab.internal:8080', email: 'will@lab.internal', health: 'reachable', signedIn: false, expired: true },
+        { id: 'cloud-dev', type: 'cloud', host: 'dev.mica.local', email: '', health: 'reachable', signedIn: false, expired: false },
+      ]
+    };
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.remove('show'), 2400);
+    }
+
+    function activeEnv() {
+      return state.envs.find(e => e.id === state.activeEnvId) || state.envs[0];
+    }
+
+    function renderDesktopBackdrop(options = {}) {
+      const env = activeEnv();
+      const isExpiredScene = options.expiredScene;
+      const envLabel = env.type === 'local' ? '本地离线库' : env.host;
+      const acctName = env.type === 'local' ? '本地工作区' : (env.email ? env.email.split('@')[0] : '未登录');
+      const initial = env.type === 'local' ? '本' : (acctName[0] || 'M').toUpperCase();
+
+      return `
+        <div class="mica-app">
+          <aside class="mica-sidebar">
+            <div class="sb-top">
+              <div class="sb-ws">
+                <span>${env.type === 'local' ? '本地笔记本' : 'rust'}</span>
+                <span class="sb-ws-badge">${env.type === 'local' ? '离线' : '120 页'}</span>
+              </div>
+            </div>
+            <div class="sb-tree">
+              <div class="sb-item">📁 入门指南</div>
+              <div class="sb-item">📂 包-Crates与模块</div>
+              <div class="sb-item indent-1 active">📄 cargo清理</div>
+              <div class="sb-item indent-1">📄 将模块拆分成多个文件</div>
+              <div class="sb-item indent-1">📄 引用模块树中项的路径</div>
+              <div class="sb-item">📁 所有权与借用</div>
+              <div class="sb-item">📁 无畏并发</div>
+              <div class="sb-item">📁 异步编程基础</div>
+            </div>
+            <div class="sb-footer">
+              ${state.accountPopoverOpen ? renderAccountPopover() : ''}
+              <button class="sb-account-btn" id="btn-account-footer">
+                <div class="avatar">${initial}</div>
+                <div class="sb-account-meta">
+                  <div class="sb-account-name">${acctName}</div>
+                  <div class="sb-account-env">
+                    <span class="dot ${isExpiredScene ? 'amber' : (env.type === 'local' ? 'gray' : 'green')}"></span>
+                    <span>${isExpiredScene ? '登录已过期' : envLabel}</span>
+                  </div>
+                </div>
+                <span style="color:var(--text-ghost);font-size:13px;">⋮</span>
+              </button>
+            </div>
+          </aside>
+
+          <main class="mica-main">
+            ${isExpiredScene ? `
+              <div class="relogin-banner">
+                <span>云端登录已过期 — 当前仅显示本地缓存，无法同步或加载未缓存的云端页面（云端数据安全无损）</span>
+                <button class="btn-sm" id="btn-banner-relogin">重新登录</button>
+              </div>
+            ` : ''}
+            <div class="mica-header">
+              <span>rust &gt; 包-Crates与模块 &gt; cargo清理</span>
+              <span>${isExpiredScene ? '离线缓存' : (env.type === 'local' ? '本地 SQLite' : '● 已实时同步')}</span>
+            </div>
+            <article class="mica-doc">
+              <h1>cargo清理</h1>
+              <div class="mica-callout">
+                <strong>为什么背景保留可见很重要？</strong> 桌面端切服务器/切本地库走居中弹窗，用户不用离开正在阅读的文档，心理上也不会像被“踢回安装欢迎页”。
+              </div>
+              <p>升级到 <code>Cargo 1.100+</code> 后，构建产物默认采用 <mark>per-crate hashed 布局</mark>，本机通过统一计划任务 <code>CargoSweepDaily</code> 每天自动按 6GB 上限裁剪旧 hash 目录。</p>
+              <p>你可以点击上方原型栏切换 4 个场景，或者直接在弹窗里点击不同主机、添加新主机、进入登录表单体验完整交互。</p>
+            </article>
+            ${isExpiredScene && !state.modalOpen ? `
+              <div class="doc-error-overlay">
+                <div class="doc-error-card">
+                  <h2>暂无法加载「异步编程基础」</h2>
+                  <p>云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。</p>
+                  <button class="btn-primary" style="width:auto;padding:0 18px;" id="btn-overlay-relogin">重新登录云端</button>
+                </div>
+              </div>
+            ` : ''}
+          </main>
+        </div>
+      `;
+    }
+
+    function renderAccountPopover() {
+      const quickEnvs = state.envs.filter(e => e.type === 'local' || e.signedIn);
+      return `
+        <div class="account-popover">
+          <div class="pop-section">
+            <div class="pop-label">快速切换环境</div>
+            ${quickEnvs.map(e => `
+              <button class="pop-row" data-quick-env="${e.id}">
+                <span class="pop-row-left">
+                  <span>${e.type === 'local' ? '💻' : '☁️'}</span>
+                  <span>
+                    <div>${e.type === 'local' ? '本地离线库' : e.host}</div>
+                    ${e.email ? `<div class="pop-row-sub">${e.email}</div>` : ''}
+                  </span>
+                </span>
+                ${state.activeEnvId === e.id ? '<span class="check-mark">✓</span>' : ''}
+              </button>
+            `).join('')}
+          </div>
+          <div class="pop-section">
+            <button class="pop-row" id="btn-pop-manage">
+              <span class="pop-row-left"><span>🌐</span><span>管理服务器 / 添加主机…</span></span>
+            </button>
+            <button class="pop-row" id="btn-pop-settings">
+              <span class="pop-row-left"><span>⚙️</span><span>设置</span></span>
+              <span class="pop-row-sub">Ctrl+,</span>
+            </button>
+            <button class="pop-row" id="btn-pop-update">
+              <span class="pop-row-left"><span>⬆️</span><span>检查更新</span></span>
+              <span class="pop-row-sub">v0.15.2</span>
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDesktopModal() {
+      if (!state.modalOpen) return '';
+      if (state.modalView === 'auth') {
+        const hostEnv = state.envs.find(e => e.id === state.selectedHostId) || state.envs[1];
+        const mode = state.modalAuthMode;
+        const title = mode === 'login' ? `登录到 ${hostEnv.host}` : mode === 'register' ? `注册账号 · ${hostEnv.host}` : `找回密码`;
+        return `
+          <div class="modal-backdrop" id="modal-backdrop">
+            <div class="modal-card" onclick="event.stopPropagation()">
+              <div class="modal-header">
+                <div class="modal-title-row">
+                  <button class="icon-btn" id="btn-back-list" title="返回环境列表">←</button>
+                  <span class="modal-title">${title}</span>
+                </div>
+                <button class="icon-btn" id="btn-close-modal" title="关闭">×</button>
+              </div>
+              <div class="modal-body" style="padding:18px 22px 20px;">
+                <div class="server-chip">
+                  <span class="dot green"></span>
+                  <span>https://${hostEnv.host}</span>
+                  <span style="color:var(--success);">已连接</span>
+                </div>
+                ${hostEnv.expired && mode === 'login' ? `
+                  <div class="inline-msg warn">该服务器会话已过期，重新输入密码即可恢复同步（本地与云端数据安全无损）。</div>
+                ` : ''}
+                ${mode === 'register' ? `
+                  <div class="form-group">
+                    <label class="form-label">昵称</label>
+                    <input class="form-input" placeholder="例如：Will" />
+                  </div>
+                ` : ''}
+                <div class="form-group">
+                  <label class="form-label">邮箱</label>
+                  <input class="form-input" id="auth-email" value="${hostEnv.email || ''}" placeholder="you@example.com" />
+                </div>
+                ${mode !== 'forgot' ? `
+                  <div class="form-group">
+                    <label class="form-label">密码</label>
+                    <input class="form-input" type="password" placeholder="输入密码" />
+                  </div>
+                ` : ''}
+                <button class="btn-primary" id="btn-submit-auth">
+                  ${mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}
+                </button>
+                <div class="form-links">
+                  ${mode === 'login' ? `
+                    <button class="link-btn" data-auth-mode="forgot">忘记密码？</button>
+                    <span>没有账号？<button class="link-btn" data-auth-mode="register">注册</button></span>
+                  ` : `
+                    <button class="link-btn" data-auth-mode="login">← 返回登录</button>
+                    <span></span>
+                  `}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // View A: Unified flat environment list (Local + All Self-Hosted Servers)
+      return `
+        <div class="modal-backdrop" id="modal-backdrop">
+          <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <div class="modal-title-row">
+                <span class="modal-title">切换服务器与本地库</span>
+              </div>
+              <button class="icon-btn" id="btn-close-modal" title="关闭">×</button>
+            </div>
+            <div class="modal-body">
+              <div class="env-list">
+                ${state.envs.map(e => {
+                  const isCurrent = state.activeEnvId === e.id && state.scene !== 'desktop-expired';
+                  let badge = '';
+                  let dot = 'gray';
+                  let sub = '';
+                  if (e.type === 'local') {
+                    sub = e.sub;
+                    badge = isCurrent ? '<span class="env-badge active">当前</span>' : '<span class="env-badge unsigned">离线可用</span>';
+                  } else if (e.signedIn) {
+                    dot = 'green';
+                    sub = e.email;
+                    badge = isCurrent ? '<span class="env-badge active">当前</span>' : '<span class="env-badge ready">已登录</span>';
+                  } else if (e.expired) {
+                    dot = 'amber';
+                    sub = `${e.email} · 登录已过期`;
+                    badge = '<span class="env-badge expired">需重登</span>';
+                  } else {
+                    dot = 'green';
+                    sub = '服务器可达 · 点击登录';
+                    badge = '<span class="env-badge unsigned">未登录</span>';
+                  }
+                  return `
+                    <button class="env-row ${isCurrent ? 'current' : ''}" data-env-id="${e.id}">
+                      <div class="env-icon">${e.type === 'local' ? '💻' : '☁️'}</div>
+                      <div class="env-info">
+                        <div class="env-name-line">
+                          <span>${e.type === 'local' ? e.label : e.host}</span>
+                        </div>
+                        <div class="env-sub-line">
+                          ${e.type === 'cloud' ? `<span class="dot ${dot}"></span>` : ''}
+                          <span>${sub}</span>
+                        </div>
+                      </div>
+                      ${badge}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+
+              ${state.addingServer ? `
+                <div class="add-server-box">
+                  <label class="form-label">自托管服务器地址</label>
+                  <div style="display:flex;gap:8px;">
+                    <input class="form-input" id="input-new-server" style="height:34px;" placeholder="https://notes.example.com" value="${state.newServerUrl}" />
+                    <button class="btn-sm" style="height:34px;flex-shrink:0;" id="btn-confirm-add">连接</button>
+                    <button class="btn-ghost" style="height:34px;flex-shrink:0;" id="btn-cancel-add">取消</button>
+                  </div>
+                </div>
+              ` : `
+                <button class="add-server-trigger" id="btn-open-add">+ 添加自托管服务器</button>
+              `}
+            </div>
+            <div class="modal-footer-note">
+              <span>各服务器与本地库的数据和凭据严格隔离</span>
+              <span>Mica v0.15.2</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderWebSignin() {
+      const mode = state.webAuthMode;
+      const heading = mode === 'login' ? '登录到 Mica' : mode === 'register' ? '创建 Mica 账号' : '重置密码';
+      return `
+        <div class="web-signin-stage">
+          <div class="web-card">
+            <div class="brand-mark">
+              <div class="mica-logo">M</div>
+              <div>
+                <div class="brand-title">${heading}</div>
+                <div class="brand-sub">本地优先的纯 Rust 协作知识库</div>
+              </div>
+            </div>
+            <div class="server-chip">
+              <span class="dot green"></span>
+              <span>mica.cloudcele.com</span>
+              <span style="color:var(--success);">服务正常</span>
+            </div>
+            ${mode === 'register' ? `
+              <div class="form-group">
+                <label class="form-label">昵称</label>
+                <input class="form-input" placeholder="你的显示名称" />
+              </div>
+            ` : ''}
+            <div class="form-group">
+              <label class="form-label">邮箱</label>
+              <input class="form-input" placeholder="you@example.com" />
+            </div>
+            ${mode !== 'forgot' ? `
+              <div class="form-group">
+                <label class="form-label">密码</label>
+                <input class="form-input" type="password" placeholder="输入密码" />
+              </div>
+            ` : ''}
+            <button class="btn-primary" id="btn-web-submit">
+              ${mode === 'login' ? '登录' : mode === 'register' ? '注册并登录' : '发送重置链接'}
+            </button>
+            <div class="form-links">
+              ${mode === 'login' ? `
+                <button class="link-btn" data-web-mode="forgot">忘记密码？</button>
+                <span>没有账号？<button class="link-btn" data-web-mode="register">注册</button></span>
+              ` : `
+                <button class="link-btn" data-web-mode="login">← 返回登录</button>
+                <span></span>
+              `}
+            </div>
+          </div>
+          <div class="web-footer">Mica Web v0.15.2 · HttpOnly 安全会话（365 天滑动续期）</div>
+        </div>
+      `;
+    }
+
+    function render() {
+      const stage = document.getElementById('stage');
+      if (state.scene === 'web-signin') {
+        stage.innerHTML = renderWebSignin();
+      } else {
+        stage.innerHTML =
+          renderDesktopBackdrop({ expiredScene: state.scene === 'desktop-expired' }) +
+          renderDesktopModal();
+      }
+      bindEvents();
+    }
+
+    function bindEvents() {
+      document.querySelectorAll('.demo-btn[data-scene]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.scene === state.scene);
+      });
+
+      const footerBtn = document.getElementById('btn-account-footer');
+      if (footerBtn) {
+        footerBtn.onclick = () => {
+          state.accountPopoverOpen = !state.accountPopoverOpen;
+          render();
+        };
+      }
+
+      document.querySelectorAll('[data-quick-env]').forEach(btn => {
+        btn.onclick = () => {
+          state.activeEnvId = btn.dataset.quickEnv;
+          state.accountPopoverOpen = false;
+          const env = activeEnv();
+          showToast(`已切换至 ${env.type === 'local' ? env.label : env.host}`);
+          render();
+        };
+      });
+
+      const popManage = document.getElementById('btn-pop-manage');
+      if (popManage) {
+        popManage.onclick = () => {
+          state.accountPopoverOpen = false;
+          state.modalOpen = true;
+          state.modalView = 'list';
+          render();
+        };
+      }
+
+      const closeModal = () => { state.modalOpen = false; state.addingServer = false; render(); };
+      const closeBtn = document.getElementById('btn-close-modal');
+      if (closeBtn) closeBtn.onclick = closeModal;
+      const backdrop = document.getElementById('modal-backdrop');
+      if (backdrop) backdrop.onclick = closeModal;
+
+      document.querySelectorAll('[data-env-id]').forEach(btn => {
+        btn.onclick = () => {
+          const env = state.envs.find(e => e.id === btn.dataset.envId);
+          if (!env) return;
+          if (env.type === 'local' || env.signedIn) {
+            state.activeEnvId = env.id;
+            state.modalOpen = false;
+            showToast(`已切换至 ${env.type === 'local' ? env.label : env.host}`);
+            render();
+          } else {
+            state.selectedHostId = env.id;
+            state.modalView = 'auth';
+            state.modalAuthMode = 'login';
+            render();
+          }
+        };
+      });
+
+      const openAdd = document.getElementById('btn-open-add');
+      if (openAdd) openAdd.onclick = () => { state.addingServer = true; render(); document.getElementById('input-new-server')?.focus(); };
+      const cancelAdd = document.getElementById('btn-cancel-add');
+      if (cancelAdd) cancelAdd.onclick = () => { state.addingServer = false; state.newServerUrl = ''; render(); };
+      const confirmAdd = document.getElementById('btn-confirm-add');
+      if (confirmAdd) {
+        confirmAdd.onclick = () => {
+          const raw = (document.getElementById('input-new-server')?.value || '').trim();
+          if (!raw) return showToast('请输入服务器地址');
+          const host = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+          const id = 'cloud-' + Date.now();
+          state.envs.push({ id, type: 'cloud', host, email: '', health: 'reachable', signedIn: false, expired: false });
+          state.addingServer = false;
+          state.newServerUrl = '';
+          state.selectedHostId = id;
+          state.modalView = 'auth';
+          state.modalAuthMode = 'login';
+          showToast(`已连接 ${host}，请登录`);
+          render();
+        };
+      }
+
+      const backList = document.getElementById('btn-back-list');
+      if (backList) backList.onclick = () => { state.modalView = 'list'; render(); };
+
+      document.querySelectorAll('[data-auth-mode]').forEach(btn => {
+        btn.onclick = () => { state.modalAuthMode = btn.dataset.authMode; render(); };
+      });
+
+      const submitAuth = document.getElementById('btn-submit-auth');
+      if (submitAuth) {
+        submitAuth.onclick = () => {
+          const hostEnv = state.envs.find(e => e.id === state.selectedHostId);
+          if (hostEnv) {
+            const email = (document.getElementById('auth-email')?.value || '').trim() || 'willzhmic@outlook.com';
+            hostEnv.email = email;
+            hostEnv.signedIn = true;
+            hostEnv.expired = false;
+            state.activeEnvId = hostEnv.id;
+            state.modalOpen = false;
+            if (state.scene === 'desktop-expired') state.scene = 'desktop-quick';
+            showToast(`已登录 ${hostEnv.host}（365 天滑动会话）`);
+            render();
+          }
+        };
+      }
+
+      const triggerRelogin = () => {
+        state.selectedHostId = 'cloud-lab';
+        state.modalOpen = true;
+        state.modalView = 'auth';
+        state.modalAuthMode = 'login';
+        render();
+      };
+      const bannerRelogin = document.getElementById('btn-banner-relogin');
+      if (bannerRelogin) bannerRelogin.onclick = triggerRelogin;
+      const overlayRelogin = document.getElementById('btn-overlay-relogin');
+      if (overlayRelogin) overlayRelogin.onclick = triggerRelogin;
+
+      document.querySelectorAll('[data-web-mode]').forEach(btn => {
+        btn.onclick = () => { state.webAuthMode = btn.dataset.webMode; render(); };
+      });
+      const webSubmit = document.getElementById('btn-web-submit');
+      if (webSubmit) {
+        webSubmit.onclick = () => showToast('Web 端登录成功（HttpOnly Cookie 已签发）');
+      }
+    }
+
+    document.querySelectorAll('.demo-btn[data-scene]').forEach(btn => {
+      btn.onclick = () => {
+        state.scene = btn.dataset.scene;
+        state.addingServer = false;
+        if (state.scene === 'desktop-modal') {
+          state.modalOpen = true;
+          state.modalView = 'list';
+          state.accountPopoverOpen = false;
+        } else if (state.scene === 'desktop-quick') {
+          state.modalOpen = false;
+          state.accountPopoverOpen = true;
+        } else if (state.scene === 'desktop-expired') {
+          state.modalOpen = false;
+          state.accountPopoverOpen = false;
+        } else if (state.scene === 'web-signin') {
+          state.modalOpen = false;
+          state.accountPopoverOpen = false;
+          state.webAuthMode = 'login';
+        }
+        render();
+      };
+    });
+
+    document.getElementById('toggle-theme').onclick = (e) => {
+      state.dark = !state.dark;
+      document.documentElement.classList.toggle('dark', state.dark);
+      e.target.textContent = state.dark ? '☀️ 切换浅色' : '🌙 切换深色';
+    };
+
+    render();
+  </script>
+</body>
+</html>
