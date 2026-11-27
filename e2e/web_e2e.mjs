@@ -329,7 +329,7 @@ async function crossCodeBlockAndMobileTouchSelection(browser, opts) {
   const tailText = `中文触摸选区测试段落 OmegaDragTail`;
 
   // ── 8. Desktop Web: real mouse drag across prose -> code block -> prose ──
-  console.log('==> [8/9] Desktop Web black-box cross-code-block drag selection...');
+  console.log('==> [8/10] Desktop Web black-box cross-code-block drag selection...');
   const deskCtx = await browser.newContext({
     viewport: { width: 1280, height: 820 },
     permissions: ['clipboard-read', 'clipboard-write'],
@@ -394,7 +394,7 @@ async function crossCodeBlockAndMobileTouchSelection(browser, opts) {
   }
 
   // ── 9. Mobile Web: touch long-press + teardrop handle drag + copy ────────
-  console.log('==> [9/9] Mobile Web black-box touch selection & teardrop handles...');
+  console.log('==> [9/10] Mobile Web black-box touch selection & teardrop handles...');
   const mobCtx = await browser.newContext({
     viewport: { width: 390, height: 844 },
     hasTouch: true,
@@ -445,6 +445,65 @@ async function crossCodeBlockAndMobileTouchSelection(browser, opts) {
   } finally {
     await mobCtx.close();
   }
+
+  // ── 10. Public share (/s/{token}), Workspace settings & list Tab ─────────
+  console.log('==> [10/10] Public share (/s/{token}), Workspace settings & multi-line list Tab...');
+  const shareCtx = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  try {
+    const page = await shareCtx.newPage();
+    await signInOnPage(page, opts.base, opts.email, opts.password);
+    await page.locator('[data-testid="new-page-btn"]').click();
+    await waitForSyncBadge(page, 15000);
+    await page.waitForTimeout(300);
+
+    const shareMarker = `SHARE-PUBLIC-${Date.now()}`;
+    await focusEditorAndType(page, shareMarker);
+    await page.waitForTimeout(1000);
+
+    await page.locator('[data-testid="ed-share-btn"]').click();
+    const toggle = page.locator('[data-testid="share-public-toggle"]');
+    await toggle.waitFor({ state: 'visible', timeout: 10000 });
+    await toggle.click();
+
+    const urlLoc = page.locator('[data-testid="share-url-text"]');
+    await urlLoc.waitFor({ state: 'visible', timeout: 10000 });
+    const shareUrl = ((await urlLoc.textContent()) || '').trim();
+    assert(shareUrl.includes('/s/'), `expected /s/{token} share url, got: ${shareUrl}`);
+
+    const pubResp = await fetch(shareUrl);
+    assert.equal(pubResp.status, 200, `expected unauthenticated GET ${shareUrl} -> 200`);
+    const pubHtml = await pubResp.text();
+    assert(pubHtml.includes(shareMarker), 'public share HTML must include document marker');
+
+    // Disable public share -> link returns 404.
+    await toggle.click();
+    await page.locator('[data-testid="share-url-box"]').waitFor({ state: 'detached', timeout: 10000 });
+    const revokedResp = await fetch(shareUrl);
+    assert.equal(revokedResp.status, 404, `revoked share url must return 404, got ${revokedResp.status}`);
+    await page.locator('[data-testid="share-dialog-close-btn"]').click();
+
+    // Open & close Workspace Settings modal cleanly.
+    await page.locator('[data-testid="open-ws-settings-btn"]').click();
+    const wsModal = page.locator('[data-testid="workspace-settings-modal"]');
+    await wsModal.waitFor({ state: 'visible', timeout: 10000 });
+    await page.locator('[data-testid="ws-settings-close"]').click();
+    await wsModal.waitFor({ state: 'detached', timeout: 8000 });
+
+    // Refocus the editor and verify multi-line bullet list Tab indent in real browser.
+    await page.getByText(shareMarker, { exact: false }).first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('- ItemOne', { delay: 10 });
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('ItemTwo', { delay: 10 });
+    await page.keyboard.press('Control+A');
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(250);
+    await page.getByText('ItemOne', { exact: false }).waitFor({ state: 'visible', timeout: 5000 });
+    console.log('    Public share (/s/ 200 -> 404), workspace settings, and list Tab passed!');
+  } finally {
+    await shareCtx.close();
+  }
 }
 
 async function main() {
@@ -479,8 +538,16 @@ async function main() {
 
   try {
     // ── 1. Cold start: single WASM load, strict CSP, zero preview, zero XHR ──
-    console.log('==> [1/9] Cold start, CSP, single WASM download & zero XHR...');
-    await signInOnPage(pageA, opts.base, opts.email, opts.password);
+    console.log('==> [1/10] Cold start, instant HTML shell logo, CSP, single WASM download & zero XHR...');
+    await pageA.goto(`${opts.base}/`, { waitUntil: 'domcontentloaded' });
+    const loginLogoCount = await pageA.evaluate(
+      () => document.querySelectorAll('#mica-boot-auth svg linearGradient#ml-main').length,
+    );
+    assert.equal(loginLogoCount, 1, 'instant HTML login shell SVG must have dedicated #ml-main gradient defs');
+    await fillTestInput(pageA, 'world-auth-email', opts.email);
+    await fillTestInput(pageA, 'world-auth-password', opts.password);
+    await pageA.locator('[data-testid="world-auth-submit"]').click();
+    await waitForSyncBadge(pageA, 25000);
     await pageA.waitForTimeout(800);
 
     const wasmReqs = requests.filter((r) => r.url.includes('mica_rust_bg.wasm'));
@@ -509,7 +576,7 @@ async function main() {
     assert.equal(localStorageSecrets.length, 0, `JWT secret leaked to localStorage: ${JSON.stringify(localStorageSecrets)}`);
 
     // ── 2. Verify #111-scoped IndexedDB persistence (`mica_sync_v1`) ─────────
-    console.log('==> [2/9] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
+    console.log('==> [2/10] Verifying #111-scoped IndexedDB (mica_sync_v1) hydration & mirror...');
     const idb1 = await readIdbDocs(pageA);
     assert(!idb1.error, `IDB read error: ${idb1.error}`);
     assert(idb1.entries.length >= 1, `expected >=1 entry in mica_sync_v1/docs, got ${idb1.entries.length}`);
@@ -521,7 +588,7 @@ async function main() {
     console.log(`    IDB mica_sync_v1/docs: ${idb1.entries.length} doc(s), sample key=${idb1.entries[0].key.slice(0, 64)}…`);
 
     // ── 3. Create new page, edit & verify reload persistence via HttpOnly cookie ─
-    console.log('==> [3/9] Create page, edit, reload persistence (HttpOnly cookie)...');
+    console.log('==> [3/10] Create page, edit, reload persistence (HttpOnly cookie)...');
     const tag = `E2E-${Date.now()}`;
     await pageA.locator('[data-testid="new-page-btn"]').click();
     await waitForSyncBadge(pageA, 15000);
@@ -549,7 +616,7 @@ async function main() {
     await pageA.getByText(markerA).waitFor({ state: 'visible', timeout: 15000 });
 
     // ── 4. Two-browser real-time CRDT collaboration over /ws/ ────────────────
-    console.log('==> [4/9] Two-browser real-time CRDT collaboration over /ws/...');
+    console.log('==> [4/10] Two-browser real-time CRDT collaboration over /ws/...');
     const contextB = await browser.newContext({ viewport: { width: 1280, height: 820 } });
     const pageB = await contextB.newPage();
     try {
@@ -571,7 +638,7 @@ async function main() {
     }
 
     // ── 5. Offline edit recovery via IndexedDB (P0-2) ────────────────────────
-    console.log('==> [5/9] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
+    console.log('==> [5/10] Offline edit -> IndexedDB outbox -> reload recovery (P0-2)...');
     const offlineMarker = ` OFFLINE-IDB-${Date.now()}`;
     await contextA.setOffline(true);
     await pageA.waitForTimeout(400);
@@ -603,7 +670,7 @@ async function main() {
     console.log('    Offline edit persisted in mica_sync_v1 outbox and survived reload!');
 
     // ── 6. Lazy mica_preview/math load & clean logout (204 -> Sign-In gate) ──
-    console.log('==> [6/9] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
+    console.log('==> [6/10] Lazy mica_preview/math fetch + logout (204 -> Sign-In gate)...');
     await pageA.locator('[data-testid="new-page-btn"]').click();
     await waitForSyncBadge(pageA, 15000);
     await pageA.waitForTimeout(300);
@@ -632,12 +699,12 @@ async function main() {
     console.log('PASS: scenarios 1-6 passed (0 console errors, 0 CSP reports, 0 XHR)');
 
     // ── 7. Legacy Flutter Web IndexedDB (`mica-localfirst`) migration ────────
-    console.log('==> [7/9] Flutter Web mica-localfirst unsynced edit -> migrated & pushed...');
+    console.log('==> [7/10] Flutter Web mica-localfirst unsynced edit -> migrated & pushed...');
     await legacyFlutterWebMigration(browser, opts);
 
     // ── 8 & 9. Framework-agnostic drag & mobile touch selection contracts ────
     await crossCodeBlockAndMobileTouchSelection(browser, opts);
-    console.log('PASS: all 9 pure-Rust Web E2E scenarios passed');
+    console.log('PASS: all 10 pure-Rust Web E2E scenarios passed');
   } finally {
     await contextA.close();
     await browser.close();

@@ -46,7 +46,7 @@
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
 | `CAP-04-01` 全量文本块与 5 种 Callout | P0 | 全端 | ✅ | `block_views::tests::callout_kind_and_svg_viewbox_parsing` + `app_flows` |
-| `CAP-04-02` 列表缩进与容器附着 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` + `mica-editor::list_nested_code_blocks_via_fence_slash_indent_and_html_paste` + `mica-md::list_nested_wrapped_code_blocks_roundtrip_with_li` + `block_views::tests::list_continuation_inset_matches_list_text_column` |
+| `CAP-04-02` 列表缩进与容器附着 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` + `mica-editor::list_nested_code_blocks_via_fence_slash_indent_and_html_paste` + `mica-md::list_nested_wrapped_code_blocks_roundtrip_with_li` + `block_views::tests::list_continuation_inset_matches_list_text_column` + `app_flows::regression_list_tab_code_paste_and_backspace` |
 | `CAP-04-03` 行内 marks 与链接编辑 | P0 | 全端 | ✅ | `mica-editor::mark_apply_toggle_remove_and_normalize_merge_adjacent` + `mica-markdown::highlight` + `mica-editor::highlight_toggle_paste_and_markdown_roundtrip_work_end_to_end` |
 | `CAP-04-04` 22 项斜杠菜单与过滤 | P0 | 全端 | ✅ | `editor_slash::tests` + `editor_positioning::schedule_slash_anchor_update`（`measure()` 实时锚定光标下方/上方） |
 | `CAP-04-05` 贴近选区的浮动气泡菜单 | P0 | 桌面/Web | ✅ | `editor_view.rs::schedule_bubble_anchor_update` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |

@@ -39,8 +39,8 @@
 | --- | --- | --- | --- | --- |
 | `CAP-14-01` / `02` 账号菜单与多服务器世界切换 | P0 | 桌面/Web | ✅ | `world_switcher::tests` + `net::tests` + `app_flows` |
 | `CAP-14-03` / `04` 工作区菜单与跨工作区移动/复制 | P0 | 全端 | ✅ | `workspace_views::tests` + `transfer_dialog::tests` + `storage::tests` |
-| `CAP-14-05` 工作区设置与成员邀请 | P1 | 桌面/Web | 🟡 | UI 与 `net::tests` 本地 mock 已通，待实连线上 Mica Server 联调 |
-| `CAP-14-06` / `07` 公开分享与 API 令牌 | P1 | 桌面/Web | 🟡 | `share_dialog::tests` + `net::tests` 已通，待线上联调 |
+| `CAP-14-05` 工作区设置与成员邀请 | P1 | 桌面/Web | 🟡 | UI 与 `net::tests` 本地 mock 已通；`e2e/web_e2e.mjs` `[10/10]` 已补工作区设置弹窗黑盒检查（待下次 CI 实跑转绿） |
+| `CAP-14-06` / `07` 公开分享与 API 令牌 | P1 | 桌面/Web | 🟡 | `share_dialog::tests` + `net::tests` 已通；`e2e/web_e2e.mjs` `[10/10]` 已补 `/s/{token}` 开关→200→关闭→404 黑盒测试（待下次 CI 实跑转绿） |
 
 ---
 
@@ -55,3 +55,4 @@
 - **2026-11-26（跨工作区移动图片加载失败修复）**：修复三大根因——① `app_transfer_io.rs` 在云端模式下此前仅在本地 SQLite 伪克隆且未调用服务端 `POST /api/workspaces/{ws}/views/batch-transfer`（导致目标工作区缺少物理复制的 blob 与重写的 `file_id`，并补齐云端目标目录树拉取与真 dry-run 预览）；② `editor_bridge::export_markdown` 与后台防抖落盘此前传空图片映射表导致 `file_id` 退化成裸文件名 `pasted-image.png`，接入 `build_blocks_image_urls` 后云端保留可被 `rewire_blob_hrefs` 识别的永久 blob URL、本地保留 Desktop CAS `file:///` URI，且 `resolve_image_block` 识别带完整 origin 的自有 blob 链接不再误标为外链；③ 服务端 `transfer_roots` 补充识别未携带 `file_id` 仅留源工作区 blob `url`/`src` 的图片块并统一复制与重写。
 - **2026-11-27（公开分享开关无法开启修复）**：`share_dialog_modal` 的 `公开访问` 开关位于 `dynamic(...)` 体内，点击触发 `share_busy.set(true)` 后直接裸调 `spawn(...)` 会将异步任务绑定在即将被重建销毁的临时子 `Owner` 上，导致 `POST/DELETE /share` 在发出瞬间即被取消且 `share_busy` 永久卡在 `true`（置灰不可点）。修复为统一在 `app_owner.run` 下派发分享加载/开关及其他弹窗异步任务、接入 `with_auto_refresh` 自动续期与错误内联展示，并在 `share_dialog.rs` 中将复制链接的复原定时器绑定至 `modal_owner`。
 - **2026-11-27（Web 首屏秒开壳、WASM LTO 瘦身与哈希资源 `immutable` 缓存）**：① [web.rs](clients/mica_rust/src/web.rs) 将 `rust_app!` 的 `ui_sets` 从 `vec![nsh_base::registry()]` 改为 `Vec::new()`，并将 Mermaid 源码编辑框改为原生多行 `input()`、移除 `nsh-base` 的 `editor` 特性与新增 `[profile.web] strip = true`，解除全部 75 个未使用 `nsh/base` TSX 注册组件（`syntect`/`html5ever`/`ratex`/`vte`/`zstd`/`plot`/`rich_editor` 等）对 LTO 死代码裁剪的强引用；② [index.html](clients/mica_rust/web/index.html) 改为 T=0 并行启动 `fetch(wasm)`（流式进度 + `compileStreaming`）、`import(nsh.js)` 与单飞 `/api/auth/refresh` 探测，未登录（401/无痕）1 RTT 内直出 1:1 HTML/CSS 登录/注册/找回密码页，已登录直出工作区骨架屏，认证成功后通过内存临时 `window.__micaPreAuth` 零 `localStorage` 秘密交接给 Rust 跳过重复刷新；③ [nginx.conf](deploy/nginx.conf) 对带 `?v=<sha256>` 哈希的 `.js`/`.wasm` 启用 `public, max-age=31536000, immutable` 强缓存（入口 `index.html` 保持 `no-cache`）并同步双份 nginx CSP sha256 哈希。
+- **2026-11-28（`e2e/web_e2e.mjs` 补齐公开分享/工作区设置黑盒测试）**：在 `[1/10]` 补登录页 `#ml-main` SVG 渐变自含校验，新增 `[10/10]` 覆盖云端公开分享开启→未鉴权访问 `/s/{token}` 200→关闭→404 撤销与工作区设置弹窗验证。

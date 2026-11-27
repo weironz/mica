@@ -50,7 +50,7 @@
 | `CAP-06-03` 懒挂载编辑态与 `` ``` `` 自动聚焦 | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
 | `CAP-06-04` / `05` 悬停工具条与顶层防遮挡语言选择 | P0 | 桌面/Web | ✅ | `app_flows::virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch` |
 | `CAP-06-06` / `07` 换行/行号/标题/AI/删除 | P1 | 桌面/Web | ✅ | `app_flows::regression_capability_gaps_closed`（换行/行号/AI/删除 + `code-menu-title` 底部内联标题编辑并持久化 `code-block-caption`） |
-| `CAP-06-08` 代码块内输入与 Backspace/Delete | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `text_geometry::tests::lines_usable_for_text_rejects_stale_longer_layout_after_backspace` |
+| `CAP-06-08` 代码块内输入与 Backspace/Delete | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `app_flows::regression_list_tab_code_paste_and_backspace` + `text_geometry::tests::lines_usable_for_text_rejects_stale_longer_layout_after_backspace` |
 | `CAP-06-09` 光标在 `(0,0)` 或空块按 Backspace/Delete 删除代码块 | P0 | 桌面/Web | ✅ | `app_flows::regression_code_block_backspace_and_delete_after_live_focus` + `app_flows::regression_fifteen_editor_ux_fixes` |
 | `CAP-06-10` 语法高亮主题适配与自动语言识别 | P1 | 全端 | ✅ | `block_views::tests::resolve_code_block_language_display_detects_bash_and_hides_auto` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `app_flows::regression_capability_gaps_closed` |
 

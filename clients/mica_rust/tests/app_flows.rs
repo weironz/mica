@@ -2588,3 +2588,69 @@ fn regression_sidebar_located_creation_placement() {
   click_visual_row(&mut app, 2);
   app.wait_for("MARKER-FOLDER-BTN-AFTER-WELCOME").unwrap();
 }
+
+/// Regression (v0.15.5):
+/// 1. Multi-line selection over a bullet list pressing `Tab` indents every
+///    selected item (including the first line, previously pinned at indent 0).
+/// 2. Pasting inside a code block after Enter cleanly writes pasted code
+///    without crashing or losing trailing content, and repeated Backspace
+///    inside multi-line code blocks executes cleanly.
+#[test]
+fn regression_list_tab_code_paste_and_backspace() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面").unwrap();
+
+  // Create a 2-item bullet list and select both items before pressing Tab.
+  app.type_text("id:mica-rich-editor", "- ListHead").unwrap();
+  app.wait_for("ListHead").unwrap();
+  app.press_key("enter").unwrap();
+  app.type_text("id:mica-rich-editor", "ListTail").unwrap();
+  app.wait_for("ListTail").unwrap();
+
+  app.press_key("ctrl+a").unwrap();
+  app.press_key("tab").unwrap();
+  app.settle();
+  app.wait_for("ListHead").unwrap();
+  app.wait_for("ListTail").unwrap();
+
+  // Verify the indented list rows sit at an indented x-coordinate (deeper than indent 0),
+  // meaning the first item (`ListHead`) shifted right alongside `ListTail`.
+  let row_x = |app: &mut Headless, tid: &str| -> f32 {
+    app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .find(|n| n.test_id.as_deref() == Some(tid))
+      .map(|n| n.bounds.origin.x.0)
+      .expect("missing block text row")
+  };
+  let x_head = row_x(&mut app, "block-text-0");
+  let x_tail = row_x(&mut app, "block-text-1");
+  assert!(
+    (x_head - x_tail).abs() <= 1.0,
+    "first list item and second item must share identical indented column after Tab ({x_head} vs {x_tail})"
+  );
+
+  // Move below to create a code block, type an indented line, press Enter
+  // (which auto-indents), paste, and verify paste replaces the auto-indent
+  // rather than leaving extra leading spaces, plus repeated Backspace works cleanly.
+  app.press("id:ed-code-block").unwrap();
+  app.wait_for("id:code-block-editor").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "  line_one").unwrap();
+  app.wait_for("  line_one").unwrap();
+  app.press_key("enter").unwrap();
+  let mut paste = nsh_core::PasteEvent::default();
+  paste.text = "line_pasted".into();
+  app.paste("id:mica-editor-ime-sink", &paste).unwrap();
+  app.wait_for("  line_one\nline_pasted").unwrap();
+  app.press_key("backspace").unwrap();
+  app.press_key("backspace").unwrap();
+  app.settle();
+  app.wait_for("  line_one\nline_past").unwrap();
+}
