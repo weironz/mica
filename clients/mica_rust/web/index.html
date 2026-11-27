@@ -189,9 +189,24 @@
       <div class="mica-auth-head">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-hidden="true">
           <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
-            <path fill="url(#ms-main)" d="M 178 282 Q 178 236 224 236 L 318 236 Q 342 236 358 257 L 512 462 L 666 257 Q 682 236 706 236 L 800 236 Q 846 236 846 282 L 846 742 Q 846 788 800 788 L 706 788 Q 674 788 674 756 L 674 494 L 558 650 Q 536 680 512 680 Q 488 680 466 650 L 350 494 L 350 756 Q 350 788 318 788 L 224 788 Q 178 788 178 742 Z"/>
-            <path fill="url(#ms-left)" d="M 242 302 L 312 302 L 512 570 L 466 632 L 342 466 L 342 726 L 242 726 Z"/>
-            <path fill="url(#ms-right)" d="M 782 302 L 712 302 L 512 570 L 558 632 L 682 466 L 682 726 L 782 726 Z"/>
+            <defs>
+              <linearGradient id="ml-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#4F7CFF"/>
+                <stop offset="0.48" stop-color="#6357E8"/>
+                <stop offset="1" stop-color="#8B4DE8"/>
+              </linearGradient>
+              <linearGradient id="ml-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#5E8CFF"/>
+                <stop offset="1" stop-color="#4656D8"/>
+              </linearGradient>
+              <linearGradient id="ml-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#7968F1"/>
+                <stop offset="1" stop-color="#9B4DDA"/>
+              </linearGradient>
+            </defs>
+            <path fill="url(#ml-main)" d="M 178 282 Q 178 236 224 236 L 318 236 Q 342 236 358 257 L 512 462 L 666 257 Q 682 236 706 236 L 800 236 Q 846 236 846 282 L 846 742 Q 846 788 800 788 L 706 788 Q 674 788 674 756 L 674 494 L 558 650 Q 536 680 512 680 Q 488 680 466 650 L 350 494 L 350 756 Q 350 788 318 788 L 224 788 Q 178 788 178 742 Z"/>
+            <path fill="url(#ml-left)" d="M 242 302 L 312 302 L 512 570 L 466 632 L 342 466 L 342 726 L 242 726 Z"/>
+            <path fill="url(#ml-right)" d="M 782 302 L 712 302 L 512 570 L 558 632 L 682 466 L 682 726 L 782 726 Z"/>
           </g>
         </svg>
         <div>
