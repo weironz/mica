@@ -2094,6 +2094,7 @@ impl CloudSessionHandles {
 
     let h = self.clone();
     let origin_req = origin.clone();
+    let preauth_json = crate::web_runtime::take_web_preauth_json();
     spawn(async move {
       let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
@@ -2101,7 +2102,13 @@ impl CloudSessionHandles {
           access_token: None,
           email: None,
         });
-        let email = conn.refresh_session_cookie().await?;
+        let email = match preauth_json
+          .as_deref()
+          .and_then(|raw| conn.apply_preauth_response(raw).ok())
+        {
+          Some(e) => e,
+          None => conn.refresh_session_cookie().await?,
+        };
         let boot = fetch_cloud_bootstrap(&mut conn, None).await?;
         Ok::<_, String>((conn, email, boot))
       }

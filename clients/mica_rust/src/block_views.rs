@@ -26,12 +26,12 @@ use mica_editor::{
   marks::EditorMark,
   utf16::{utf16_len, utf16_slice},
 };
-use nsh_base::{EditorScrollBeyond, EditorStyles, button, editor, input, text_view::PartStyle};
+use nsh_base::{button, input};
 use nsh_core::{
-  Color, PropertyValue, StyleDecl, StyleKey, SubmitBehavior,
+  SubmitBehavior,
   color::Rgba,
   element::{
-    Align, ElementRef, ImageSrc, Placement, Style, Svg, element_ref, open_url, overlay,
+    Align, ElementRef, ImageSrc, Placement, Svg, element_ref, open_url, overlay,
     set_clipboard, svg, text_measurer,
   },
   geometry::{Bounds, Point, Points, px},
@@ -3370,23 +3370,22 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, at: Position, block: EditorBl
           .border_color(move || palette(dark_mode.get()).border_subtle)
           .bg(move || palette(dark_mode.get()).code_bg)
           .child(
-            editor()
+            input()
               .test_id("mermaid-source-editor")
-              .accessibility_label("Mermaid 源码编辑器")
+              .label("Mermaid 源码编辑器")
               .w_full()
-              .default_value(Some(SharedString::from(se2)))
+              .h(px(140.0))
+              .multiline(true)
+              .default_value(se2)
               .auto_focus(true)
               .placeholder("graph LR\n  A[Mica] --> B[Pure Rust]")
-              .line_numbers(false)
-              .soft_wrap(false)
-              .folding(false)
-              .font_size(px(13.0))
+              .text_size(px(13.0))
               .line_height(px(20.0))
-              .min_rows(Some(3u32))
-              .max_rows(Some(18u32))
-              .scroll_beyond_last_line(EditorScrollBeyond::None)
-              .styles(move || code_editor_styles(dark_mode.get()))
-              .on_change(move |v: &SharedString| br_m2.update_block_source_at(live_index(at), v.as_ref())),
+              .font_family("monospace")
+              .text_color(move || palette(dark_mode.get()).text_primary)
+              .bg(move || palette(dark_mode.get()).code_bg)
+              .border(px(0.0))
+              .on_change(move |v: &str| br_m2.update_block_source_at(live_index(at), v)),
           )
       }
     }))
@@ -3823,15 +3822,19 @@ pub fn render_lightbox_modal(
                       .border_color(move || palette(dark_mode.get()).border_normal)
                       .bg(move || palette(dark_mode.get()).code_bg)
                       .child(
-                        editor()
+                        input()
                           .w_full()
                           .h_full()
-                          .value(Some(SharedString::from(se)))
-                          .font_size(px(13.0))
+                          .multiline(true)
+                          .default_value(se)
+                          .text_size(px(13.0))
                           .line_height(px(20.0))
-                          .styles(move || code_editor_styles(dark_mode.get()))
-                          .on_change(move |v: &SharedString| {
-                            br_e.update_block_source_at(block_index, v.as_ref());
+                          .font_family("monospace")
+                          .text_color(move || palette(dark_mode.get()).text_primary)
+                          .bg(move || palette(dark_mode.get()).code_bg)
+                          .border(px(0.0))
+                          .on_change(move |v: &str| {
+                            br_e.update_block_source_at(block_index, v);
                             live_source.set(v.to_string());
                           }),
                       )
@@ -3936,23 +3939,6 @@ impl CalloutKind {
       Self::Caution => (p.alert_caution, if dark { "#F85149" } else { "#CF222E" }),
     }
   }
-}
-
-fn code_editor_styles(dark: bool) -> EditorStyles {
-  let p = palette(dark);
-  let mut styles = EditorStyles::default();
-  styles.content = Some(PartStyle(Style::from_decls([
-    StyleDecl::Set(StyleKey::BackgroundColor, PropertyValue::Color(Some(Color::from(p.code_bg)))),
-    StyleDecl::Set(StyleKey::Color, PropertyValue::Color(Some(Color::from(p.text_primary)))),
-  ])));
-  styles.gutter = Some(PartStyle(Style::from_decls([
-    StyleDecl::Set(StyleKey::BackgroundColor, PropertyValue::Color(Some(Color::from(p.code_bg)))),
-    StyleDecl::Set(StyleKey::Color, PropertyValue::Color(Some(Color::from(p.text_faint)))),
-  ])));
-  styles.selection = Some(PartStyle(Style::from_decls([
-    StyleDecl::Set(StyleKey::BackgroundColor, PropertyValue::Color(Some(Color::from(p.selection_bg)))),
-  ])));
-  styles
 }
 
 fn copy_with_reset(text: String, copied: Signal<bool>, copy_gen: Signal<u64>) {

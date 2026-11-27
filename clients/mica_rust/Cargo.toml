@@ -31,11 +31,12 @@ mica-md = { path = "../../crates/md-core", features = ["render-board"] }
 mica-sync = { path = "../../crates/mica-sync" }
 
 # L3 Native Shell presentation primitives: pinned to exact `=0.6.1` (P2-2) so
-# `cargo update` never silently upgrades a 0.x UI shell. Enable only `editor`
-# (pure-Rust code editor via ropey for code blocks); document editing runs on
-# Mica's own `crates/mica-editor` + NSH native `virtual_list` (Route 2-B).
+# `cargo update` never silently upgrades a 0.x UI shell. All heavy optional
+# features (`editor`/`highlight`/`math`/`plot`/`rich-editor`/`term`) stay OFF;
+# document & code-block editing runs on Mica's own `crates/mica-editor` + NSH
+# native `virtual_list` (Route 2-B).
 nsh-core = "=0.6.1"
-nsh-base = { version = "=0.6.1", default-features = false, features = ["editor"] }
+nsh-base = { version = "=0.6.1", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -80,3 +81,4 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true

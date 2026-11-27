@@ -639,6 +639,25 @@ impl CloudConnector {
     Ok(())
   }
 
+  /// Apply an auth JSON response body (`{ access_token, user }`) already
+  /// fetched by the browser's instant boot shell (`POST /api/auth/refresh` or
+  /// `POST /api/auth/login`), avoiding a redundant refresh rotation on Web boot.
+  pub fn apply_preauth_response(&mut self, body: &str) -> Result<String, String> {
+    self.require_server()?;
+    let auth = decode_auth(body).map_err(|e| format!("invalid preauth response: {e}"))?;
+    let email = auth.user.email.clone();
+    self.config.access_token = Some(auth.access_token);
+    self.user_id = Some(auth.user.id.to_string());
+    self.display_name = (!auth.user.display_name.trim().is_empty())
+      .then(|| auth.user.display_name.trim().to_string());
+    self.refresh_token = None;
+    self.config.email = Some(email.clone());
+    self.claims.switch_account(WorldOrigin::Cloud {
+      server_url: self.endpoints.base_url().to_string(),
+    });
+    Ok(email)
+  }
+
   /// Restore or rotate a browser cloud session using the server's `HttpOnly`
   /// `mica_refresh` cookie (`POST /api/auth/refresh` with `{}` body), returning
   /// the authenticated user's email without touching `localStorage`.
@@ -654,18 +673,7 @@ impl CloudConnector {
     )
     .await
     .map_err(|e| format!("cookie session refresh failed: {e}"))?;
-    let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
-    let email = auth.user.email.clone();
-    self.config.access_token = Some(auth.access_token);
-    self.user_id = Some(auth.user.id.to_string());
-    self.display_name = (!auth.user.display_name.trim().is_empty())
-      .then(|| auth.user.display_name.trim().to_string());
-    self.refresh_token = None;
-    self.config.email = Some(email.clone());
-    self.claims.switch_account(WorldOrigin::Cloud {
-      server_url: self.endpoints.base_url().to_string(),
-    });
-    Ok(email)
+    self.apply_preauth_response(&body)
   }
 
   /// End the current cloud session server-side (`POST /api/auth/logout`),
@@ -2979,6 +2987,23 @@ mod tests {
       let raw_req = rh.join().unwrap();
       assert!(raw_req.starts_with("POST /api/auth/refresh "));
       assert!(raw_req.ends_with("{}"));
+
+      // 7b. Ephemeral Web boot-shell preauth handoff populates connector without extra HTTP.
+      let mut pre = CloudConnector::new(CloudConfig {
+        server_url: "https://mica.example.com".into(),
+        access_token: None,
+        email: None,
+      });
+      let pre_email = pre
+        .apply_preauth_response(
+          r#"{"access_token":"jwt-preauth","token_type":"Bearer","expires_at":"2026-12-31T00:00:00Z","refresh_token":"","user":{"id":"00000000-0000-0000-0000-000000000002","email":"fast@mica.dev","display_name":"Fast Boot","created_at":"2026-01-01T00:00:00Z"}}"#,
+        )
+        .unwrap();
+      assert_eq!(pre_email, "fast@mica.dev");
+      assert_eq!(pre.access_token(), Some("jwt-preauth"));
+      assert_eq!(pre.user_id(), Some("00000000-0000-0000-0000-000000000002"));
+      assert_eq!(pre.display_name(), Some("Fast Boot"));
+      assert!(pre.refresh_token().is_none());
 
       let (lc_out, _, lh_out) = mock_conn("204 No Content", "", false);
       lc_out.logout_server().await.unwrap();

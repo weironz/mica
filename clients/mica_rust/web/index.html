@@ -12,47 +12,252 @@
 <link id="mica-glue-preload" rel="modulepreload" href="./mica_rust.js">
 <link id="mica-wasm-preload" rel="preload" href="./mica_rust_bg.wasm" as="fetch" crossorigin>
 <style>
-  html, body { margin: 0; height: 100%; background: #FFFFFF; overflow: hidden; }
-  @media (prefers-color-scheme: dark) { html, body { background: #0F1419; } }
-  #app { position: fixed; inset: 0; }
-  #mica-splash {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 14px;
-    opacity: 0; animation: mica-splash-in 240ms ease-out 300ms forwards;
-    font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    color: #71717A;
+  :root {
+    --bg: #ffffff;
+    --sidebar: #faf9f7;
+    --card: #ffffff;
+    --border: #e4e4e7;
+    --border-soft: #f0f0f2;
+    --text: #18181b;
+    --muted: #71717a;
+    --faint: #a1a1aa;
+    --accent: #6357e8;
+    --accent-hover: #5346d9;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --ok: #15803d;
+    --ok-bg: #f0fdf4;
+    --shimmer-a: #f4f4f5;
+    --shimmer-b: #e9e9ec;
   }
-  #mica-splash svg { width: 48px; height: 48px; }
-  #mica-splash[data-error="1"] { opacity: 1; animation: none; color: #DC2626; }
-  @keyframes mica-splash-in { to { opacity: 1; } }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1419;
+      --sidebar: #161b22;
+      --card: #161b22;
+      --border: #2b313a;
+      --border-soft: #21262d;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --faint: #71717a;
+      --accent: #7c6ff6;
+      --accent-hover: #6c5ee8;
+      --danger: #f87171;
+      --danger-bg: rgba(248, 113, 113, 0.12);
+      --ok: #4ade80;
+      --ok-bg: rgba(74, 222, 128, 0.12);
+      --shimmer-a: #1c222b;
+      --shimmer-b: #262e3a;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #app { position: fixed; inset: 0; }
+  #mica-splash { position: fixed; inset: 0; z-index: 10; background: var(--bg); }
+  #mica-splash [hidden] { display: none !important; }
+
+  /* 1. Initial subtle logo screen (shown only briefly while auth probe resolves) */
+  #mica-boot-logo {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    opacity: 0; animation: mica-fade-in 220ms ease-out 180ms forwards;
+  }
+  #mica-boot-logo svg { width: 48px; height: 48px; }
+  #mica-splash[data-error="1"] #mica-boot-logo { opacity: 1; animation: none; }
+  #mica-splash-msg { font-size: 13px; color: var(--muted); max-width: 440px; text-align: center; padding: 0 20px; }
+  #mica-splash[data-error="1"] #mica-splash-msg { color: var(--danger); }
+
+  /* 2. Instant Cloud Sign-In card (Incognito / unauthenticated: interactive in <300ms) */
+  #mica-boot-auth {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: var(--bg); animation: mica-fade-in 160ms ease-out forwards;
+  }
+  .mica-auth-card {
+    width: 100%; max-width: 392px; padding: 28px 28px 22px; border-radius: 14px;
+    background: var(--card); border: 1px solid var(--border);
+    box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+  }
+  .mica-auth-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .mica-auth-head svg { width: 34px; height: 34px; flex: 0 0 auto; }
+  .mica-auth-title { font-size: 19px; font-weight: 600; margin: 0; line-height: 1.25; }
+  .mica-auth-sub { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+  .mica-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+  .mica-field label { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+  .mica-field input {
+    width: 100%; height: 38px; padding: 0 11px; border-radius: 8px; font-size: 13.5px;
+    color: var(--text); background: var(--bg); border: 1px solid var(--border); outline: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .mica-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99, 87, 232, 0.16); }
+  .mica-banner {
+    padding: 8px 10px; border-radius: 8px; font-size: 12.5px; margin-bottom: 12px; line-height: 1.45;
+  }
+  .mica-banner.err { color: var(--danger); background: var(--danger-bg); }
+  .mica-banner.ok { color: var(--ok); background: var(--ok-bg); }
+  .mica-submit {
+    width: 100%; height: 40px; border: 0; border-radius: 8px; cursor: pointer;
+    background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+    transition: background 120ms ease, opacity 120ms ease;
+  }
+  .mica-submit:hover:not(:disabled) { background: var(--accent-hover); }
+  .mica-submit:disabled { opacity: 0.65; cursor: wait; }
+  .mica-auth-links {
+    display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 12.5px;
+  }
+  .mica-link-btn {
+    border: 0; background: none; padding: 4px 2px; cursor: pointer; font: inherit; color: var(--muted);
+  }
+  .mica-link-btn.accent { color: var(--accent); font-weight: 500; }
+  .mica-link-btn:hover { text-decoration: underline; }
+  .mica-engine-foot {
+    margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    font-size: 11.5px; color: var(--faint);
+  }
+  .mica-mini-track { flex: 1; height: 4px; border-radius: 999px; background: var(--shimmer-a); overflow: hidden; }
+  .mica-mini-fill { height: 100%; width: 6%; border-radius: 999px; background: var(--accent); transition: width 160ms linear; }
+
+  /* 3. Instant Workspace Skeleton (authenticated cold load: layout visible in <300ms) */
+  #mica-boot-skel {
+    position: absolute; inset: 0; display: flex; background: var(--bg);
+    animation: mica-fade-in 150ms ease-out forwards;
+  }
+  .mica-skel-side {
+    width: 248px; flex: 0 0 248px; background: var(--sidebar); border-right: 1px solid var(--border-soft);
+    padding: 16px 14px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .mica-skel-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .mica-skel-top {
+    height: 46px; border-bottom: 1px solid var(--border-soft); padding: 0 20px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .mica-skel-body {
+    width: 100%; max-width: 760px; margin: 42px auto 0; padding: 0 32px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .mica-shimmer {
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--shimmer-a) 25%, var(--shimmer-b) 50%, var(--shimmer-a) 75%);
+    background-size: 200% 100%;
+    animation: mica-shimmer 1.3s ease-in-out infinite;
+  }
+  .mica-skel-pill {
+    position: fixed; right: 20px; bottom: 18px; display: flex; align-items: center; gap: 10px;
+    padding: 8px 13px; border-radius: 999px; font-size: 12px; color: var(--muted);
+    background: var(--card); border: 1px solid var(--border); box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+  }
+  .mica-skel-pill .mica-mini-track { width: 88px; flex: 0 0 88px; }
+  @media (max-width: 768px) { .mica-skel-side { display: none; } }
+  @keyframes mica-fade-in { to { opacity: 1; } }
+  @keyframes mica-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 </style>
 </head>
 <body>
 <div id="app"></div>
 <div id="mica-splash" aria-live="polite">
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-hidden="true">
-    <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
-      <defs>
-        <linearGradient id="ms-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#4F7CFF"/>
-          <stop offset="0.48" stop-color="#6357E8"/>
-          <stop offset="1" stop-color="#8B4DE8"/>
-        </linearGradient>
-        <linearGradient id="ms-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#5E8CFF"/>
-          <stop offset="1" stop-color="#4656D8"/>
-        </linearGradient>
-        <linearGradient id="ms-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stop-color="#7968F1"/>
-          <stop offset="1" stop-color="#9B4DDA"/>
-        </linearGradient>
-      </defs>
-      <path fill="url(#ms-main)" d="M 178 282 Q 178 236 224 236 L 318 236 Q 342 236 358 257 L 512 462 L 666 257 Q 682 236 706 236 L 800 236 Q 846 236 846 282 L 846 742 Q 846 788 800 788 L 706 788 Q 674 788 674 756 L 674 494 L 558 650 Q 536 680 512 680 Q 488 680 466 650 L 350 494 L 350 756 Q 350 788 318 788 L 224 788 Q 178 788 178 742 Z"/>
-      <path fill="url(#ms-left)" d="M 242 302 L 312 302 L 512 570 L 466 632 L 342 466 L 342 726 L 242 726 Z"/>
-      <path fill="url(#ms-right)" d="M 782 302 L 712 302 L 512 570 L 558 632 L 682 466 L 682 726 L 782 726 Z"/>
-    </g>
-  </svg>
-  <span id="mica-splash-msg"></span>
+  <div id="mica-boot-logo">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-hidden="true">
+      <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
+        <defs>
+          <linearGradient id="ms-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#4F7CFF"/>
+            <stop offset="0.48" stop-color="#6357E8"/>
+            <stop offset="1" stop-color="#8B4DE8"/>
+          </linearGradient>
+          <linearGradient id="ms-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#5E8CFF"/>
+            <stop offset="1" stop-color="#4656D8"/>
+          </linearGradient>
+          <linearGradient id="ms-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#7968F1"/>
+            <stop offset="1" stop-color="#9B4DDA"/>
+          </linearGradient>
+        </defs>
+        <path fill="url(#ms-main)" d="M 178 282 Q 178 236 224 236 L 318 236 Q 342 236 358 257 L 512 462 L 666 257 Q 682 236 706 236 L 800 236 Q 846 236 846 282 L 846 742 Q 846 788 800 788 L 706 788 Q 674 788 674 756 L 674 494 L 558 650 Q 536 680 512 680 Q 488 680 466 650 L 350 494 L 350 756 Q 350 788 318 788 L 224 788 Q 178 788 178 742 Z"/>
+        <path fill="url(#ms-left)" d="M 242 302 L 312 302 L 512 570 L 466 632 L 342 466 L 342 726 L 242 726 Z"/>
+        <path fill="url(#ms-right)" d="M 782 302 L 712 302 L 512 570 L 558 632 L 682 466 L 682 726 L 782 726 Z"/>
+      </g>
+    </svg>
+    <span id="mica-splash-msg">正在启动 Mica…</span>
+  </div>
+
+  <div id="mica-boot-auth" data-testid="world-switcher-overlay" hidden>
+    <form id="mica-auth-form" class="mica-auth-card" data-testid="world-switcher-form-pane" novalidate>
+      <div class="mica-auth-head">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-hidden="true">
+          <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
+            <path fill="url(#ms-main)" d="M 178 282 Q 178 236 224 236 L 318 236 Q 342 236 358 257 L 512 462 L 666 257 Q 682 236 706 236 L 800 236 Q 846 236 846 282 L 846 742 Q 846 788 800 788 L 706 788 Q 674 788 674 756 L 674 494 L 558 650 Q 536 680 512 680 Q 488 680 466 650 L 350 494 L 350 756 Q 350 788 318 788 L 224 788 Q 178 788 178 742 Z"/>
+            <path fill="url(#ms-left)" d="M 242 302 L 312 302 L 512 570 L 466 632 L 342 466 L 342 726 L 242 726 Z"/>
+            <path fill="url(#ms-right)" d="M 782 302 L 712 302 L 512 570 L 558 632 L 682 466 L 682 726 L 782 726 Z"/>
+          </g>
+        </svg>
+        <div>
+          <h1 id="mica-auth-title" class="mica-auth-title">登录 Mica</h1>
+          <p id="mica-auth-host" class="mica-auth-sub"></p>
+        </div>
+      </div>
+
+      <div id="mica-auth-banner" class="mica-banner" hidden></div>
+
+      <div class="mica-field" data-testid="world-auth-email">
+        <label for="mica-email-input">邮箱</label>
+        <input id="mica-email-input" type="email" autocomplete="username" placeholder="you@example.com" required>
+      </div>
+      <div id="mica-name-wrap" class="mica-field" hidden>
+        <label for="mica-name-input">显示名称（可选）</label>
+        <input id="mica-name-input" type="text" autocomplete="name" placeholder="你的称呼">
+      </div>
+      <div class="mica-field" data-testid="world-auth-password">
+        <label for="mica-password-input">密码</label>
+        <input id="mica-password-input" type="password" autocomplete="current-password" placeholder="输入密码" required>
+      </div>
+
+      <button id="mica-auth-submit" class="mica-submit" type="submit" data-testid="world-auth-submit">登录</button>
+
+      <div class="mica-auth-links">
+        <button id="mica-auth-forgot" class="mica-link-btn" type="button" data-testid="world-auth-forgot">忘记密码？</button>
+        <button id="mica-auth-toggle" class="mica-link-btn accent" type="button" data-testid="world-auth-mode-register">没有账号？注册</button>
+      </div>
+
+      <div class="mica-engine-foot">
+        <span id="mica-engine-text">正在后台预热编辑器…</span>
+        <div class="mica-mini-track"><div id="mica-engine-bar" class="mica-mini-fill"></div></div>
+      </div>
+    </form>
+  </div>
+
+  <div id="mica-boot-skel" hidden>
+    <aside class="mica-skel-side" aria-hidden="true">
+      <div class="mica-shimmer" style="height:28px;width:62%;margin-bottom:8px;"></div>
+      <div class="mica-shimmer" style="height:30px;width:100%;"></div>
+      <div class="mica-shimmer" style="height:20px;width:82%;margin-top:8px;"></div>
+      <div class="mica-shimmer" style="height:20px;width:74%;"></div>
+      <div class="mica-shimmer" style="height:20px;width:88%;"></div>
+      <div class="mica-shimmer" style="height:20px;width:68%;"></div>
+      <div class="mica-shimmer" style="height:20px;width:79%;"></div>
+    </aside>
+    <main class="mica-skel-main" aria-hidden="true">
+      <div class="mica-skel-top">
+        <div class="mica-shimmer" style="height:16px;width:220px;"></div>
+        <div class="mica-shimmer" style="height:24px;width:110px;"></div>
+      </div>
+      <div class="mica-skel-body">
+        <div class="mica-shimmer" style="height:34px;width:48%;margin-bottom:10px;"></div>
+        <div class="mica-shimmer" style="height:16px;width:96%;"></div>
+        <div class="mica-shimmer" style="height:16px;width:89%;"></div>
+        <div class="mica-shimmer" style="height:16px;width:93%;"></div>
+        <div class="mica-shimmer" style="height:16px;width:64%;"></div>
+        <div class="mica-shimmer" style="height:96px;width:100%;margin-top:10px;border-radius:8px;"></div>
+      </div>
+    </main>
+    <div class="mica-skel-pill">
+      <span id="mica-skel-text">正在加载工作区…</span>
+      <div class="mica-mini-track"><div id="mica-skel-bar" class="mica-mini-fill"></div></div>
+    </div>
+  </div>
 </div>
 <script type="module">
   const nshUrl = document.getElementById("mica-nsh-preload")?.getAttribute("href") || "./nsh.js";
@@ -96,34 +301,286 @@
   };
 
   const splash = document.getElementById("mica-splash");
+  const logoView = document.getElementById("mica-boot-logo");
+  const authView = document.getElementById("mica-boot-auth");
+  const skelView = document.getElementById("mica-boot-skel");
   const splashMsg = document.getElementById("mica-splash-msg");
+  const engineText = document.getElementById("mica-engine-text");
+  const engineBar = document.getElementById("mica-engine-bar");
+  const skelText = document.getElementById("mica-skel-text");
+  const skelBar = document.getElementById("mica-skel-bar");
   const root = document.getElementById("app");
+
+  const authForm = document.getElementById("mica-auth-form");
+  const authTitle = document.getElementById("mica-auth-title");
+  const authHost = document.getElementById("mica-auth-host");
+  const authBanner = document.getElementById("mica-auth-banner");
+  const emailInput = document.getElementById("mica-email-input");
+  const nameWrap = document.getElementById("mica-name-wrap");
+  const nameInput = document.getElementById("mica-name-input");
+  const passInput = document.getElementById("mica-password-input");
+  const submitBtn = document.getElementById("mica-auth-submit");
+  const forgotBtn = document.getElementById("mica-auth-forgot");
+  const toggleBtn = document.getElementById("mica-auth-toggle");
+
+  if (authHost) authHost.textContent = location.host || location.origin;
+
+  const isHttpOrigin = location.protocol === "http:" || location.protocol === "https:";
+  let enginePct = 6;
+  let engineReady = false;
+  let playerInstance = null;
+  let launched = false;
+  let waitingForAuth = false;
+  let authProbeSettled = !isHttpOrigin;
+  let registerMode = false;
+
+  const setProgress = (pct, label) => {
+    enginePct = Math.max(enginePct, Math.min(100, Math.round(pct)));
+    if (engineBar) engineBar.style.width = `${enginePct}%`;
+    if (skelBar) skelBar.style.width = `${enginePct}%`;
+    if (label) {
+      if (engineText) engineText.textContent = label;
+      if (skelText) skelText.textContent = label;
+      if (splashMsg && !splash?.getAttribute("data-error")) splashMsg.textContent = label;
+    }
+  };
+
   const showError = (msg) => {
+    if (authView) authView.hidden = true;
+    if (skelView) skelView.hidden = true;
+    if (logoView) logoView.hidden = false;
     if (splash) {
       splash.setAttribute("data-error", "1");
-      splash.style.display = "flex";
+      splash.style.display = "block";
     }
     if (splashMsg) splashMsg.textContent = String(msg);
   };
 
-  try {
-    const { createPlayer } = await import(nshUrl);
-    const player = await createPlayer(root, {
-      dialogs: "viewport",
-      wasm: wasmUrl,
-      glue: glueUrl,
-      onError: (msg) => {
-        console.error("[mica-rust]", msg);
-        showError(msg);
+  const showMode = (mode) => {
+    if (logoView) logoView.hidden = mode !== "logo";
+    if (authView) authView.hidden = mode !== "auth";
+    if (skelView) skelView.hidden = mode !== "skel";
+  };
+
+  const setBanner = (kind, msg) => {
+    if (!authBanner) return;
+    if (!msg) {
+      authBanner.hidden = true;
+      authBanner.textContent = "";
+      authBanner.className = "mica-banner";
+      return;
+    }
+    authBanner.hidden = false;
+    authBanner.textContent = msg;
+    authBanner.className = `mica-banner ${kind}`;
+  };
+
+  const launchRustIfReady = () => {
+    if (launched || waitingForAuth || !authProbeSettled || !playerInstance) return;
+    launched = true;
+    window.micaPlayer = playerInstance;
+    splash?.remove();
+    playerInstance.runRust();
+  };
+
+  // Start fetching WASM immediately (matching <link rel="preload" as="fetch" crossorigin>
+  // so the browser reuses the single HTTP request) while reporting live stream progress.
+  const wasmResponsePromise = fetch(wasmUrl).then((resp) => {
+    if (!resp.ok || !resp.body || typeof TransformStream === "undefined") {
+      setProgress(88, "正在编译编辑器引擎…");
+      return resp;
+    }
+    const rawTotal = Number(resp.headers.get("content-length") || 0);
+    const estTotal = resp.headers.get("content-encoding") ? rawTotal * 3.5 : rawTotal;
+    let loaded = 0;
+    const tracker = new TransformStream({
+      transform(chunk, controller) {
+        loaded += chunk.byteLength;
+        if (estTotal > 0) {
+          const pct = Math.min(88, Math.round((loaded / estTotal) * 84) + 4);
+          setProgress(pct, `正在加载编辑器… ${pct}%`);
+        } else {
+          setProgress(Math.min(82, enginePct + 4), "正在加载编辑器…");
+        }
+        controller.enqueue(chunk);
+      },
+      flush() {
+        setProgress(92, "正在初始化编辑器…");
       },
     });
-    window.micaPlayer = player;
-    splash?.remove();
-    player.runRust();
-  } catch (err) {
-    console.error("[mica-rust] boot failed:", err);
-    showError("Failed to start Mica: " + String(err?.message ?? err));
+    const headers = new Headers(resp.headers);
+    return new Response(resp.body.pipeThrough(tracker), {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers,
+    });
+  });
+
+  // Load NSH runtime & stream-compile WASM in parallel with the auth probe.
+  const playerPromise = import(nshUrl)
+    .then(({ createPlayer }) =>
+      createPlayer(root, {
+        dialogs: "viewport",
+        wasm: wasmResponsePromise,
+        glue: glueUrl,
+        onError: (msg) => {
+          console.error("[mica-rust]", msg);
+          showError(msg);
+        },
+      })
+    )
+    .then((player) => {
+      playerInstance = player;
+      engineReady = true;
+      setProgress(100, "编辑器已就绪");
+      launchRustIfReady();
+      return player;
+    })
+    .catch((err) => {
+      console.error("[mica-rust] boot failed:", err);
+      showError("Failed to start Mica: " + String(err?.message ?? err));
+    });
+
+  // Fast auth probe in parallel: shows instant Login (401) or Workspace Skeleton (200)
+  // within 1 RTT instead of blocking on the full WASM download, and guarantees
+  // single-flight refresh rotation before Rust mounts.
+  if (isHttpOrigin) {
+    const probeInit = {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    };
+    if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+      probeInit.signal = AbortSignal.timeout(6000);
+    }
+    fetch("/api/auth/refresh", probeInit)
+      .then(async (resp) => {
+        if (launched) return;
+        if (resp.ok) {
+          const text = await resp.text();
+          if (text) window.__micaPreAuth = text;
+          authProbeSettled = true;
+          waitingForAuth = false;
+          if (!engineReady) showMode("skel");
+          launchRustIfReady();
+        } else if (resp.status === 401) {
+          authProbeSettled = true;
+          waitingForAuth = true;
+          showMode("auth");
+          emailInput?.focus();
+        } else {
+          authProbeSettled = true;
+          waitingForAuth = false;
+          launchRustIfReady();
+        }
+      })
+      .catch(() => {
+        // Offline / non-API preview host / timeout: let Rust mount as soon as WASM finishes.
+        authProbeSettled = true;
+        waitingForAuth = false;
+        launchRustIfReady();
+      });
   }
+
+  toggleBtn?.addEventListener("click", () => {
+    registerMode = !registerMode;
+    setBanner("", "");
+    if (authTitle) authTitle.textContent = registerMode ? "创建 Mica 账号" : "登录 Mica";
+    if (submitBtn) submitBtn.textContent = registerMode ? "注册" : "登录";
+    if (nameWrap) nameWrap.hidden = !registerMode;
+    if (forgotBtn) forgotBtn.hidden = registerMode;
+    if (passInput) {
+      passInput.autocomplete = registerMode ? "new-password" : "current-password";
+      passInput.placeholder = registerMode ? "至少 8 位密码" : "输入密码";
+    }
+    if (toggleBtn) {
+      toggleBtn.textContent = registerMode ? "已有账号？去登录" : "没有账号？注册";
+      toggleBtn.setAttribute("data-testid", registerMode ? "world-auth-mode-login" : "world-auth-mode-register");
+    }
+  });
+
+  forgotBtn?.addEventListener("click", async () => {
+    const email = (emailInput?.value || "").trim();
+    if (!email || !email.includes("@")) {
+      setBanner("err", "请先在上方填写您的邮箱地址，再点击忘记密码");
+      emailInput?.focus();
+      return;
+    }
+    setBanner("", "");
+    try {
+      const resp = await fetch("/api/auth/password/forgot", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (resp.ok || resp.status === 204) {
+        setBanner("ok", "如果该邮箱已注册，我们已发送密码重置邮件，请查收。");
+      } else {
+        setBanner("err", `发送失败（HTTP ${resp.status}）`);
+      }
+    } catch (err) {
+      setBanner("err", "网络请求失败：" + String(err?.message ?? err));
+    }
+  });
+
+  authForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = (emailInput?.value || "").trim();
+    const password = passInput?.value || "";
+    if (!email || !email.includes("@")) {
+      setBanner("err", "请输入有效的邮箱地址");
+      emailInput?.focus();
+      return;
+    }
+    if (registerMode ? password.length < 8 : !password) {
+      setBanner("err", registerMode ? "密码至少需要 8 位字符" : "请输入密码");
+      passInput?.focus();
+      return;
+    }
+    setBanner("", "");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = registerMode ? "正在注册…" : "正在登录…";
+    }
+    try {
+      const endpoint = registerMode ? "/api/auth/register" : "/api/auth/login";
+      const body = registerMode
+        ? { email, password, display_name: (nameInput?.value || "").trim() }
+        : { email, password };
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const text = await resp.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+      if (!resp.ok) {
+        const msg = data?.error || data?.message || `请求失败（HTTP ${resp.status}）`;
+        setBanner("err", msg);
+        return;
+      }
+      if (registerMode && data && data.verified === false && !data.access_token) {
+        setBanner("ok", "注册成功！验证邮件已发送，请完成验证后再登录。");
+        return;
+      }
+      if (text) window.__micaPreAuth = text;
+      waitingForAuth = false;
+      if (!engineReady) showMode("skel");
+      launchRustIfReady();
+      await playerPromise;
+    } catch (err) {
+      setBanner("err", "网络请求失败：" + String(err?.message ?? err));
+    } finally {
+      if (submitBtn && !launched) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = registerMode ? "注册" : "登录";
+      }
+    }
+  });
 </script>
 </body>
 </html>

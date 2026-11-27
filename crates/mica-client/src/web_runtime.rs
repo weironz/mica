@@ -31,6 +31,27 @@ pub fn web_origin() -> Option<String> {
   }
 }
 
+/// Consumes an ephemeral in-memory pre-authentication JSON payload placed on
+/// `window.__micaPreAuth` by `index.html`'s fast boot shell (either from an
+/// early cookie refresh or from the instant HTML login form), deleting the
+/// property immediately so secrets never linger on `window` or `localStorage`.
+pub fn take_web_preauth_json() -> Option<String> {
+  #[cfg(target_arch = "wasm32")]
+  {
+    let win = web_sys::window()?;
+    let key = wasm_bindgen::JsValue::from_str("__micaPreAuth");
+    let val = js_sys::Reflect::get(&win, &key).ok()?;
+    let _ = js_sys::Reflect::delete_property(&win, &key);
+    let raw = val.as_string()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+  }
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    None
+  }
+}
+
 /// Read a key from `window.localStorage` on `wasm32` (always `None` on desktop).
 pub fn local_storage_get(key: &str) -> Option<String> {
   #[cfg(target_arch = "wasm32")]
