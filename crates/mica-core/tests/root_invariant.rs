@@ -50,3 +50,18 @@ fn the_kept_root_survives_encode_decode() {
   let restored = MicaDoc::from_update(&doc.encode_state()).expect("decode");
   assert_eq!(restored.root_block_id(), "root_1");
 }
+
+#[test]
+fn ensure_root_block_never_deletes_existing_blocks_or_overwrites_root() {
+  let mut doc = MicaDoc::from_blocks(
+    "root_1",
+    &[block("root_1", vec!["a", "b"]), block("a", vec![]), block("b", vec![])],
+  );
+  // Calling ensure_root_block with a different id must keep existing meta.root AND all blocks.
+  doc.ensure_root_block("root_other");
+  assert_eq!(doc.root_block_id(), "root_1");
+  assert!(doc.has_block("root_1"));
+  assert!(doc.has_block("a"));
+  assert!(doc.has_block("b"));
+  assert!(doc.has_block("root_other"));
+}

@@ -467,3 +467,36 @@ proptest! {
     let _md = s.export_markdown(&BTreeMap::new());
   }
 }
+
+#[test]
+fn ensure_root_in_doc_never_wipes_existing_blocks_when_root_missing() {
+  // Build a doc whose `meta.root` points to a non-existent root id while real
+  // content blocks already exist in `blocks_map`.
+  let doc = mica_core::MicaDoc::from_blocks(
+    "missing_root",
+    &[
+      mica_core::Block::new("b1", "paragraph").with_text("Keep me safe"),
+      mica_core::Block::new("b2", "paragraph").with_text("Do not wipe"),
+    ],
+  );
+  assert!(!doc.has_block("missing_root"));
+  assert!(doc.has_block("b1"));
+  assert!(doc.has_block("b2"));
+
+  let mut session = EditorSession::from_doc(doc);
+  session.dispatch(EditorCommand::InsertText {
+    text: "New edit".into(),
+  });
+
+  // `ensure_root_in_doc` must create the missing root block non-destructively
+  // without removing `b1` / `b2` from `blocks_map`.
+  assert!(session.doc().has_block("missing_root"));
+  assert!(
+    session.doc().has_block("b1"),
+    "ensure_root_in_doc must never delete pre-existing block b1"
+  );
+  assert!(
+    session.doc().has_block("b2"),
+    "ensure_root_in_doc must never delete pre-existing block b2"
+  );
+}

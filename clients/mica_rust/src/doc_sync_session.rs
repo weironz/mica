@@ -41,6 +41,17 @@ const LOCAL_DIFF_COALESCE_MS: u64 = 120;
 const LOCAL_DIFF_IMMEDIATE_BATCH: usize = 16;
 const VIEWS_REFRESH_DEBOUNCE_MS: u64 = 300;
 
+fn session_client_id(vault: &VaultStore) -> Option<u64> {
+  if !web_runtime::is_web() {
+    return Some(vault.client_id());
+  }
+  // Share one stable 53-bit client_id between `SyncEngine` and `MicaDocumentBridge`
+  // on Web so both operate on the exact same CRDT actor.
+  let bytes = *Uuid::new_v4().as_bytes();
+  let raw = u64::from_le_bytes(bytes[..8].try_into().unwrap_or([1; 8]));
+  Some((raw & ((1u64 << 53) - 1)).max(1))
+}
+
 fn now_ms() -> u64 {
   #[cfg(not(target_arch = "wasm32"))]
   {
@@ -178,7 +189,7 @@ impl DocSyncController {
     }
     self.close();
 
-    let client_id = (!web_runtime::is_web()).then_some(self.vault.client_id());
+    let client_id = session_client_id(&self.vault);
     let sgen = {
       let mut inner = self.inner.borrow_mut();
       inner.session_gen = inner.session_gen.wrapping_add(1);
@@ -279,22 +290,36 @@ impl DocSyncController {
   /// Feed an incremental local yrs CRDT diff produced by [`MicaDocumentBridge`]
   /// into the active [`SyncEngine`], coalescing rapid keystrokes cleanly.
   pub(crate) fn push_local_diff(&self, diff: Vec<u8>) {
-    if is_empty_yrs_update(&diff) {
+    if is_empty_yrs_update(&diff) || !self.bridge.is_crdt_synced() {
       return;
     }
-    let (sgen, should_flush_now, coalesce_gen) = {
+    let (sgen, should_flush_now, coalesce_gen, causal_gap) = {
       let mut inner = self.inner.borrow_mut();
       if !inner.ready || inner.target.is_none() {
         return;
       }
+      let mut gap = false;
       if let Some(doc) = inner.engine.as_mut().and_then(SyncEngine::doc_mut) {
-        let _ = doc.apply_update(&diff);
+        let had_pending = doc.has_pending_updates();
+        if doc.apply_update(&diff).is_err() || (!had_pending && doc.has_pending_updates()) {
+          gap = true;
+        }
       }
-      inner.pending_diffs.push(diff);
-      let immediate = inner.pending_diffs.len() >= LOCAL_DIFF_IMMEDIATE_BATCH;
-      inner.coalesce_gen = inner.coalesce_gen.wrapping_add(1);
-      (inner.session_gen, immediate, inner.coalesce_gen)
+      if gap {
+        (inner.session_gen, false, inner.coalesce_gen, true)
+      } else {
+        inner.pending_diffs.push(diff);
+        let immediate = inner.pending_diffs.len() >= LOCAL_DIFF_IMMEDIATE_BATCH;
+        inner.coalesce_gen = inner.coalesce_gen.wrapping_add(1);
+        (inner.session_gen, immediate, inner.coalesce_gen, false)
+      }
     };
+    if causal_gap {
+      self
+        .cloud_status
+        .set("检测到本地 CRDT 因果断层，已阻止发送异常更新".to_string());
+      return;
+    }
 
     if should_flush_now {
       self.flush_coalesced_diffs(sgen);
@@ -539,12 +564,23 @@ impl DocSyncController {
             inner.ready = state.is_some();
             state.map(|s| (s, cid, doc_id))
           };
+          let pre_sync_md = if self.bridge.take_pre_sync_dirty() {
+            let md = self.bridge.export_markdown();
+            (!md.trim().is_empty()).then_some(md)
+          } else {
+            None
+          };
           if let Some((state, cid, doc_id)) = loaded
             && self.bridge.load_crdt_doc(&state, cid).is_ok()
             && let Some(did) = doc_id
           {
             self.doc_loading.set(false);
             self.doc_load_error.set(None);
+            if let Some(pending_md) = pre_sync_md
+              && self.bridge.is_effectively_empty()
+            {
+              self.bridge.append_markdown_preserving_crdt(&pending_md);
+            }
             self.docs_store.borrow_mut().insert(did, self.bridge.export_markdown());
             self.update_badge(
               self.sync_phase.get_untracked(),
@@ -1090,6 +1126,78 @@ mod tests {
       assert_eq!(md_a, md_b);
       assert!(md_a.contains("Hello Alice"));
       assert!(md_a.contains("World Bob"));
+    });
+  }
+
+  /// Regression for causal-gap data loss: a synthetic `from_markdown` / `load_markdown`
+  /// session MUST NOT emit `on_crdt_diff` (its private `0..N` setup clocks are unknown to
+  /// the server, so shipping clock `N+1..` parks all edits forever in `pending_updates`).
+  /// Replaying pre-sync edits after `load_crdt_doc` must produce causally contiguous diffs
+  /// that integrate on the server with `has_pending_updates() == false`.
+  #[test]
+  fn synthetic_markdown_session_suppresses_crdt_diff_until_load_crdt_doc_binds_lineage() {
+    with_runtime(|| {
+      let bridge = MicaDocumentBridge::from_markdown("");
+      let diffs: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+      {
+        let d = diffs.clone();
+        bridge.set_on_crdt_diff(Rc::new(move |bytes| d.borrow_mut().push(bytes)));
+      }
+
+      // 1. Editing before `load_crdt_doc` (synthetic Markdown session) must NOT emit CRDT diffs,
+      //    and must flag `pre_sync_dirty` so edits are not lost when `Ready` arrives.
+      assert!(!bridge.is_crdt_synced());
+      bridge.dispatch(EditorCommand::InsertText {
+        text: "Typed before sync ready".into(),
+      });
+      assert!(
+        diffs.borrow().is_empty(),
+        "synthetic from_markdown session must never emit orphan CRDT diffs"
+      );
+      assert!(bridge.take_pre_sync_dirty());
+
+      // 2. Hydrating an authoritative empty server doc binds CRDT lineage (`is_crdt_synced == true`).
+      let mut server_doc = MicaDoc::from_blocks_with_client_id(
+        "block_root",
+        &[Block::new("block_root", "page")],
+        Some(1),
+      );
+      bridge
+        .load_crdt_doc(&server_doc.encode_state(), Some(42))
+        .unwrap();
+      assert!(bridge.is_crdt_synced());
+      assert!(bridge.is_effectively_empty());
+
+      // 3. Replaying content via `append_markdown_preserving_crdt` emits causally contiguous diffs
+      //    that integrate cleanly into `server_doc` with ZERO pending updates!
+      bridge.append_markdown_preserving_crdt("## PCIe-Switch\n\nRecovered notes");
+      assert!(!diffs.borrow().is_empty());
+      for update in diffs.borrow().iter() {
+        server_doc.apply_update(update).unwrap();
+      }
+      assert!(
+        !server_doc.has_pending_updates(),
+        "every CRDT diff emitted after load_crdt_doc must integrate without causal gaps"
+      );
+      let server_texts: String = server_doc
+        .to_blocks()
+        .into_iter()
+        .map(|b| b.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+      assert!(server_texts.contains("PCIe-Switch"));
+      assert!(server_texts.contains("Recovered notes"));
+
+      // 4. Calling `load_markdown` later drops CRDT sync flag again so it can never emit orphan diffs.
+      bridge.load_markdown("detached local preview");
+      assert!(!bridge.is_crdt_synced());
+      let before_len = diffs.borrow().len();
+      bridge.dispatch(EditorCommand::InsertText { text: "!".into() });
+      assert_eq!(
+        diffs.borrow().len(),
+        before_len,
+        "load_markdown must revoke CRDT diff emission"
+      );
     });
   }
 }

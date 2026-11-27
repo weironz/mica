@@ -822,8 +822,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let cc_c = cc_p.clone();
       let vault_c = vault_p.clone();
       let ds_c = ds_p.clone();
+      let br_c = bridge.clone();
       Rc::new(move |orig: String, ws_id: Uuid, doc_id: Uuid, md: String| {
-        if ds_c.is_active_for(&orig, ws_id, doc_id) {
+        if ds_c.is_active_for(&orig, ws_id, doc_id) && br_c.is_crdt_synced() {
           return;
         }
         if cloud_sync::is_cloud_origin(&orig)
@@ -1109,9 +1110,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .or_else(|| v.load_markdown(&orig, doc_id));
       let is_cloud_orig = cloud_sync::is_cloud_origin(&orig) && !ws_id.is_nil();
       let is_cloud_signed = is_cloud_orig && is_cloud_signed_in.get_untracked();
-      let needs_remote_load = is_cloud_signed && cached_md.is_none();
+      let already_synced_here = is_cloud_signed && ds.is_active_for(&orig, ws_id, doc_id);
+      let needs_remote_load = is_cloud_signed && !already_synced_here && cached_md.is_none();
       let md = cached_md.clone().unwrap_or_default();
-      if !needs_remote_load && cached_md.is_some() {
+      if !already_synced_here && !needs_remote_load && cached_md.is_some() {
         docs.borrow_mut().insert(doc_id, md.clone());
       }
       doc_loading.set(needs_remote_load);
@@ -1123,7 +1125,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       } else {
         doc_load_error.set(None);
       }
-      br.load_markdown(&md);
+      // Never overwrite a live CRDT-synced cloud document with a synthetic `load_markdown`
+      // session when re-opening/re-clicking the already active page: doing so destroys the
+      // shared CRDT lineage while `ds.open_cloud_doc` returns early, causing causal-gap loss.
+      if !already_synced_here {
+        br.load_markdown(&md);
+      }
       active_doc.set(Some(doc_id));
       let nav_vid = tree_ref
         .borrow()
@@ -1181,7 +1188,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         sidebar_open.set(false);
       }
 
-      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
+      if already_synced_here {
+        // Live CRDT session is already attached to `(orig, ws_id, doc_id)`; no reload needed.
+      } else if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !ws_id.is_nil() {
         let srv_req = server_url.get_untracked();
         ds.open_cloud_doc(srv_req.clone(), orig.clone(), ws_id, doc_id, account_name.get_untracked());
         let fetch_epoch = doc_fetch_gen.get_untracked().wrapping_add(1);
@@ -3495,8 +3504,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         match target {
           AiTarget::NewPage | AiTarget::NewWorkspace => create_p("AI 生成页面".to_string(), md),
           AiTarget::CurrentPage => {
-            let cur = br.export_markdown();
-            br.load_markdown(&format!("{cur}\n\n{md}"));
+            br.append_markdown_preserving_crdt(&md);
           }
         }
         global_ai_open.set(false);

@@ -84,6 +84,15 @@ pub struct MicaDocumentBridge {
   /// uploaded or local-CAS images never degrade into bare filenames.
   image_asset_resolver: RefCell<Option<ImageAssetResolver>>,
   pending_persist: std::cell::Cell<bool>,
+  /// `true` ONLY when `session` was hydrated via [`Self::load_crdt_doc`] (shared CRDT
+  /// lineage with `DocSyncController` / `SyncEngine`). Synthetic Markdown sessions
+  /// created by [`Self::load_markdown`] MUST NEVER emit `on_crdt_diff`, otherwise their
+  /// private `0..N` setup clocks are missing on the server and every subsequent edit
+  /// lands as an unintegratable causal gap in `pending_updates`.
+  crdt_synced: std::cell::Cell<bool>,
+  /// `true` when the user edited a synthetic pre-sync session before `SyncEffect::Ready`
+  /// arrived so `DocSyncController` can replay those edits onto the authoritative CRDT doc.
+  pre_sync_dirty: std::cell::Cell<bool>,
 
   // ── Reactive UI Signals ──────────────────────────────────────────────────
   /// Bumps ONLY when block count, IDs, or order change (`virtual_list` count/keys).
@@ -123,7 +132,9 @@ impl MicaDocumentBridge {
   /// Constructs a live [`MicaDocumentBridge`] from an encoded yrs CRDT state update.
   pub fn from_update(bytes: &[u8]) -> Result<Rc<Self>, String> {
     let doc = MicaDoc::from_update(bytes).map_err(|e| e.to_string())?;
-    Ok(Self::from_session(EditorSession::from_doc(doc)))
+    let br = Self::from_session(EditorSession::from_doc(doc));
+    br.crdt_synced.set(true);
+    Ok(br)
   }
 
   fn from_session(session: EditorSession) -> Rc<Self> {
@@ -158,6 +169,8 @@ impl MicaDocumentBridge {
       on_crdt_diff: RefCell::new(None),
       image_asset_resolver: RefCell::new(None),
       pending_persist: std::cell::Cell::new(false),
+      crdt_synced: std::cell::Cell::new(false),
+      pre_sync_dirty: std::cell::Cell::new(false),
       structure_rev: signal(0u64),
       selection_sig: signal(sel),
       focus_sink_rev: signal(0u64),
@@ -372,6 +385,8 @@ impl MicaDocumentBridge {
   /// Replaces the entire document with `markdown` (e.g. when switching pages).
   /// Clears stale per-block signals and bumps `structure_rev` once.
   pub fn load_markdown(&self, markdown: &str) {
+    self.crdt_synced.set(false);
+    self.pre_sync_dirty.set(false);
     self.replace_session(session_from_markdown(markdown), true);
   }
 
@@ -382,8 +397,51 @@ impl MicaDocumentBridge {
   pub fn load_crdt_doc(&self, state: &[u8], client_id: Option<u64>) -> Result<(), String> {
     let doc = MicaDoc::from_update_with_client_id(state, client_id).map_err(|e| e.to_string())?;
     let next_session = EditorSession::from_doc(doc);
+    self.crdt_synced.set(true);
+    self.pre_sync_dirty.set(false);
     self.replace_session(next_session, false);
     Ok(())
+  }
+
+  /// `true` when the active session shares CRDT lineage with the cloud `SyncEngine`.
+  pub fn is_crdt_synced(&self) -> bool {
+    self.crdt_synced.get()
+  }
+
+  /// Returns and clears whether the user edited the buffer before CRDT sync attached.
+  pub fn take_pre_sync_dirty(&self) -> bool {
+    self.pre_sync_dirty.replace(false)
+  }
+
+  /// `true` when the document has no visible content (single empty paragraph or zero blocks).
+  pub fn is_effectively_empty(&self) -> bool {
+    let s = self.session.borrow();
+    let blocks = s.blocks();
+    blocks.is_empty()
+      || (blocks.len() == 1
+        && blocks[0].kind == "paragraph"
+        && blocks[0].text.trim().is_empty())
+  }
+
+  /// Append Markdown at the end of the document using live CRDT editor operations
+  /// (never replacing the underlying `MicaDoc`), safe for real-time cloud sync.
+  pub fn append_markdown_preserving_crdt(&self, markdown: &str) {
+    let trimmed = markdown.trim();
+    if trimmed.is_empty() {
+      return;
+    }
+    let last_idx = self.block_len().saturating_sub(1);
+    let last_len = self
+      .block_at(last_idx)
+      .map(|b| mica_editor::utf16_len(&b.text))
+      .unwrap_or(0);
+    self.dispatch(EditorCommand::SetSelection {
+      selection: Some(DocSelection::caret(last_idx, last_len)),
+    });
+    if !self.is_effectively_empty() && last_len > 0 {
+      self.dispatch(EditorCommand::SplitBlock);
+    }
+    let _ = self.paste_clipboard(trimmed, "", false);
   }
 
   fn replace_session(&self, next_session: EditorSession, scroll_to_top: bool) {
@@ -675,11 +733,15 @@ impl MicaDocumentBridge {
       set_if_changed(self.last_edited, String::from(DEFAULT_STATUS_TEXT));
       self.session_rev.set(self.session_rev.get_untracked().wrapping_add(1));
       if emit_persist {
-        if let Some(diff) = patch.crdt_update.clone().filter(|d| !d.is_empty()) {
-          let crdt_cb = self.on_crdt_diff.borrow().clone();
-          if let Some(crdt_cb) = crdt_cb {
-            crdt_cb(diff);
+        if self.crdt_synced.get() {
+          if let Some(diff) = patch.crdt_update.clone().filter(|d| !d.is_empty()) {
+            let crdt_cb = self.on_crdt_diff.borrow().clone();
+            if let Some(crdt_cb) = crdt_cb {
+              crdt_cb(diff);
+            }
           }
+        } else {
+          self.pre_sync_dirty.set(true);
         }
         let dirty_cb = self.on_dirty.borrow().clone();
         if let Some(dirty_cb) = dirty_cb {
@@ -1629,11 +1691,15 @@ impl MicaDocumentBridge {
       self.front_matter.set(trimmed.to_owned());
       self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
       self.session_rev.set(self.session_rev.get_untracked().wrapping_add(1));
-      if let Some(diff) = crdt_bytes.clone().filter(|d| !d.is_empty()) {
-        let crdt_cb = self.on_crdt_diff.borrow().clone();
-        if let Some(crdt_cb) = crdt_cb {
-          crdt_cb(diff);
+      if self.crdt_synced.get() {
+        if let Some(diff) = crdt_bytes.clone().filter(|d| !d.is_empty()) {
+          let crdt_cb = self.on_crdt_diff.borrow().clone();
+          if let Some(crdt_cb) = crdt_cb {
+            crdt_cb(diff);
+          }
         }
+      } else {
+        self.pre_sync_dirty.set(true);
       }
       let cb = self.on_persist.borrow().clone();
       if let Some(cb) = cb {

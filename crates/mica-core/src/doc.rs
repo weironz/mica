@@ -849,6 +849,25 @@ impl MicaDoc {
     }
   }
 
+  /// Ensure `root_id` exists in `blocks` as a `"page"` block without removing
+  /// any existing blocks, and initialize `meta.root` ONLY when it is currently
+  /// unset/empty. Safe counterpart to `set_blocks` for lazy root creation.
+  pub fn ensure_root_block(&mut self, root_id: &str) {
+    if root_id.is_empty() {
+      return;
+    }
+    let blocks_map = self.doc.get_or_insert_map(BLOCKS);
+    let meta = self.doc.get_or_insert_map(META);
+    let mut txn = self.doc.transact_mut();
+    if read_root(&meta, &txn).is_empty() {
+      meta.insert(&mut txn, ROOT_KEY, root_id.to_string());
+    }
+    if !blocks_map.contains_key(&txn, root_id) {
+      let root = Block::new(root_id, "page");
+      write_block(&mut txn, &blocks_map, &root);
+    }
+  }
+
   /// Set ONE key on ONE block's `props`, touching nothing else.
   ///
   /// The narrow counterpart to [`Self::set_blocks`], for an edit that is a

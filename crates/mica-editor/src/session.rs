@@ -100,7 +100,19 @@ impl EditorSession {
   pub fn from_doc(mut doc: MicaDoc) -> Self {
     let root_id = {
       let r = doc.root_block_id();
-      if r.is_empty() { "root".to_string() } else { r }
+      if !r.is_empty() {
+        r
+      } else {
+        // Recover an existing page/container root before falling back to `"root"` so
+        // a document whose `meta.root` was lost never renders blank or spawns a new root.
+        let existing = doc.to_blocks();
+        existing
+          .iter()
+          .find(|b| b.kind == "page")
+          .or_else(|| existing.iter().find(|b| !b.children.is_empty()))
+          .map(|b| b.id.clone())
+          .unwrap_or_else(|| "root".to_string())
+      }
     };
     let blocks = read_body_blocks(&doc, &root_id);
     let selection = default_initial_selection(&blocks);
@@ -580,14 +592,9 @@ impl EditorSession {
     if self.doc.has_block(&self.root_block_id) {
       return;
     }
-    let root = mica_core::Block {
-      id: self.root_block_id.clone(),
-      kind: "page".to_string(),
-      text: String::new(),
-      data: Value::Null,
-      children: Vec::new(),
-    };
-    self.doc.set_blocks(&self.root_block_id, &[root]);
+    // Never call `set_blocks` here: `set_blocks` deletes every block absent from
+    // its slice, which would wipe an entire document if `root_block_id` were missing.
+    self.doc.ensure_root_block(&self.root_block_id);
   }
 
   pub(crate) fn collapse_to(&mut self, pos: DocPosition) {
