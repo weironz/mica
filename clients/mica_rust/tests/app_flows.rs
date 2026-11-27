@@ -1854,3 +1854,121 @@ fn regression_editor_and_table_links_open_on_click_without_breaking_drag_or_alt_
     "clicking a link inside a table cell must open its URL"
   );
 }
+
+#[test]
+fn regression_sidebar_multi_select_preserves_blue_bg_on_hover() {
+  use nsh_core::{
+    EventKind, EventPayload, PressEvent,
+    geometry::point,
+    keymap::Modifiers,
+  };
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("id:sidebar-row-0").unwrap();
+  // Create 3 sibling pages under the workspace root so rows 1, 2, 3 share the same parent.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("id:sidebar-row-1").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("id:sidebar-row-2").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("id:sidebar-row-3").unwrap();
+
+  let shift_click_row = |app: &mut Headless, test_id: &str| {
+    let node = app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .find(|n| n.test_id.as_deref() == Some(test_id))
+      .unwrap_or_else(|| panic!("{test_id} must be laid out"));
+    let center_local = point(px(node.bounds.size.width.0 * 0.5), px(node.bounds.size.height.0 * 0.5));
+    let center_page = point(
+      node.bounds.origin.x + center_local.x,
+      node.bounds.origin.y + center_local.y,
+    );
+    app.engine().control().dispatch_event(
+      node.id,
+      EventKind::Press,
+      EventPayload::Press(PressEvent {
+        position: center_local,
+        page_position: center_page,
+        modifiers: Modifiers { shift: true, ..Modifiers::default() },
+        clicks: 1,
+      }),
+    );
+    app.settle();
+  };
+
+  // Shift+Click first sibling page, then Shift+Click last sibling page.
+  shift_click_row(&mut app, "sidebar-row-1");
+  shift_click_row(&mut app, "sidebar-row-3");
+
+  let p = mica_rust::mica_theme::light_palette();
+  let rgba_to_u32 = |c: nsh_core::Rgba| -> u32 {
+    let r = (c.r.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let g = (c.g.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let b = (c.b.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let a = (c.a.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (r << 24) | (g << 16) | (b << 8) | a
+  };
+  let selection_u32 = rgba_to_u32(p.selection_bg);
+  let surface_hover_u32 = rgba_to_u32(p.surface_hover);
+
+  // All 3 rows in the range start with the blue selection background.
+  for idx in 1..=3 {
+    let bg = app
+      .screen()
+      .view_style(&format!("id:sidebar-row-body-{idx}"))
+      .unwrap()
+      .unwrap()
+      .background_color
+      .unwrap();
+    assert_eq!(
+      bg, selection_u32,
+      "multi-selected sidebar row {idx} should render selection_bg before hover (got #{bg:08x})"
+    );
+  }
+
+  // Hovering a selected row MUST keep the blue selection tint instead of reverting to grey surface_hover.
+  app.hover("id:sidebar-row-3").unwrap();
+  app.settle();
+  let hovered_selected_bg = app
+    .screen()
+    .view_style("id:sidebar-row-body-3")
+    .unwrap()
+    .unwrap()
+    .background_color
+    .unwrap();
+  assert_ne!(
+    hovered_selected_bg, surface_hover_u32,
+    "hovering a multi-selected sidebar row must not overwrite its blue selection background with grey surface_hover"
+  );
+  assert_eq!(
+    hovered_selected_bg & 0xFFFF_FF00,
+    selection_u32 & 0xFFFF_FF00,
+    "hovered multi-selected sidebar row must preserve selection_bg blue RGB (got #{hovered_selected_bg:08x}, expected RGB #{:06x})",
+    selection_u32 >> 8
+  );
+  assert!(
+    (hovered_selected_bg & 0xFF) >= (selection_u32 & 0xFF),
+    "hovered multi-selected sidebar row alpha should be at least selection_bg alpha"
+  );
+
+  // Hovering an unselected row still uses grey surface_hover.
+  app.hover("id:sidebar-row-0").unwrap();
+  app.settle();
+  let hovered_unselected_bg = app
+    .screen()
+    .view_style("id:sidebar-row-body-0")
+    .unwrap()
+    .unwrap()
+    .background_color
+    .unwrap();
+  assert_eq!(
+    hovered_unselected_bg, surface_hover_u32,
+    "hovering an unselected sidebar row must use surface_hover"
+  );
+}

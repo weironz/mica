@@ -46,7 +46,7 @@
 | --- | --- | --- | --- | --- |
 | `CAP-11-01` / `02` 无边框顶栏、桌面图标、应用菜单与多标签 | P0 | 桌面/Web | ✅ | `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips` + `windows_app_icon` |
 | `CAP-11-03` / `04` 侧边栏几何、右键菜单与定位创建 | P0 | 全端 | ✅ | `storage::tests::views_enforce_folder_parent_and_purge` + `app_flows` |
-| `CAP-11-05` / `06` 30/40/30 拖拽排序与树多选 | P0 | 桌面/Web | ✅ | `tree_dnd::tests`（8 项全绿） + `storage::tests::reorder_views_renumbers_reparents_and_enforces_tree_rules` |
+| `CAP-11-05` / `06` 30/40/30 拖拽排序与树多选 | P0 | 桌面/Web | ✅ | `tree_dnd::tests`（8 项全绿） + `sidebar::tests::tree_row_bg_preserves_blue_selection_tint_on_hover` + `app_flows::regression_sidebar_multi_select_preserves_blue_bg_on_hover` + `storage::tests::reorder_views_renumbers_reparents_and_enforces_tree_rules` |
 | `CAP-11-07` / `08` 收藏区与 Emoji 选择器 | P1 | 全端 | ✅ | `emoji_picker::tests` |
 | `CAP-11-09` 子树聚合回收站 | P1 | 全端 | ✅ | `settings_view::tests::trash_root_entries_collapse_subtrees_and_resolve_live_path` + `storage::tests::trash_restore_promote_purge_and_build_trash_entries` |
 
@@ -58,3 +58,4 @@
 - **2026-11-25**：补齐 `clients/mica_rust` Windows PE 整数 ID `1` 图标资源嵌入（`build.rs` + `assets/app_icon.ico` + `mica.iss` `SetupIconFile`）及真机 Win32 `LoadIconW`/`LoadImageW` 回归测试。
 - **2026-11-26**：补齐侧边栏目录树拖拽排序时的边缘自动滚动（`virtual_list` 挂载 `ElementRef` + `on_scroll`/`on_layout` 实时几何测量 + 16ms 渐进滚屏循环 + 滚屏期间落点指示线同步刷新与 RAII 取消守卫），解决长列表拖到视口外无法自动跟滚的问题。
 - **2026-11-27**：修复云端删除复活与标题中间输入丢字——① `on_batch_trash` 改为单次原子 `POST /views/batch-trash`，`on_purge_all_trash` 接入 `DELETE /trash`；② `CloudSessionHandles` 引入 `views_refresh_gen` 代际丢弃与 RAII `PendingViewOps` 在途变更屏障，确保连续/批量删除期间收到的中间态 `views_changed` 延后到全部变更落库后再单次刷新，杜绝已删项复活；③ 页面标题输入改为 400ms 防抖 + 失焦/回车立即提交，并在聚焦或待提交期间屏蔽远端 `views_changed` 覆盖 `active_title`。
+- **2026-11-27**：修复侧边栏多选行鼠标悬停时浅蓝色选中背景消失——移除主行上无条件覆写背景色的 `.hover(surface_hover)`，改为由 `tree_row_bg` 统一基于 `is_multi_selected` / `is_active` / `is_menu_open` / `row_hovered` 和当前深浅色调色板计算背景色，多选行悬停时保留并略微加深浅蓝色选中态。

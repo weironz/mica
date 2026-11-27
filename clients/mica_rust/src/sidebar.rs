@@ -802,6 +802,29 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
     )
 }
 
+fn tree_row_bg(
+  p: &crate::mica_theme::MicaPalette,
+  is_multi_selected: bool,
+  is_active: bool,
+  is_menu_open: bool,
+  is_hovered: bool,
+) -> Rgba {
+  if is_multi_selected {
+    if is_hovered {
+      Rgba {
+        a: (p.selection_bg.a + 0.06).min(1.0),
+        ..p.selection_bg
+      }
+    } else {
+      p.selection_bg
+    }
+  } else if is_active || is_menu_open || is_hovered {
+    p.surface_hover
+  } else {
+    p.surface_raised
+  }
+}
+
 fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
   let tree_read = ctx.tree.clone();
   let tree_rev = ctx.tree_rev;
@@ -936,19 +959,19 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     // Main row body
     .child(
       view()
+        .test_id(&format!("sidebar-row-body-{row_idx}"))
         .w_full().h(px(TREE_ROW_HEIGHT)).my(px(1.0)).pl(move || px(indent_px.get())).pr(px(4.0))
         .flex_row().items_center().rounded(px(5.0))
         .bg(move || {
           let p = palette(dark_mode.get());
-          if is_multi_selected.get() {
-            p.selection_bg
-          } else if is_active.get() || is_menu_open.get() {
-            p.surface_hover
-          } else {
-            p.surface_raised
-          }
+          tree_row_bg(
+            &p,
+            is_multi_selected.get(),
+            is_active.get(),
+            is_menu_open.get(),
+            row_hovered.get(),
+          )
         })
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
         // Fixed 18px chevron slot (clicking chevron preserves multi-select)
         .child(
           view().w(px(18.0)).h(px(TREE_ROW_HEIGHT)).flex_shrink_0().items_center().justify_center()
@@ -2237,5 +2260,24 @@ mod tests {
     assert_eq!(format_footer_account_label("Will Zhang"), "Will Zhang");
     assert_eq!(format_footer_account_label("本地工作区"), "本地工作区");
     assert_eq!(format_footer_account_label(""), "本地工作区");
+  }
+
+  #[test]
+  fn tree_row_bg_preserves_blue_selection_tint_on_hover() {
+    for dark in [false, true] {
+      let p = palette(dark);
+      let sel_idle = tree_row_bg(&p, true, false, false, false);
+      assert_eq!(sel_idle, p.selection_bg);
+
+      let sel_hover = tree_row_bg(&p, true, false, false, true);
+      assert_eq!((sel_hover.r, sel_hover.g, sel_hover.b), (p.selection_bg.r, p.selection_bg.g, p.selection_bg.b));
+      assert!(sel_hover.a > p.selection_bg.a, "hovered multi-selected row should keep stronger blue tint");
+      assert_ne!(sel_hover, p.surface_hover);
+
+      assert_eq!(tree_row_bg(&p, false, false, false, true), p.surface_hover);
+      assert_eq!(tree_row_bg(&p, false, true, false, false), p.surface_hover);
+      assert_eq!(tree_row_bg(&p, false, false, true, false), p.surface_hover);
+      assert_eq!(tree_row_bg(&p, false, false, false, false), p.surface_raised);
+    }
   }
 }
