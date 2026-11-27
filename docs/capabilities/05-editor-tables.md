@@ -16,7 +16,7 @@
 - **`CAP-05-01` 内容自适应列宽**：
   - 未手动拖拽列宽时，根据整张表每列内容的视觉宽度（区分 CJK 宽字符与 ASCII 窄字符，表头略加权）自动分配各列占比：内容少的短列（如「项」「编号」「优先级」）保持紧凑，内容多的长列自动占据更多宽度（例如 2 列键值表自动约 18%/82%），严禁无脑均分导致大面积空白。
   - 若用户在 `model.widths` 中保存了自定义列宽比例，优先尊重用户调整值。
-- **`CAP-05-02` 宽表横向滚动**：列数较多或总自然宽度（或用户向右拖宽外边界后）超出正文列宽时，启用独立横向滚动并在表格下方展示比例自适应横向滚动条，防止单元格被挤成单字竖条；未超出时自动隐藏滚动条。
+- **`CAP-05-02` 默认贴合页宽与拖拽超宽横向滚动**：默认创建的任意列数表格（`table_width == 1.0`）一律自适应当前页面内容宽度、不默认超出页面宽度且隐藏横向滚动条；当用户向右拖拽最右侧边缘或把中间列拖超相邻列最小宽而超出页面宽度（`table_width > 1.0`，最高 `4.0` 倍页宽）时，实时开启独立横向滚动并在表格下方展示比例自适应横向滚动条，向左拖回页宽内后自动隐藏。
 - **`CAP-05-03` 单元格所见即所得无跳变编辑**：展示态与点击聚焦编辑态共享同一套自动换行富文本渲染（含加粗、斜体、行内代码、删除线、链接、表头加粗与灰底色），仅叠加闪烁光标、浅蓝选区高亮与透明光标锚定 IME 代理；点击多行或表头单元格绝不塌陷为单行、绝不截断、绝不出现白底框或丢粗体，编辑文本时自动偏移保留已有行内 marks。
 
 ### 单元格编辑与多格选择
@@ -31,7 +31,7 @@
 - **`CAP-05-07` 表格结构操作与全高列宽拖拽**：
   - 表格左上角提供整表锚点菜单（整表左/中/右对齐、自适应列宽、复制表格、删除表格）；每列顶部与每行左侧紧贴外沿提供行/列锚点胶囊，点击整行/整列高亮并弹出顶层 `overlay()` 菜单（上/下/左/右移动、前/后插入、列对齐、清空、删除）。
   - 表格右侧与底部紧贴网格外沿提供 `+` 扩展列/扩展行横竖条，不遮挡表头文字。
-  - 所有列分隔线及表格最右外边界在**整张表全高（覆盖全部数据行而非仅首行）**均可悬停高亮并左右拖拽调整列宽/表宽（持久化 `SetColumnWidths` / `SetTableWidth`）。
+  - 所有列分隔线及表格最右外边界在**整张表全高（覆盖全部数据行而非仅首行）**均可悬停高亮并左右拖拽调整列宽/表宽：**拖动过程中单元格宽度、文字折行、表头列胶囊与横向滚动条 60fps 实时跟随变化**，松手时通过单次原子 `TableOp::SetLayout` 持久化（支持单步撤销）。
 
 ---
 
@@ -52,12 +52,12 @@
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
 | `CAP-05-01` 内容自适应列宽 | P0 | 全端 | ✅ | `table_view::tests::adaptive_table_column_widths_give_long_content_more_space` |
-| `CAP-05-02` 宽表横向滚动与横向滚动条 | P0 | 全端 | ✅ | `table_view.rs::render_table_block_view` + `app_flows::regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll` |
+| `CAP-05-02` 默认贴合页宽与拖拽超宽横向滚动 | P0 | 全端 | ✅ | `table_view::tests::wide_five_column_table_fits_page_width_by_default_and_overflows_only_after_drag` + `app_flows::regression_table_default_fits_page_live_column_drag_and_right_edge_resize` |
 | `CAP-05-03` 单元格所见即所得无跳变编辑与 marks 保留 | P0 | 全端 | ✅ | `table_view::tests::splice_cell_marks_preserves_and_shifts_bold_marks_across_edits` + `app_flows::regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll` |
 | `CAP-05-04` 自由上下左右拖选多单元格 | P0 | 桌面/Web | ✅ | `table_view.rs::render_table_cell` |
 | `CAP-05-05` 多格复制/剪切/清空 | P0 | 桌面/Web | ✅ | `mica-editor::table_model_crud_alignment_navigation_and_area_copy` + `editor_view.rs` |
 | `CAP-05-06` 单元格编辑与 Tab/Enter 导航 | P0 | 全端 | ✅ | `mica-editor::table_ops_through_editor_session_and_undo` + `app_flows::regression_capability_gaps_closed` |
-| `CAP-05-07` 全高列宽拖拽与左上锚点/右下扩展条 | P1 | 全端 | ✅ | `table_view::tests::apply_column_divider_drag_redistributes_adjacent_columns_cleanly` + `app_flows::regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll` |
+| `CAP-05-07` 全高实时列宽/右缘拖拽与左上锚点/右下扩展条 | P1 | 全端 | ✅ | `table_view::tests::compute_live_column_drag_handles_inner_dividers_overflow_and_right_edge` + `mica-editor::table_layout_supports_overflow_width_and_atomic_undo` + `app_flows::regression_table_default_fits_page_live_column_drag_and_right_edge_resize` |
 
 ---
 
@@ -67,3 +67,4 @@
 - **2026-11-23（补齐迭代）**：补齐单元格键盘导航（`Tab`/`Shift+Tab`/`Up`/`Down`/`Escape` 走 `TableModel::navigate`）、悬停条 `− 行`/`− 列`/`对齐` 切换与表头列分隔线拖拽调宽（`CAP-05-06` / `07`）。
 - **2026-11-24（全面对齐）**：独立拆出 `clients/mica_rust/src/table_view.rs`，统一所见即所得无跳变单元格编辑与行内 marks 保留、整表全高列宽/表宽拖拽、自适应横向滚动条，以及对齐旧版 Mica 的左上整表/行/列锚点菜单与右/底 `+` 扩展条。
 - **2026-11-27（单元格中间定位光标与格内拖选修复）**：修复 `table_view.rs` 命中坐标混用 `page_position` 与父级局部 `frame.origin` 及 `on_press` 松手将选区强行拉回尾部的问题，补齐双击选词、三击全选、`TextLayout` 折行兜底与 `on_focus` 选区同步，并新增无头回归测试 `regression_table_cell_mid_click_places_caret_in_middle_and_drag_selects_substring`。
+- **2026-11-27（默认贴合页宽、实时列宽跟随与最右边缘拖拽）**：① 移除 4+/5+ 列表格默认撑超页面宽度的强行扩展，默认一律按 `avail` 贴合页面宽度；② 扩展 `TableModel::table_width` 支持 `0.15..=4.0` 倍率并新增单步原子 `TableOp::SetLayout`，根治旧版像素值与 `clamp(0.15, 1.0)` 错配导致最右边缘拖拽完全无效的缺陷；③ 将 `resize_layer` 移至 `middle_row` 并预留 4px 右缘命中区，结合 `live_col_pxs` 响应式信号实现拖动中 60fps 实时重排内容与横向滚动条显隐，补齐单元及 `drag_and_hold` 端到端回归测试。

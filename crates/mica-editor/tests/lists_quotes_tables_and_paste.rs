@@ -262,6 +262,27 @@ fn table_area_copy_and_session_undo_redo_cover_all_mutations() {
 }
 
 #[test]
+fn table_layout_supports_overflow_width_and_atomic_undo() {
+  let mut s = EditorSession::from_markdown("| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |");
+  s.dispatch(EditorCommand::TableOp {
+    block_index: 0,
+    op: TableOp::SetLayout {
+      widths: vec![0.2, 0.3, 0.5],
+      width: 1.45,
+    },
+  });
+  let widened = TableModel::from_block_data(&s.blocks()[0].data);
+  assert!((widened.table_width - 1.45).abs() < 1e-6);
+  assert!((widened.widths[2] - 0.5).abs() < 1e-6);
+
+  // Single Undo atomically restores both column weights and table width to defaults.
+  s.dispatch(EditorCommand::Undo);
+  let restored = TableModel::from_block_data(&s.blocks()[0].data);
+  assert!((restored.table_width - 1.0).abs() < 1e-6);
+  assert_eq!(restored.widths, vec![1.0, 1.0, 1.0]);
+}
+
+#[test]
 fn table_navigation_wraps_rows_and_exits_at_boundaries() {
   let t = TableModel::from_block_data(&json!({
     "header": true,

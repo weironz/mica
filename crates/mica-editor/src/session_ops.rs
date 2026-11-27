@@ -451,6 +451,10 @@ impl EditorSession {
         table.set_table_width(width);
         mutated = true;
       }
+      TableOp::SetLayout { widths, width } => {
+        table.set_layout(&widths, width);
+        mutated = true;
+      }
       TableOp::Navigate {
         row,
         col,

@@ -56,7 +56,7 @@ use crate::{
 
 const LEFT_GUTTER_PX: f32 = 16.0;
 const TOP_GUTTER_PX: f32 = 12.0;
-const RIGHT_ADD_GAP_PX: f32 = 3.0;
+const RIGHT_ADD_GAP_PX: f32 = 4.0;
 const RIGHT_ADD_BAR_W_PX: f32 = 10.0;
 const RIGHT_ADD_W_PX: f32 = RIGHT_ADD_GAP_PX + RIGHT_ADD_BAR_W_PX;
 const BOTTOM_ADD_GAP_PX: f32 = 2.0;
@@ -65,6 +65,15 @@ const PROSE_STANDARD_MT_PX: f32 = 3.0;
 const PROSE_STANDARD_MB_PX: f32 = 4.0;
 const CELL_FONT_PX: f32 = 13.5;
 const CELL_LINE_H_PX: f32 = 21.0;
+const MAX_TABLE_WIDTH_FACTOR: f32 = 4.0;
+
+#[derive(Clone, Debug, PartialEq)]
+struct LiveResizeDrag {
+  divider_col: usize,
+  start_page_x: f32,
+  start_col_pxs: Vec<f32>,
+  current_col_pxs: Vec<f32>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TableMenuKind {
@@ -86,18 +95,17 @@ fn visual_cell_units(text: &str) -> f32 {
 }
 
 /// Computes content-adaptive column layout for a GFM table:
-/// - Respects non-uniform user-adjusted `model.widths` when present.
-/// - Otherwise measures every column's visual width (CJK-aware) so narrow key
-///   columns (`项`, `编号`, `优先级`) stay compact while long content columns
-///   automatically receive proportional space.
+/// - Default tables (`model.table_width == 1.0`) fit the page column width cleanly without
+///   overflowing (`use_horizontal_scroll == false`); only tables explicitly widened past
+///   page width (`model.table_width > 1.0`) enable horizontal overflow.
+/// - Respects user-adjusted `model.widths` whenever they deviate from the default `[1.0; N]`.
+/// - Otherwise measures every column's visual width (CJK-aware) so narrow key columns
+///   stay compact while long content columns automatically receive proportional space.
 /// - Returns `(use_horizontal_scroll, col_shares, col_pixels)`.
 pub fn compute_adaptive_table_layout(model: &TableModel) -> (bool, Vec<f32>, Vec<f32>) {
   let col_count = model.rows.first().map_or(0, Vec::len).max(1);
-  let has_custom_widths = model.widths.len() == col_count && {
-    let min_w = model.widths.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_w = model.widths.iter().copied().fold(0.0_f64, f64::max);
-    (max_w - min_w) > 0.05
-  };
+  let is_default_uniform = model.widths.iter().all(|&w| (w - 1.0).abs() <= 1e-4);
+  let has_custom_widths = model.widths.len() == col_count && col_count > 1 && !is_default_uniform;
 
   let mut raw_units = vec![4.5_f32; col_count];
   for (r_idx, row) in model.rows.iter().enumerate() {
@@ -115,13 +123,13 @@ pub fn compute_adaptive_table_layout(model: &TableModel) -> (bool, Vec<f32>, Vec
     .map(|&u| (u * 8.2 + 28.0).clamp(72.0, 320.0))
     .collect();
   let total_natural_px: f32 = natural_pixels.iter().sum();
-  let wide_table = col_count > 5 || (col_count > 4 && total_natural_px > 820.0);
+  let wide_table = model.table_width > 1.001;
 
   let mut weights: Vec<f32> = if has_custom_widths {
     model
       .widths
       .iter()
-      .map(|&w| (w as f32).max(0.05))
+      .map(|&w| (w as f32).max(0.01))
       .collect()
   } else {
     raw_units
@@ -138,19 +146,26 @@ pub fn compute_adaptive_table_layout(model: &TableModel) -> (bool, Vec<f32>, Vec
   };
 
   let sum: f32 = weights.iter().sum::<f32>().max(0.001);
-  let min_share = (0.09_f32).min(0.65 / col_count as f32);
-  let max_share = (0.86_f32).max(1.0 / col_count as f32);
-  for w in &mut weights {
-    *w = (*w / sum).clamp(min_share, max_share);
+  if has_custom_widths {
+    let floor = (0.02_f32).min(0.5 / col_count as f32);
+    for w in &mut weights {
+      *w = (*w / sum).max(floor);
+    }
+  } else {
+    let min_share = (0.09_f32).min(0.65 / col_count as f32);
+    let max_share = (0.86_f32).max(1.0 / col_count as f32);
+    for w in &mut weights {
+      *w = (*w / sum).clamp(min_share, max_share);
+    }
   }
   let norm: f32 = weights.iter().sum::<f32>().max(0.001);
   let shares: Vec<f32> = weights.into_iter().map(|w| w / norm).collect();
 
-  // Keep `col_pixels` in sync with custom column widths so wide-table resizing persists visually.
+  // Keep `col_pixels` in sync with custom column widths.
   let col_pixels: Vec<f32> = if has_custom_widths {
     shares
       .iter()
-      .map(|&s| (s * total_natural_px).max(72.0))
+      .map(|&s| (s * total_natural_px).max(48.0))
       .collect()
   } else {
     natural_pixels
@@ -260,6 +275,74 @@ pub fn apply_column_divider_drag(shares: &[f32], col: usize, dx: f32, grid_w: f3
   Some(next)
 }
 
+/// Computes live per-column pixel widths while dragging either an inner divider
+/// (`1..col_count`) or the rightmost table edge (`col_count`) by `dx` pixels:
+/// - Inner divider (`1..col_count`): redistributes width between columns `c - 1` and `c`
+///   keeping total table width fixed while column `c` has room above `min_col_px`; if
+///   dragged right past column `c`'s floor, smoothly expands total table width (allowing
+///   drag-to-overflow past the page column).
+/// - Rightmost edge (`col_count`): widens or narrows the last column 1:1 with the pointer
+///   (allowing expansion past page width up to `max_grid_w`); when narrowing past the last
+///   column's floor, proportionally trims remaining slack from earlier columns.
+pub fn compute_live_column_drag(
+  start_col_pxs: &[f32],
+  divider_col: usize,
+  dx: f32,
+  min_col_px: f32,
+  max_grid_w: f32,
+) -> Vec<f32> {
+  let n = start_col_pxs.len();
+  if n == 0 || divider_col == 0 || divider_col > n {
+    return start_col_pxs.to_vec();
+  }
+  let mut next = start_col_pxs.to_vec();
+  let start_total: f32 = start_col_pxs.iter().sum();
+  let max_total = max_grid_w.max(start_total);
+
+  if divider_col == n {
+    let last = n - 1;
+    if dx >= 0.0 {
+      let add = dx.min((max_total - start_total).max(0.0));
+      next[last] += add;
+    } else {
+      let want_shrink = -dx;
+      let last_slack = (next[last] - min_col_px).max(0.0);
+      let take_last = want_shrink.min(last_slack);
+      next[last] -= take_last;
+      let rem = want_shrink - take_last;
+      if rem > 0.0 && last > 0 {
+        let other_slack: f32 = next[..last].iter().map(|&w| (w - min_col_px).max(0.0)).sum();
+        if other_slack > 0.001 {
+          let ratio = (rem / other_slack).min(1.0);
+          for w in &mut next[..last] {
+            let slack = (*w - min_col_px).max(0.0);
+            *w -= slack * ratio;
+          }
+        }
+      }
+    }
+    return next;
+  }
+
+  let left = divider_col - 1;
+  let right = divider_col;
+  if dx < 0.0 {
+    let shrink = (-dx).min((next[left] - min_col_px).max(0.0));
+    next[left] -= shrink;
+    next[right] += shrink;
+  } else if dx > 0.0 {
+    let borrow = dx.min((next[right] - min_col_px).max(0.0));
+    next[left] += borrow;
+    next[right] -= borrow;
+    let overflow = dx - borrow;
+    if overflow > 0.0 {
+      let extra = overflow.min((max_total - start_total).max(0.0));
+      next[left] += extra;
+    }
+  }
+  next
+}
+
 fn table_menu_item(
   tid: &str,
   label: &str,
@@ -326,18 +409,8 @@ pub(crate) fn render_table_block_view(
   let model = TableModel::from_block_data(&block.data);
   let row_count = model.rows.len().max(1);
   let col_count = model.rows.first().map_or(0, Vec::len).max(1);
-  let (wide_table, col_shares, col_pixels) = compute_adaptive_table_layout(&model);
-  let total_wide_px: f32 = col_pixels.iter().sum();
-  let explicit_model_width = (model.table_width > 60.0).then_some(model.table_width as f32);
-  let min_readable_px: f32 = if col_count >= 4 {
-    col_pixels
-      .iter()
-      .map(|&w| w.min(180.0))
-      .sum::<f32>()
-      .max(col_count as f32 * 110.0)
-  } else {
-    0.0
-  };
+  let (_wide_table, col_shares, _col_pixels) = compute_adaptive_table_layout(&model);
+  let model_table_width = model.table_width as f32;
   let model_aligns: Vec<String> = (0..col_count)
     .map(|c| model.align_for(c).to_owned())
     .collect();
@@ -348,10 +421,17 @@ pub(crate) fn render_table_block_view(
   let hovered_row_handle: Signal<Option<usize>> = signal(None);
   let hovered_col_handle: Signal<Option<usize>> = signal(None);
   let hovered_resize_col: Signal<Option<usize>> = signal(None);
-  let live_resize: Signal<Option<(usize, f32)>> = signal(None);
-  let col_drag_start = signal(0.0_f32);
+  let live_drag: Signal<Option<LiveResizeDrag>> = signal(None);
   let open_menu: Signal<Option<TableMenuKind>> = signal(None);
-  let viewport_w = signal(720.0_f32);
+  let init_vp_w = {
+    let pw = env.page_width.get_untracked();
+    if pw > 200.0 {
+      pw + LEFT_GUTTER_PX + RIGHT_ADD_W_PX
+    } else {
+      720.0_f32
+    }
+  };
+  let viewport_w = signal(init_vp_w);
 
   // Dismiss any open table/row/column overlay menu on Escape or when focusing a cell.
   effect(move || {
@@ -413,30 +493,28 @@ pub(crate) fn render_table_block_view(
   let col_handle_refs: Vec<ElementRef> = (0..col_count).map(|_| element_ref()).collect();
   let row_handle_refs: Vec<ElementRef> = (0..row_count).map(|_| element_ref()).collect();
 
-  // Exact reactive pixel width of the table grid so top handles, all rows, and
-  // full-height column resize dividers share sub-pixel identical column x-offsets.
-  let grid_w = computed(move || {
-    let avail = (viewport_w.get() - LEFT_GUTTER_PX - RIGHT_ADD_W_PX).max(240.0);
-    if let Some(w) = explicit_model_width {
-      w.max(200.0)
-    } else if wide_table {
-      total_wide_px.max(avail)
-    } else if min_readable_px > 0.0 {
-      min_readable_px.max(avail)
-    } else {
-      avail
+  // Exact reactive per-column pixel widths and total table grid width:
+  // - Default (`model_table_width == 1.0`) fits the page column cleanly (`avail`), never
+  //   overflowing horizontally.
+  // - While dragging any inner divider or the rightmost edge, `live_drag` drives column
+  //   widths and text reflow at 60fps in real time without touching the CRDT undo stack.
+  let shares_for_memo = col_shares.clone();
+  let live_col_pxs = computed(move || {
+    if let Some(drag) = live_drag.get() {
+      return drag.current_col_pxs;
     }
+    let avail = (viewport_w.get() - LEFT_GUTTER_PX - RIGHT_ADD_W_PX).max(240.0);
+    let min_grid_w = (avail * 0.15).max(120.0).min(avail);
+    let max_grid_w = (avail * MAX_TABLE_WIDTH_FACTOR).max(avail);
+    let base_grid_w = if (model_table_width - 1.0).abs() <= 1e-4 {
+      avail
+    } else {
+      (avail * model_table_width).clamp(min_grid_w, max_grid_w)
+    };
+    shares_for_memo.iter().map(|&s| base_grid_w * s).collect::<Vec<f32>>()
   });
 
-  // Cumulative column x-fractions `[0.0, s0, s0+s1, ..., 1.0]`
-  let mut cum_shares = Vec::with_capacity(col_count + 1);
-  cum_shares.push(0.0_f32);
-  for &s in &col_shares {
-    cum_shares.push(cum_shares.last().copied().unwrap_or(0.0) + s);
-  }
-  if let Some(last) = cum_shares.last_mut() {
-    *last = 1.0;
-  }
+  let grid_w = computed(move || live_col_pxs.get().iter().sum::<f32>().max(120.0));
 
   // ── 1. Top Gutter Row: Top-left corner menu handle + per-column anchor pills ──
   let mut top_gutter = view()
@@ -487,12 +565,11 @@ pub(crate) fn render_table_block_view(
   );
 
   // Per-column top anchor pills aligned directly above each column `c`
-  for c in 0..col_count {
-    let share_c = col_shares[c];
+  for (c, col_handle_ref) in col_handle_refs.iter().enumerate().take(col_count) {
     let bid_col_click = block_id.clone();
     top_gutter = top_gutter.child(
       view()
-        .w(move || px(grid_w.get() * share_c))
+        .w(move || px(live_col_pxs.get().get(c).copied().unwrap_or(80.0)))
         .h(px(TOP_GUTTER_PX))
         .flex_shrink_0()
         .items_center()
@@ -505,7 +582,7 @@ pub(crate) fn render_table_block_view(
         })
         .child(
           button()
-            .element_ref(&col_handle_refs[c])
+            .element_ref(col_handle_ref)
             .test_id(&format!("table-col-handle-{c}"))
             .accessibility_label(format!("第 {} 列操作", c + 1))
             .w(px(28.0))
@@ -592,15 +669,14 @@ pub(crate) fn render_table_block_view(
         .overflow_hidden();
     }
 
-    for c in 0..col_count {
+    for (c, align_c) in model_aligns.iter().enumerate().take(col_count) {
       let cell_obj = model
         .rows
         .get(r)
         .and_then(|row| row.get(c))
         .cloned()
         .unwrap_or_default();
-      let share_c = col_shares[c];
-      let col_align = model_aligns[c].clone();
+      let col_align = align_c.clone();
 
       let cell_el = render_table_cell(
         TableCellCtx {
@@ -610,13 +686,12 @@ pub(crate) fn render_table_block_view(
           col: c,
           row_count,
           is_header,
-          share_c,
           col_align,
           cell_obj,
           block_id: block_id.clone(),
           bridge: bridge.clone(),
           dark_mode,
-          grid_w,
+          live_col_pxs,
           focused_cell,
           table_selection,
           table_drag_anchor,
@@ -701,21 +776,22 @@ pub(crate) fn render_table_block_view(
   }
 
   // Full-height column resize handles across ALL rows (`1..=col_count`):
-  // - `1..col_count`: inner column borders (`SetColumnWidths`)
-  // - `col_count`: rightmost table border (`SetTableWidth`, enabling horizontal scroll!)
+  // - `1..col_count`: inner column borders (live column reflow + drag-to-overflow past min width)
+  // - `col_count`: rightmost table border (live widening/narrowing past or within page width)
+  // Mounted on `middle_row` with `+4px` right overhang so the rightmost 8px hit target
+  // `[grid_w - 4, grid_w + 4]` is never clipped by `rows_col` and sits cleanly beside
+  // `right_add_bar` (`ml(4.0)` -> `[grid_w + 4, grid_w + 14]`).
   let mut resize_layer = view()
     .absolute()
     .left(px(LEFT_GUTTER_PX))
-    .right_0()
+    .w(move || px(grid_w.get() + 4.0))
     .top_0()
     .bottom_0()
     .z_index(16)
     .pointer_events(PointerEvents::BoxNone);
 
-  for (c, &frac) in cum_shares.iter().enumerate().take(col_count + 1).skip(1) {
-    let shares_r = col_shares.clone();
+  for c in 1..=col_count {
     let br_r = bridge.clone();
-    let is_outer_right = c == col_count;
 
     resize_layer = resize_layer.child(
       view()
@@ -724,12 +800,9 @@ pub(crate) fn render_table_block_view(
         .top_0()
         .bottom_0()
         .left(move || {
-          let base = grid_w.get() * frac;
-          let live_dx = match live_resize.get() {
-            Some((rc, dx)) if rc == c => dx,
-            _ => 0.0,
-          };
-          px((base + live_dx - 4.0).max(-4.0))
+          let pxs = live_col_pxs.get();
+          let x: f32 = pxs.iter().take(c).sum();
+          px((x - 4.0).max(-4.0))
         })
         .w(px(8.0))
         .items_center()
@@ -743,26 +816,63 @@ pub(crate) fn render_table_block_view(
         .claim_touches(TouchClaim::on_start())
         .keep_touches(true)
         .on_responder_grant(move |e: &ResponderEvent| {
-          col_drag_start.set(f32::from(e.page.x));
-          live_resize.set(Some((c, 0.0)));
+          let start_col_pxs = live_col_pxs.get_untracked();
+          live_drag.set(Some(LiveResizeDrag {
+            divider_col: c,
+            start_page_x: f32::from(e.page.x),
+            current_col_pxs: start_col_pxs.clone(),
+            start_col_pxs,
+          }));
         })
         .on_responder_move(move |e: &ResponderEvent| {
-          let dx = f32::from(e.page.x) - col_drag_start.get_untracked();
-          live_resize.set(Some((c, dx)));
+          let Some(mut drag) = live_drag.get_untracked() else {
+            return;
+          };
+          let avail = (viewport_w.get_untracked() - LEFT_GUTTER_PX - RIGHT_ADD_W_PX).max(240.0);
+          let min_col_px = (avail / col_count as f32).clamp(24.0, 48.0);
+          let max_grid_w = (avail * MAX_TABLE_WIDTH_FACTOR).max(avail);
+          let dx = f32::from(e.page.x) - drag.start_page_x;
+          drag.current_col_pxs =
+            compute_live_column_drag(&drag.start_col_pxs, c, dx, min_col_px, max_grid_w);
+          live_drag.set(Some(drag));
         })
         .on_responder_release(move |e: &ResponderEvent| {
-          let dx = f32::from(e.page.x) - col_drag_start.get_untracked();
-          live_resize.set(None);
-          if dx.abs() < 3.0 {
+          let Some(drag) = live_drag.get_untracked() else {
+            return;
+          };
+          let dx = f32::from(e.page.x) - drag.start_page_x;
+          if dx.abs() < 2.0 {
+            live_drag.set(None);
             return;
           }
-          let tw = grid_w.get_untracked();
-          if is_outer_right {
-            let next_w = (tw + dx).clamp(240.0, 2400.0);
-            br_r.table_op(live_index(at), TableOp::SetTableWidth { width: next_w as f64 });
-          } else if let Some(next) = apply_column_divider_drag(&shares_r, c, dx, tw) {
-            br_r.table_op(live_index(at), TableOp::SetColumnWidths { widths: next });
-          }
+          let avail = (viewport_w.get_untracked() - LEFT_GUTTER_PX - RIGHT_ADD_W_PX).max(240.0);
+          let min_col_px = (avail / col_count as f32).clamp(24.0, 48.0);
+          let max_grid_w = (avail * MAX_TABLE_WIDTH_FACTOR).max(avail);
+          let final_pxs =
+            compute_live_column_drag(&drag.start_col_pxs, c, dx, min_col_px, max_grid_w);
+          let final_grid_w = final_pxs.iter().sum::<f32>().max(120.0);
+          let next_shares: Vec<f64> = final_pxs
+            .iter()
+            .map(|&w| (w / final_grid_w) as f64)
+            .collect();
+          let next_table_width = if (final_grid_w - avail).abs() <= 1.5
+            && (model_table_width - 1.0).abs() <= 1e-4
+          {
+            1.0
+          } else {
+            (final_grid_w / avail).clamp(0.15, MAX_TABLE_WIDTH_FACTOR) as f64
+          };
+          br_r.table_op(
+            live_index(at),
+            TableOp::SetLayout {
+              widths: next_shares,
+              width: next_table_width,
+            },
+          );
+          live_drag.set(None);
+        })
+        .on_responder_terminate(move |_: &ResponderEvent| {
+          live_drag.set(None);
         })
         .child(
           // Crisp 2px full-height vertical guide bar visible while hovering OR dragging ANY row
@@ -771,7 +881,7 @@ pub(crate) fn render_table_block_view(
             .h_full()
             .bg(move || {
               let active = hovered_resize_col.get() == Some(c)
-                || live_resize.get().is_some_and(|(rc, _)| rc == c);
+                || live_drag.get().as_ref().is_some_and(|d| d.divider_col == c);
               if active {
                 let mut a = palette(dark_mode.get()).accent;
                 a.a = 0.72;
@@ -783,7 +893,6 @@ pub(crate) fn render_table_block_view(
         ),
     );
   }
-  rows_col = rows_col.child(resize_layer);
 
   // Right `+` slim vertical expand-column bar hugging the right edge of the table grid
   let br_add_col = bridge.clone();
@@ -830,11 +939,13 @@ pub(crate) fn render_table_block_view(
     );
 
   let middle_row = view()
+    .relative()
     .flex_row()
     .items_stretch()
     .w(move || px(LEFT_GUTTER_PX + grid_w.get() + RIGHT_ADD_W_PX))
     .child(rows_col)
-    .child(right_add_bar);
+    .child(right_add_bar)
+    .child(resize_layer);
 
   // ── 3. Bottom `+` slim horizontal expand-row bar hugging the bottom edge of the grid ──
   let br_add_row = bridge.clone();
@@ -1009,8 +1120,13 @@ pub(crate) fn render_table_block_view(
             .child(menu_divider(dark_mode))
             .child(table_menu_item("table-autofit", "自适应列宽", false, dark_mode, move || {
               open_menu.set(None);
-              b4.table_op(live_index(at), TableOp::ResetColumnWidths);
-              b4.table_op(live_index(at), TableOp::SetTableWidth { width: 0.0 });
+              b4.table_op(
+                live_index(at),
+                TableOp::SetLayout {
+                  widths: vec![1.0; col_count],
+                  width: 1.0,
+                },
+              );
             }))
             .child(table_menu_item("table-copy-all", "复制表格", false, dark_mode, move || {
               open_menu.set(None);
@@ -1226,13 +1342,12 @@ struct TableCellCtx {
   col: usize,
   row_count: usize,
   is_header: bool,
-  share_c: f32,
   col_align: String,
   cell_obj: TableCell,
   block_id: String,
   bridge: Rc<MicaDocumentBridge>,
   dark_mode: Signal<bool>,
-  grid_w: Memo<f32>,
+  live_col_pxs: Memo<Vec<f32>>,
   focused_cell: Signal<Option<(String, usize, usize)>>,
   table_selection: Signal<Option<crate::block_views::TableCellSelection>>,
   table_drag_anchor: Signal<Option<(String, usize, usize)>>,
@@ -1252,13 +1367,12 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
     col: c,
     row_count,
     is_header,
-    share_c,
     col_align,
     cell_obj,
     block_id,
     bridge,
     dark_mode,
-    grid_w,
+    live_col_pxs,
     focused_cell,
     table_selection,
     table_drag_anchor,
@@ -1316,7 +1430,8 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
     let wrap_w = if frame.size.width.0 > 24.0 {
       frame.size.width.0
     } else {
-      (grid_w.get_untracked() * share_c - 24.0).max(40.0)
+      let col_w = live_col_pxs.get_untracked().get(c).copied().unwrap_or(80.0);
+      (col_w - 24.0).max(40.0)
     };
     let measurer = text_measurer();
     synthesize_wrapped_lines(txt, wrap_w, cell_font, CELL_LINE_H_PX, &|f, s| {
@@ -1662,7 +1777,7 @@ fn render_table_cell(ctx: TableCellCtx) -> impl IntoElement {
 
   let mut cell_box = view()
     .test_id(&format!("table-cell-{init_idx}-{r}-{c}"))
-    .w(move || px(grid_w.get() * share_c))
+    .w(move || px(live_col_pxs.get().get(c).copied().unwrap_or(80.0)))
     .flex_shrink_0()
     .min_w(px(0.0))
     .overflow_hidden()
@@ -1860,5 +1975,73 @@ mod tests {
     assert!((next[1] - 0.2).abs() < 1e-4);
     assert!((next[2] - 0.4).abs() < 1e-4);
     assert!(apply_column_divider_drag(&shares, 1, 1.0, 600.0).is_none());
+  }
+
+  #[test]
+  fn wide_five_column_table_fits_page_width_by_default_and_overflows_only_after_drag() {
+    let rows = vec![
+      vec![
+        TableCell::plain("Fortinet 公告编号"),
+        TableCell::plain("CVE 编号"),
+        TableCell::plain("严重级别 / CVSSv3"),
+        TableCell::plain("漏洞类型与受影响组件"),
+        TableCell::plain("风险描述"),
+      ],
+      vec![
+        TableCell::plain("FG-IR-26-268"),
+        TableCell::plain("CVE-2026-126254"),
+        TableCell::plain("Critical (9.6)"),
+        TableCell::plain("数值截断错误 (CWE-197) / BGP Daemon"),
+        TableCell::plain("已认证 iBGP 邻居可发送特制报文导致路由属性异常"),
+      ],
+    ];
+    let default_model = TableModel::new(rows.clone(), true, "left", 1.0, None, None);
+    let (wide_default, shares_default, _) = compute_adaptive_table_layout(&default_model);
+    assert!(
+      !wide_default,
+      "5-column table must fit page width by default without forcing horizontal overflow"
+    );
+    assert!((shares_default.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+
+    // Dragging wider than page width sets table_width > 1.0 and preserves near-equal custom shares.
+    let widened_model = TableModel::new(
+      rows,
+      true,
+      "left",
+      1.35,
+      Some(vec![0.20, 0.20, 0.20, 0.20, 0.20]),
+      None,
+    );
+    let (wide_after, shares_after, _) = compute_adaptive_table_layout(&widened_model);
+    assert!(wide_after, "widened table with table_width > 1.0 must allow horizontal overflow");
+    for s in shares_after {
+      assert!((s - 0.20).abs() < 1e-4, "custom near-equal shares must not snap back to auto: {s}");
+    }
+  }
+
+  #[test]
+  fn compute_live_column_drag_handles_inner_dividers_overflow_and_right_edge() {
+    let start = vec![150.0, 150.0, 200.0];
+
+    // Inner divider right within slack: total width stays 500px, col0 grows, col1 shrinks.
+    let inner = compute_live_column_drag(&start, 1, 40.0, 48.0, 2000.0);
+    assert_eq!(inner, vec![190.0, 110.0, 200.0]);
+
+    // Inner divider dragged past right column's floor: col1 clamps to 48px and total expands.
+    let inner_overflow = compute_live_column_drag(&start, 1, 150.0, 48.0, 2000.0);
+    assert!((inner_overflow[0] - 300.0).abs() < 1e-3);
+    assert!((inner_overflow[1] - 48.0).abs() < 1e-3);
+    assert!((inner_overflow[2] - 200.0).abs() < 1e-3);
+    assert!(inner_overflow.iter().sum::<f32>() > 500.0);
+
+    // Rightmost edge dragged right: last column grows 1:1, earlier columns stay unchanged.
+    let right_grow = compute_live_column_drag(&start, 3, 180.0, 48.0, 2000.0);
+    assert_eq!(right_grow, vec![150.0, 150.0, 380.0]);
+
+    // Rightmost edge dragged left past last column's floor: trims last column then earlier columns.
+    let right_shrink = compute_live_column_drag(&start, 3, -202.0, 48.0, 2000.0);
+    assert!((right_shrink[2] - 48.0).abs() < 1e-3);
+    assert!((right_shrink.iter().sum::<f32>() - 298.0).abs() < 1e-3);
+    assert!(right_shrink[0] >= 48.0 && right_shrink[1] >= 48.0);
   }
 }

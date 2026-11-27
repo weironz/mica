@@ -129,6 +129,10 @@ pub enum TableOp {
   SetTableWidth {
     width: f64,
   },
+  SetLayout {
+    widths: Vec<f64>,
+    width: f64,
+  },
   Navigate {
     row: usize,
     col: usize,
@@ -179,7 +183,7 @@ impl TableModel {
       rows,
       header,
       align: normalized_align,
-      table_width: table_width.clamp(0.15, 1.0),
+      table_width: normalize_table_width(table_width),
       widths: normalized_widths,
       aligns,
     }
@@ -237,11 +241,8 @@ impl TableModel {
       .and_then(Value::as_str)
       .unwrap_or("left")
       .to_string();
-    let table_width = obj
-      .get("width")
-      .and_then(Value::as_f64)
-      .unwrap_or(1.0)
-      .clamp(0.15, 1.0);
+    let table_width =
+      normalize_table_width(obj.get("width").and_then(Value::as_f64).unwrap_or(1.0));
     let widths = obj.get("widths").and_then(Value::as_array).map(|arr| {
       arr
         .iter()
@@ -488,8 +489,13 @@ impl TableModel {
 
   pub fn set_table_width(&mut self, width: f64) {
     if width.is_finite() {
-      self.table_width = width.clamp(0.15, 1.0);
+      self.table_width = normalize_table_width(width);
     }
+  }
+
+  pub fn set_layout(&mut self, widths: &[f64], width: f64) {
+    self.set_column_widths(widths);
+    self.set_table_width(width);
   }
 
   /// Compute Tab / Shift+Tab / Arrow navigation from `(row, col)`.
@@ -629,6 +635,14 @@ impl TableModel {
       return ClipboardPayload::default();
     }
     self.copy_area(0, 0, self.rows.len() - 1, self.columns() - 1)
+  }
+}
+
+fn normalize_table_width(width: f64) -> f64 {
+  if !width.is_finite() || width <= 0.0 {
+    1.0
+  } else {
+    width.clamp(0.15, 4.0)
   }
 }
 
