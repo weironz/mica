@@ -51,6 +51,9 @@ const IMAGE_PICK_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "
 /// Shared reactive context for resolving, uploading, caching, and acting on images.
 #[derive(Clone)]
 pub struct ImageContext {
+  /// App-root reactive owner so async image tasks (copy, cut, download, upload,
+  /// replace, toast dismissal) survive closing transient context menus / hover bars.
+  pub owner: Owner,
   pub is_cloud_signed_in: Signal<bool>,
   pub server_url: Signal<String>,
   pub active_workspace_id: Signal<Uuid>,
@@ -78,6 +81,7 @@ impl ImageContext {
     rehost_images: Signal<bool>,
   ) -> Self {
     Self {
+      owner: Owner::current(),
       is_cloud_signed_in,
       server_url,
       active_workspace_id,
@@ -89,6 +93,15 @@ impl ImageContext {
       caption_edit: signal(None),
       toast_state: signal(None),
     }
+  }
+
+  /// Spawn an async image action under the app-root `owner` so closing a
+  /// right-click context menu (`menu_sig.set(None)`) or un-hovering the image
+  /// toolbar NEVER cancels the in-flight task.
+  pub fn spawn<T: 'static>(&self, future: impl std::future::Future<Output = T> + 'static) {
+    self.owner.run(move || {
+      drop(spawn(future));
+    });
   }
 
   /// Minimal offline/test context for headless unit tests that don't mount the full shell.
@@ -123,7 +136,7 @@ impl ImageContext {
       .unwrap_or(1);
     self.toast_state.set(Some((text_msg, next_gen)));
     let toast_sig = self.toast_state;
-    spawn(async move {
+    self.spawn(async move {
       timer(Duration::from_millis(2200)).await;
       if toast_sig.get_untracked().is_some_and(|(_, g)| g == next_gen) {
         toast_sig.set(None);
@@ -547,7 +560,8 @@ pub fn insert_image_from_bytes(
 
   if is_cloud && !ws_id.is_nil() {
     let conn_rc = ctx.cloud_connector.clone();
-    spawn(async move {
+    let ctx_task = ctx.clone();
+    ctx.spawn(async move {
       let mut conn = conn_rc.borrow().clone();
       let res = with_auto_refresh(&mut conn, |c| {
         let fname = clean_name.clone();
@@ -563,8 +577,8 @@ pub fn insert_image_from_bytes(
           }
           cas_put_blob_as(&uploaded.file_id, &bytes);
           // Guard cross-await ownership: only mutate if still on the same doc/workspace.
-          if ctx.active_doc.get_untracked() == doc_id
-            && ctx.active_workspace_id.get_untracked() == ws_id
+          if ctx_task.active_doc.get_untracked() == doc_id
+            && ctx_task.active_workspace_id.get_untracked() == ws_id
           {
             bridge.insert_image_block(
               Some(uploaded.file_id),
@@ -577,12 +591,12 @@ pub fn insert_image_from_bytes(
         Err(err) => {
           // Offline Desktop fallback: persist in local CAS so pasted screenshots are never lost.
           if let Some(sha) = cas_put_blob(&bytes) {
-            if ctx.active_doc.get_untracked() == doc_id {
+            if ctx_task.active_doc.get_untracked() == doc_id {
               bridge.insert_image_block(Some(sha), None, Some(clean_name), &alt);
             }
-            ctx.show_toast(format!("云端上传失败，已暂存到本地：{err}"));
+            ctx_task.show_toast(format!("云端上传失败，已暂存到本地：{err}"));
           } else {
-            ctx.show_toast(format!("图片上传失败：{err}"));
+            ctx_task.show_toast(format!("图片上传失败：{err}"));
           }
         }
       }
@@ -603,15 +617,16 @@ pub fn insert_image_from_bytes(
 /// Open the cross-platform image file picker (Desktop OS dialog or Web `<input type="file">`)
 /// and insert the chosen image (uploading to cloud when signed in).
 pub fn pick_and_insert_image(bridge: Rc<MicaDocumentBridge>, ctx: ImageContext) {
-  spawn(async move {
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
     match crate::transfer::pick_import_file_bytes("Images", IMAGE_PICK_EXTS, false).await {
       Ok(files) => {
         if let Some(f) = files.into_iter().next() {
           let mime = mime_for_image(&f.bytes, &f.name).to_string();
-          insert_image_from_bytes(bridge, ctx, f.bytes, f.name, mime, String::new());
+          insert_image_from_bytes(bridge, ctx_task, f.bytes, f.name, mime, String::new());
         }
       }
-      Err(err) => ctx.show_toast(format!("选择图片失败：{err}")),
+      Err(err) => ctx_task.show_toast(format!("选择图片失败：{err}")),
     }
   });
 }
@@ -622,15 +637,16 @@ pub fn pick_and_replace_image(
   ctx: ImageContext,
   block_id: String,
 ) {
-  spawn(async move {
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
     match crate::transfer::pick_import_file_bytes("Images", IMAGE_PICK_EXTS, false).await {
       Ok(files) => {
         if let Some(f) = files.into_iter().next() {
           let mime = mime_for_image(&f.bytes, &f.name).to_string();
-          replace_image_from_bytes(bridge, ctx, block_id, f.bytes, f.name, mime).await;
+          replace_image_from_bytes(bridge, ctx_task, block_id, f.bytes, f.name, mime).await;
         }
       }
-      Err(err) => ctx.show_toast(format!("选择图片失败：{err}")),
+      Err(err) => ctx_task.show_toast(format!("选择图片失败：{err}")),
     }
   });
 }
@@ -704,9 +720,10 @@ pub fn rehost_external_image_block(
   let doc_id = ctx.active_doc.get_untracked();
   let is_cloud = ctx.is_cloud_signed_in.get_untracked();
 
-  spawn(async move {
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
     if is_cloud && !ws_id.is_nil() {
-      let conn_rc = ctx.cloud_connector.clone();
+      let conn_rc = ctx_task.cloud_connector.clone();
       let mut conn = conn_rc.borrow().clone();
       // 1. Server-side import-url (SSRF-guarded, reuses own workspace blob link).
       let server_res = with_auto_refresh(&mut conn, |c| {
@@ -718,8 +735,8 @@ pub fn rehost_external_image_block(
         if rotated.is_some() {
           *conn_rc.borrow_mut() = conn;
         }
-        if ctx.active_doc.get_untracked() == doc_id
-          && ctx.active_workspace_id.get_untracked() == ws_id
+        if ctx_task.active_doc.get_untracked() == doc_id
+          && ctx_task.active_workspace_id.get_untracked() == ws_id
         {
           bridge.set_image_source_by_id(
             &block_id,
@@ -727,7 +744,7 @@ pub fn rehost_external_image_block(
             None,
             Some(uploaded.name),
           );
-          ctx.show_toast("已转存到 Mica 存储");
+          ctx_task.show_toast("已转存到 Mica 存储");
         }
         return;
       }
@@ -741,10 +758,10 @@ pub fn rehost_external_image_block(
           } else {
             mime_for_image(&bytes, &name).to_string()
           };
-          replace_image_from_bytes(bridge, ctx, block_id, bytes, name, mime).await;
+          replace_image_from_bytes(bridge, ctx_task, block_id, bytes, name, mime).await;
         }
-        Ok(_) => ctx.show_toast("转存失败：外链返回空内容"),
-        Err(err) => ctx.show_toast(format!("转存失败：{err}")),
+        Ok(_) => ctx_task.show_toast("转存失败：外链返回空内容"),
+        Err(err) => ctx_task.show_toast(format!("转存失败：{err}")),
       }
       return;
     }
@@ -758,10 +775,10 @@ pub fn rehost_external_image_block(
         } else {
           mime_for_image(&bytes, &name).to_string()
         };
-        replace_image_from_bytes(bridge, ctx, block_id, bytes, name, mime).await;
+        replace_image_from_bytes(bridge, ctx_task, block_id, bytes, name, mime).await;
       }
-      Ok(_) => ctx.show_toast("转存失败：外链返回空内容"),
-      Err(err) => ctx.show_toast(format!("转存失败：{err}")),
+      Ok(_) => ctx_task.show_toast("转存失败：外链返回空内容"),
+      Err(err) => ctx_task.show_toast(format!("转存失败：{err}")),
     }
   });
 }
@@ -790,13 +807,28 @@ pub async fn load_resolved_image_bytes(
 
   #[cfg(not(target_arch = "wasm32"))]
   if let Some(path) = crate::clipboard_platform::file_uri_to_local_path(uri) {
-    let bytes = std::fs::read(&path).map_err(|e| format!("读取本地图片失败：{e}"))?;
-    let mime = mime_for_image(&bytes, &resolved.file_name).to_string();
-    return Ok((bytes, mime));
+    match std::fs::read(&path) {
+      Ok(bytes) if !bytes.is_empty() => {
+        let mime = mime_for_image(&bytes, &resolved.file_name).to_string();
+        return Ok((bytes, mime));
+      }
+      Ok(_) | Err(_) => {
+        // Fall through to `resolved.link_url` when a local CAS mirror disappeared
+        // while a permanent cloud URL is still available.
+        if !resolved.link_url.as_deref().is_some_and(is_http_url) {
+          return Err("读取本地图片失败".to_string());
+        }
+      }
+    }
   }
 
-  if is_http_url(uri) {
-    let (bytes, ct) = download_url_bytes(uri, 25).await?;
+  let fetch_url = if is_http_url(uri) {
+    Some(uri)
+  } else {
+    resolved.link_url.as_deref().filter(|u| is_http_url(u))
+  };
+  if let Some(http_uri) = fetch_url {
+    let (bytes, ct) = download_url_bytes(http_uri, 25).await?;
     if bytes.is_empty() {
       return Err("图片内容为空".to_string());
     }
@@ -812,6 +844,44 @@ pub async fn load_resolved_image_bytes(
   }
 
   Err("不支持的图片地址".to_string())
+}
+
+/// On WebAssembly, browser `navigator.clipboard.write(...)` requires synchronous
+/// invocation inside the click/key gesture; `nsh.js`'s `writeClipboardImage` accepts
+/// `data:` and same-origin `http(s)://` URLs directly and wraps the fetch inside
+/// `new ClipboardItem({ "image/png": promise })` so Safari/Chrome never reject with
+/// `NotAllowedError`.
+#[cfg(target_arch = "wasm32")]
+fn try_sync_web_clipboard_copy(resolved: &ResolvedImage, ctx: &ImageContext) -> bool {
+  let uri = resolved.display_uri.trim();
+  if uri.is_empty() {
+    return false;
+  }
+  let can_direct_write = uri.starts_with("data:")
+    || (is_http_url(uri)
+      && (resolved.is_cloud_stored
+        || mica_client::web_runtime::web_origin()
+          .is_some_and(|orig| !orig.is_empty() && uri.starts_with(&orig))));
+  if !can_direct_write {
+    return false;
+  }
+  nsh_core::element::set_clipboard_image(uri.to_string());
+  ctx.show_toast("已复制图片");
+  true
+}
+
+/// Trigger an image bitmap copy from a user gesture (context menu, hover toolbar,
+/// or `Ctrl+C`), spawning any async fetch under `ctx.owner` so closing the menu
+/// never cancels the copy.
+pub fn copy_image_from_user_action(resolved: ResolvedImage, ctx: ImageContext) {
+  #[cfg(target_arch = "wasm32")]
+  if try_sync_web_clipboard_copy(&resolved, &ctx) {
+    return;
+  }
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
+    let _ = copy_resolved_image_bitmap(&resolved, &ctx_task).await;
+  });
 }
 
 /// Copy `resolved`'s bitmap onto the system clipboard (returns `true` on success).
@@ -837,12 +907,20 @@ pub fn cut_image_block(
   resolved: ResolvedImage,
   ctx: ImageContext,
 ) {
+  #[cfg(target_arch = "wasm32")]
+  if try_sync_web_clipboard_copy(&resolved, &ctx) {
+    if let Some(idx) = find_block_index_by_id(&bridge, &block_id) {
+      bridge.delete_block_at(idx);
+    }
+    return;
+  }
   let doc_id = ctx.active_doc.get_untracked();
-  spawn(async move {
-    if !copy_resolved_image_bitmap(&resolved, &ctx).await {
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
+    if !copy_resolved_image_bitmap(&resolved, &ctx_task).await {
       return;
     }
-    if ctx.active_doc.get_untracked() != doc_id {
+    if ctx_task.active_doc.get_untracked() != doc_id {
       return;
     }
     if let Some(idx) = find_block_index_by_id(&bridge, &block_id) {
@@ -854,49 +932,74 @@ pub fn cut_image_block(
 /// Download / Save-As an image block to disk (OS Save-As dialog on Desktop,
 /// browser Blob download on Web).
 pub fn download_image_block(resolved: ResolvedImage, ctx: ImageContext) {
-  spawn(async move {
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
     match load_resolved_image_bytes(&resolved).await {
       Ok((bytes, mime)) => {
         let name = normalize_image_filename(&resolved.file_name, &mime);
         match crate::transfer::save_bytes_with_dialog(&name, "Images", IMAGE_PICK_EXTS, &bytes).await
         {
-          Ok(Some(_)) => ctx.show_toast(format!("已保存 {name}")),
+          Ok(Some(_)) => ctx_task.show_toast(format!("已保存 {name}")),
           Ok(None) => {}
-          Err(err) => ctx.show_toast(format!("保存图片失败：{err}")),
+          Err(err) => ctx_task.show_toast(format!("保存图片失败：{err}")),
         }
       }
-      Err(err) => ctx.show_toast(format!("下载图片失败：{err}")),
+      Err(err) => ctx_task.show_toast(format!("下载图片失败：{err}")),
     }
   });
 }
 
-/// Desktop-only: read the current image off the OS clipboard and replace `block_id`.
+/// Desktop-only: read the current image (bitmap or copied image file) off the OS
+/// clipboard and replace `block_id`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn paste_clipboard_image_over(
   bridge: Rc<MicaDocumentBridge>,
   block_id: String,
   ctx: ImageContext,
 ) {
-  spawn(async move {
-    let Some(clip) = nsh_core::element::clipboard_image().await else {
-      ctx.show_toast("剪贴板中没有图片");
+  let ctx_task = ctx.clone();
+  ctx.spawn(async move {
+    let mut loaded: Option<(Vec<u8>, String, String)> = None;
+    if let Some(clip) = nsh_core::element::clipboard_image().await {
+      if let Some((mime, bytes)) = decode_data_uri(&clip.url) {
+        loaded = Some((bytes, "pasted-image.png".into(), mime));
+      } else if let Some(path) = crate::clipboard_platform::file_uri_to_local_path(&clip.url)
+        && let Ok(bytes) = std::fs::read(&path)
+      {
+        let name = path
+          .file_name()
+          .and_then(|s| s.to_str())
+          .unwrap_or("pasted-image.png")
+          .to_string();
+        let mime = mime_for_image(&bytes, &name).to_string();
+        loaded = Some((bytes, name, mime));
+      }
+    }
+    // Also support images copied as files in Explorer / Finder (`CF_HDROP`).
+    if loaded.is_none() {
+      for uri in nsh_core::element::clipboard_files().await {
+        if let Some((file_uri, _)) =
+          crate::clipboard_platform::image_uri_from_pasted_file_uri(&uri)
+          && let Some(path) = crate::clipboard_platform::file_uri_to_local_path(&file_uri)
+          && let Ok(bytes) = std::fs::read(&path)
+          && !bytes.is_empty()
+        {
+          let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("pasted-image.png")
+            .to_string();
+          let mime = mime_for_image(&bytes, &name).to_string();
+          loaded = Some((bytes, name, mime));
+          break;
+        }
+      }
+    }
+    let Some((bytes, name, mime)) = loaded.filter(|(b, _, _)| !b.is_empty()) else {
+      ctx_task.show_toast("剪贴板中没有图片");
       return;
     };
-    let loaded: Option<(Vec<u8>, String)> = if let Some((mime, bytes)) = decode_data_uri(&clip.url) {
-      Some((bytes, mime))
-    } else if let Some(path) = crate::clipboard_platform::file_uri_to_local_path(&clip.url) {
-      std::fs::read(&path).ok().map(|b| {
-        let m = mime_for_image(&b, "pasted-image.png").to_string();
-        (b, m)
-      })
-    } else {
-      None
-    };
-    let Some((bytes, mime)) = loaded.filter(|(b, _)| !b.is_empty()) else {
-      ctx.show_toast("剪贴板中没有可用图片");
-      return;
-    };
-    replace_image_from_bytes(bridge, ctx, block_id, bytes, "pasted-image.png".into(), mime).await;
+    replace_image_from_bytes(bridge, ctx_task, block_id, bytes, name, mime).await;
   });
 }
 
@@ -1277,6 +1380,7 @@ pub fn render_image_block_view(
   let cap_tb_init = caption_text.clone();
 
   let card = view()
+    .test_id("image-card")
     .relative()
     .rounded(px(8.0))
     .overflow_hidden()
@@ -1353,8 +1457,20 @@ pub fn render_image_block_view(
                 let c = c_cp.clone();
                 let next_gen = copied_gen.get_untracked().wrapping_add(1);
                 copied_gen.set(next_gen);
-                spawn(async move {
-                  if copy_resolved_image_bitmap(&r, &c).await {
+                #[cfg(target_arch = "wasm32")]
+                if try_sync_web_clipboard_copy(&r, &c) {
+                  copied_flash.set(true);
+                  c.spawn(async move {
+                    timer(Duration::from_millis(1600)).await;
+                    if copied_gen.get_untracked() == next_gen {
+                      copied_flash.set(false);
+                    }
+                  });
+                  return;
+                }
+                let c_task = c.clone();
+                c.spawn(async move {
+                  if copy_resolved_image_bitmap(&r, &c_task).await {
                     copied_flash.set(true);
                     timer(Duration::from_millis(1600)).await;
                     if copied_gen.get_untracked() == next_gen {
@@ -1580,7 +1696,7 @@ pub fn render_image_context_menu_overlay(
         let u = display_uri.clone();
         let a = caption_cur.clone();
         let sizes = ctx_o.natural_sizes.clone();
-        menu = menu.child(ctx_menu_row("全屏查看", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-fullscreen", "全屏查看", false, dark_mode, move || {
           menu_sig.set(None);
           let nat = sizes.borrow().get(&u).copied();
           lightbox.set(Some(LightboxContent::Image {
@@ -1596,7 +1712,7 @@ pub fn render_image_context_menu_overlay(
         let cap_sig = ctx_o.caption_edit;
         let bid_c = bid.clone();
         let init_c = caption_cur.clone();
-        menu = menu.child(ctx_menu_row("编辑图注", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-caption", "编辑图注", false, dark_mode, move || {
           menu_sig.set(None);
           cap_sig.set(Some(ImageCaptionEditState {
             block_id: bid_c.clone(),
@@ -1611,7 +1727,7 @@ pub fn render_image_context_menu_overlay(
         let br_r = br_o.clone();
         let ctx_r = ctx_o.clone();
         let bid_r = bid.clone();
-        menu = menu.child(ctx_menu_row("替换图片…", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-replace", "替换图片…", false, dark_mode, move || {
           menu_sig.set(None);
           pick_and_replace_image(br_r.clone(), ctx_r.clone(), bid_r.clone());
         }));
@@ -1622,7 +1738,7 @@ pub fn render_image_context_menu_overlay(
         let br_h = br_o.clone();
         let ctx_h = ctx_o.clone();
         let bid_h = bid.clone();
-        menu = menu.child(ctx_menu_row("转存到 Mica", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-rehost", "转存到 Mica", false, dark_mode, move || {
           menu_sig.set(None);
           rehost_external_image_block(br_h.clone(), ctx_h.clone(), bid_h.clone(), eu.clone());
         }));
@@ -1634,13 +1750,9 @@ pub fn render_image_context_menu_overlay(
       {
         let res_cp = state.resolved.clone();
         let ctx_cp = ctx_o.clone();
-        menu = menu.child(ctx_menu_row("复制图片", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-copy", "复制图片", false, dark_mode, move || {
           menu_sig.set(None);
-          let r = res_cp.clone();
-          let c = ctx_cp.clone();
-          spawn(async move {
-            let _ = copy_resolved_image_bitmap(&r, &c).await;
-          });
+          copy_image_from_user_action(res_cp.clone(), ctx_cp.clone());
         }));
       }
 
@@ -1650,7 +1762,7 @@ pub fn render_image_context_menu_overlay(
         let ctx_ct = ctx_o.clone();
         let br_ct = br_o.clone();
         let bid_ct = bid.clone();
-        menu = menu.child(ctx_menu_row("剪切图片", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-cut", "剪切图片", false, dark_mode, move || {
           menu_sig.set(None);
           cut_image_block(br_ct.clone(), bid_ct.clone(), res_ct.clone(), ctx_ct.clone());
         }));
@@ -1662,7 +1774,7 @@ pub fn render_image_context_menu_overlay(
         let br_pr = br_o.clone();
         let ctx_pr = ctx_o.clone();
         let bid_pr = bid.clone();
-        menu = menu.child(ctx_menu_row("粘贴替换", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-paste-replace", "粘贴替换", false, dark_mode, move || {
           menu_sig.set(None);
           paste_clipboard_image_over(br_pr.clone(), bid_pr.clone(), ctx_pr.clone());
         }));
@@ -1672,7 +1784,7 @@ pub fn render_image_context_menu_overlay(
       if let Some(link) = link_opt {
         let l1 = link.clone();
         let ctx_l = ctx_o.clone();
-        menu = menu.child(ctx_menu_row("复制链接", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-copy-link", "复制链接", false, dark_mode, move || {
           menu_sig.set(None);
           set_clipboard(l1.clone());
           ctx_l.show_toast(if is_ext {
@@ -1681,18 +1793,20 @@ pub fn render_image_context_menu_overlay(
             "已复制图片公开链接"
           });
         }));
-        let l2 = link;
-        menu = menu.child(ctx_menu_row("在浏览器打开", false, dark_mode, move || {
-          menu_sig.set(None);
-          drop(open_url(&l2));
-        }));
+        if is_http_url(&link) {
+          let l2 = link;
+          menu = menu.child(ctx_menu_row("img-menu-open-browser", "在浏览器打开", false, dark_mode, move || {
+            menu_sig.set(None);
+            drop(open_url(&l2));
+          }));
+        }
       }
 
       // 9. 下载图片
       {
         let res_dl = state.resolved.clone();
         let ctx_dl = ctx_o.clone();
-        menu = menu.child(ctx_menu_row("下载图片", false, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-download", "下载图片", false, dark_mode, move || {
           menu_sig.set(None);
           download_image_block(res_dl.clone(), ctx_dl.clone());
         }));
@@ -1704,7 +1818,7 @@ pub fn render_image_context_menu_overlay(
       {
         let br_d = br_o.clone();
         let bid_d = bid;
-        menu = menu.child(ctx_menu_row("删除", true, dark_mode, move || {
+        menu = menu.child(ctx_menu_row("img-menu-delete", "删除", true, dark_mode, move || {
           menu_sig.set(None);
           if let Some(idx) = find_block_index_by_id(&br_d, &bid_d) {
             br_d.delete_block_at(idx);
@@ -1733,12 +1847,14 @@ pub fn render_image_context_menu_overlay(
 }
 
 fn ctx_menu_row(
+  tid: &'static str,
   label: &'static str,
   danger: bool,
   dark_mode: Signal<bool>,
   on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
   button()
+    .test_id(tid)
     .w_full()
     .px_3()
     .py(px(6.0))
@@ -1821,6 +1937,7 @@ pub fn render_image_caption_modal(
                 .child(
                   input()
                     .test_id("image-caption-input")
+                    .auto_focus(true)
                     .placeholder("输入图注内容（留空清除）")
                     .submit_behavior(SubmitBehavior::Submit)
                     .w_full()
@@ -1876,29 +1993,32 @@ pub fn render_image_caption_modal(
 pub fn render_image_toast(ctx: ImageContext, dark_mode: Signal<bool>) -> impl IntoElement {
   let toast_sig = ctx.toast_state;
   when(move || toast_sig.get().is_some(), move || {
-    let msg = toast_sig.get().map(|(m, _)| m).unwrap_or_default();
     view()
-      .test_id("image-action-toast")
       .absolute()
       .bottom(px(20.0))
-      .left(relative(0.5))
-      .ml(px(-110.0))
-      .w(px(220.0))
-      .px_3()
-      .py_2()
-      .rounded(px(8.0))
+      .left_0()
+      .right_0()
       .items_center()
-      .justify_center()
-      .bg(move || palette(dark_mode.get()).surface_overlay)
-      .border_1()
-      .border_color(move || palette(dark_mode.get()).border_normal)
-      .shadow_md()
       .z_index(75)
       .pointer_events(PointerEvents::None)
       .child(
-        text(msg)
-          .text_size(px(12.5))
-          .text_color(move || palette(dark_mode.get()).text_primary),
+        view()
+          .test_id("image-action-toast")
+          .px_4()
+          .py_2()
+          .max_w(px(420.0))
+          .rounded(px(8.0))
+          .items_center()
+          .justify_center()
+          .bg(move || palette(dark_mode.get()).surface_overlay)
+          .border_1()
+          .border_color(move || palette(dark_mode.get()).border_normal)
+          .shadow_md()
+          .child(
+            text(move || toast_sig.get().map(|(m, _)| m).unwrap_or_default())
+              .text_size(px(12.5))
+              .text_color(move || palette(dark_mode.get()).text_primary),
+          ),
       )
   })
 }

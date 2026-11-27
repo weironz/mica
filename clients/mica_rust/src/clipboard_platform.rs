@@ -646,7 +646,15 @@ fn prepare_windows_clipboard_image(bytes: &[u8]) -> (Option<Vec<u8>>, Option<Vec
     for y in (0..h).rev() {
       for x in 0..w {
         let p = rgba.get_pixel(x, y).0;
-        dib.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+        // Composite semi-transparent pixels over opaque white for legacy `CF_DIB`
+        // consumers (MS Paint, older Word/Office, WeChat) that ignore or black-fill
+        // alpha in 32-bit `BI_RGB`, while the companion `"PNG"` format preserves alpha.
+        let a = u32::from(p[3]);
+        let inv = 255 - a;
+        let r = ((u32::from(p[0]) * a + 255 * inv + 127) / 255) as u8;
+        let g = ((u32::from(p[1]) * a + 255 * inv + 127) / 255) as u8;
+        let b = ((u32::from(p[2]) * a + 255 * inv + 127) / 255) as u8;
+        dib.extend_from_slice(&[b, g, r, 0xFF]);
       }
     }
     dib
@@ -807,5 +815,15 @@ mod tests {
     assert_eq!(dib.len(), 40 + 16);
     assert_eq!(&dib[0..4], &40u32.to_le_bytes());
     assert_eq!(&dib[40..44], &[0x30, 0x20, 0x10, 0xFF]);
+
+    // Transparent pixels must composite over white in CF_DIB (never black in Paint/Word),
+    // while PNG stays valid and alpha-preserving.
+    let transparent = image::RgbaImage::from_pixel(1, 1, image::Rgba([0x00, 0x00, 0x00, 0x00]));
+    let mut t_png = std::io::Cursor::new(Vec::new());
+    transparent.write_to(&mut t_png, image::ImageFormat::Png).unwrap();
+    let (t_out_png, t_out_dib) = prepare_windows_clipboard_image(t_png.get_ref());
+    assert!(t_out_png.is_some());
+    let t_dib = t_out_dib.expect("transparent CF_DIB");
+    assert_eq!(&t_dib[40..44], &[0xFF, 0xFF, 0xFF, 0xFF]);
   }
 }

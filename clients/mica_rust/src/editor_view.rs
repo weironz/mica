@@ -2865,10 +2865,7 @@ fn handle_editor_key(
     }
     EditorKeyAction::Copy => {
       if let Some((_, _, resolved)) = crate::image_blocks::selected_single_image_block(bridge, image_ctx) {
-        let ctx_cp = image_ctx.clone();
-        spawn(async move {
-          let _ = crate::image_blocks::copy_resolved_image_bitmap(&resolved, &ctx_cp).await;
-        });
+        crate::image_blocks::copy_image_from_user_action(resolved, image_ctx.clone());
         return;
       }
       let img_urls = crate::image_blocks::build_document_image_urls(bridge, image_ctx);

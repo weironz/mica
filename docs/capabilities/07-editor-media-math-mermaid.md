@@ -34,6 +34,7 @@
 - **反例 2（图片固定 `560×300` 拉伸变形）**：未读取本地图片文件头宽高，竖图和超宽截图全部被压扁或拉长。
 - **反例 3（SVG 内部 `<style>` 在部分光栅器失效）**：Mermaid 导出的 SVG 若依赖 CSS class 选择器，在非浏览器光栅器中会丢失颜色和线条，必须保留 `md-core` 的 CSS 属性内联展开处理。
 - **反例 4（忽略 `data.file_id` 导致历史云端图片全部显示「图片地址为空」）**：`v0.15.0` 切流初期仅读取 `data.url`/`data.src`，未解析云端/本地 CAS 存储的 `data.file_id` 与相对 `/api/.../blob` 路径，且选区复制传入空 `image_urls`、缺少位图复制与右键菜单。
+- **反例 5（右键菜单/悬停工具条内直接 `spawn()` 导致所有异步图片操作被瞬间取消）**：`nsh-core::spawn` 将任务取消句柄绑定到当前 `Owner::current()`；图片右键菜单处于 `when(menu_sig.is_some())` 子作用域下，点击「复制图片 / 剪切图片 / 替换图片… / 粘贴替换 / 下载图片 / 转存到 Mica」时先执行 `menu_sig.set(None)` 关闭菜单，下一拍子 `Owner` 被销毁并立即取消刚创建的异步任务，导致复制图片无法写入剪贴板（无法粘贴到 Mica、Word 或任何应用）、下载/替换无响应且提示 Toast 定时消失任务被取消而常驻。根治方案：`ImageContext` 捕获应用根级 `owner: Owner::current()` 并通过 `ctx.spawn(...)` 统一派生所有异步图片与 Toast 任务；同时 Windows `CF_DIB` 将透明通道预合成到白底避免 Paint/旧版 Word 变黑、桌面「粘贴替换」兼容资源管理器复制的图片文件（`CF_HDROP`）、Web 端复制同源/data 图片在点击手势内同步触发 `set_clipboard_image` 避免丢失用户激活。
 
 ---
 
@@ -43,7 +44,7 @@
 | --- | --- | --- | --- | --- |
 | `CAP-07-01` 多入口插入与云端/本地上传 | P0 | 桌面/Web | ✅ | `mica_client::net::tests::build_and_parse_file_blob_url_round_trip` + `image_blocks.rs` |
 | `CAP-07-02` `file_id` 解析、自然宽高比、对齐与拖拽缩放 | P0 | 全端 | ✅ | `image_blocks::tests::{resolve_cloud_file_id_builds_permanent_blob_url,resolve_server_relative_blob_path_prepends_origin_and_recognizes_file_id,set_image_source_by_id_preserves_width_align_and_caption}` |
-| `CAP-07-03` 选中/右侧光标换行/灯箱/位图复制/选区复制与右键菜单 | P0 | 全端 | ✅ | `image_blocks::tests::build_document_image_urls_maps_file_ids_for_selection_copy` + `clipboard_platform::tests::windows_clipboard_image_prepares_both_png_and_dib` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |
+| `CAP-07-03` 选中/右侧光标换行/灯箱/位图复制/选区复制与右键菜单 | P0 | 全端 | ✅ | `image_blocks::tests::build_document_image_urls_maps_file_ids_for_selection_copy` + `clipboard_platform::tests::windows_clipboard_image_prepares_both_png_and_dib` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `app_flows::regression_image_context_menu_actions_survive_menu_close` |
 | `CAP-07-04` 块级公式渲染与点击编辑 | P1 | 全端 | ✅ | `block_views.rs::render_math_block_view` |
 | `CAP-07-05` 行内公式原子渲染与光标保护 | P1 | 全端 | ✅ | L2 内核 `math_atom_run_detection_and_caret_snapping` + L3 点击行内 `$...$` 弹出 `editor_positioning::inline_math_popover_view` 实时 RaTeX SVG 预览与 `SetInlineMath` 编辑/删除（正文行内流式胶囊展示） |
 | `CAP-07-06` / `07` / `08` Mermaid 主题渲染、灯箱缩放与源码编辑 | P0 | 全端 | ✅ | `app_flows::virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch` |
@@ -56,3 +57,4 @@
 - **2026-11-23（补齐迭代）**：新增点击行内 `$...$` 公式弹出的实时 RaTeX SVG 预览与源码编辑浮层（`inline-math-popover`，直连 `EditorCommand::SetInlineMath`，`CAP-07-05`）。
 - **2026-11-25**：全面恢复对齐 `v0.14.11` 的图片管线与交互（`crates/mica-client` 接入 `upload_image`/`import_image_url`/`resolve_files`/`download_url_bytes`；`clients/mica_rust/src/image_blocks.rs` 补齐 `file_id` + 相对 `/api/.../blob` 解析、桌面 CAS 镜像、`on_load` 自然宽高比、单击选中/双击灯箱、悬停工具条、右边缘拖拽缩放、完整右键菜单、Windows `PNG`+`CF_DIB` / Web 位图复制与选区 `image_urls` 映射）。
 - **2026-11-27（图片右侧点击显示光标并回车换行）**：在 `image_blocks.rs` 为图片外层容器补充 `Cursor::Text` 与 `on_press_down` 聚焦选中、在图片右侧渲染闪烁尾随光标 `image-trailing-caret`，点击图片或图片右侧空白后即可按 `Enter` 在下方插入新段落（`CAP-07-03`）。
+- **2026-11-27（图片右键菜单异步任务存活根治）**：`ImageContext` 捕获根级 `Owner` 并将全部异步任务（复制/剪切/下载/替换/粘贴替换/转存/Toast 自动消失及 `Ctrl+C`）统一经由 `ctx.spawn` 执行，根治关闭右键菜单或移出悬停条时异步任务被取消导致「复制图片」无法粘贴到 Mica/Word 及其他菜单项失效的问题；同步补齐 Windows `CF_DIB` 白底合成、桌面「粘贴替换」`CF_HDROP` 支持、Web 手势内同步复制与图注弹窗自动聚焦（`CAP-07-03`）。
