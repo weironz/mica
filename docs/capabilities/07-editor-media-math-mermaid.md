@@ -15,7 +15,7 @@
 ### 图片块（Image）
 - **`CAP-07-01` 多入口插入与云端/本地上传**：支持通过 `/` 斜杠菜单、顶栏图片按钮（桌面原生文件选择器 & Web `<input type="file">`）、系统剪贴板截图/网页复制图片 `Mod+V`、文件管理器复制图片文件 `Mod+V`、粘贴裸图片 URL 插入图片块；云端空间走 `files/presign → PUT → files/complete` 上传并写入 `data.file_id` + `data.name`（桌面同时镜像本地 CAS 供离线读取），本地空间存入内容寻址 CAS，同工作区 Mica `/blob` 链接直接复用 `file_id`。
 - **`CAP-07-02` `file_id` 解析、自然宽高比、对齐与拖拽缩放**：统一解析 `data.file_id`（优先本地 CAS 镜像，未命中拼接永久 `/api/workspaces/{ws}/files/{file_id}/blob/{name}` 直链）、服务端相对 `/api/...` 路径以及外链 `data.url`（外链左上角显示「外链」徽章，加载失败提示域名）；通过本地文件头探测 + `Image::on_load` 获取真实自然宽高比，严禁硬编码固定宽高强行拉伸；悬停支持「放大 / 复制 / 左 / 中 / 右 / 图注（`data.caption`）/ 删除」，右边缘提供拖拽缩放手柄实时调整并持久化 `data.width`。
-- **`CAP-07-03` 单击选中、双击灯箱、位图复制与右键菜单**：单击图片选中整块（蓝框高亮，支持 `Mod+C` 复制位图、`Mod+X` 剪切、`Backspace`/`Delete` 删除）；双击或点击「放大」打开全屏缩放/平移灯箱；右键菜单提供存储位置提示、全屏查看、编辑图注、替换图片、转存到 Mica（外链双阶梯服务端+客户端兜底）、复制图片（Windows 同步写入 `PNG` + `CF_DIB`，macOS/Linux/Web 写入位图剪贴板）、剪切图片、粘贴替换（桌面）、复制公开链接、在浏览器打开、下载/另存为与删除；多块/选区复制时将 `file_id` 解析为永久 `/blob` 链接写入 Markdown 与 HTML。
+- **`CAP-07-03` 单击选中、右侧点击光标换行、双击灯箱、位图复制与右键菜单**：单击图片或其右侧空白区域选中整块并获得编辑器焦点（蓝框高亮并在图片最右侧显示闪烁光标 `image-trailing-caret`，按 `Enter` 直接在下方插入新段落换行，支持 `Mod+C` 复制位图、`Mod+X` 剪切、`Backspace`/`Delete` 删除）；双击或点击「放大」打开全屏缩放/平移灯箱；右键菜单提供存储位置提示、全屏查看、编辑图注、替换图片、转存到 Mica（外链双阶梯服务端+客户端兜底）、复制图片（Windows 同步写入 `PNG` + `CF_DIB`，macOS/Linux/Web 写入位图剪贴板）、剪切图片、粘贴替换（桌面）、复制公开链接、在浏览器打开、下载/另存为与删除；多块/选区复制时将 `file_id` 解析为永久 `/blob` 链接写入 Markdown 与 HTML。
 
 ### 数学公式（LaTeX / RaTeX）
 - **`CAP-07-04` 块级数学公式（`math_block`）**：使用 `mica_md::render::render_math_svg` 渲染高清矢量公式，支持点击展开 LaTeX 源码输入框实时预览编辑，回车收起；浅/深色主题自动切换前景色与柔和底色。
@@ -43,7 +43,7 @@
 | --- | --- | --- | --- | --- |
 | `CAP-07-01` 多入口插入与云端/本地上传 | P0 | 桌面/Web | ✅ | `mica_client::net::tests::build_and_parse_file_blob_url_round_trip` + `image_blocks.rs` |
 | `CAP-07-02` `file_id` 解析、自然宽高比、对齐与拖拽缩放 | P0 | 全端 | ✅ | `image_blocks::tests::{resolve_cloud_file_id_builds_permanent_blob_url,resolve_server_relative_blob_path_prepends_origin_and_recognizes_file_id,set_image_source_by_id_preserves_width_align_and_caption}` |
-| `CAP-07-03` 选中/灯箱/位图复制/选区复制与右键菜单 | P0 | 全端 | ✅ | `image_blocks::tests::build_document_image_urls_maps_file_ids_for_selection_copy` + `clipboard_platform::tests::windows_clipboard_image_prepares_both_png_and_dib` |
+| `CAP-07-03` 选中/右侧光标换行/灯箱/位图复制/选区复制与右键菜单 | P0 | 全端 | ✅ | `image_blocks::tests::build_document_image_urls_maps_file_ids_for_selection_copy` + `clipboard_platform::tests::windows_clipboard_image_prepares_both_png_and_dib` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |
 | `CAP-07-04` 块级公式渲染与点击编辑 | P1 | 全端 | ✅ | `block_views.rs::render_math_block_view` |
 | `CAP-07-05` 行内公式原子渲染与光标保护 | P1 | 全端 | ✅ | L2 内核 `math_atom_run_detection_and_caret_snapping` + L3 点击行内 `$...$` 弹出 `editor_positioning::inline_math_popover_view` 实时 RaTeX SVG 预览与 `SetInlineMath` 编辑/删除（正文行内流式胶囊展示） |
 | `CAP-07-06` / `07` / `08` Mermaid 主题渲染、灯箱缩放与源码编辑 | P0 | 全端 | ✅ | `app_flows::virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch` |
@@ -55,3 +55,4 @@
 - **2026-11-23**：沉淀 Mermaid 全屏灯箱、自然宽高比图片渲染与 RaTeX 公式规格（对应 `3f033c30` / `ff104b87`）。
 - **2026-11-23（补齐迭代）**：新增点击行内 `$...$` 公式弹出的实时 RaTeX SVG 预览与源码编辑浮层（`inline-math-popover`，直连 `EditorCommand::SetInlineMath`，`CAP-07-05`）。
 - **2026-11-25**：全面恢复对齐 `v0.14.11` 的图片管线与交互（`crates/mica-client` 接入 `upload_image`/`import_image_url`/`resolve_files`/`download_url_bytes`；`clients/mica_rust/src/image_blocks.rs` 补齐 `file_id` + 相对 `/api/.../blob` 解析、桌面 CAS 镜像、`on_load` 自然宽高比、单击选中/双击灯箱、悬停工具条、右边缘拖拽缩放、完整右键菜单、Windows `PNG`+`CF_DIB` / Web 位图复制与选区 `image_urls` 映射）。
+- **2026-11-27（图片右侧点击显示光标并回车换行）**：在 `image_blocks.rs` 为图片外层容器补充 `Cursor::Text` 与 `on_press_down` 聚焦选中、在图片右侧渲染闪烁尾随光标 `image-trailing-caret`，点击图片或图片右侧空白后即可按 `Enter` 在下方插入新段落（`CAP-07-03`）。

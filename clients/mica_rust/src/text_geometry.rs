@@ -173,12 +173,20 @@ pub fn lines_usable_for_text(lines: &[TextLine], text: &str) -> bool {
   }
   let max_end = lines.iter().map(|l| l.end).max().unwrap_or(0);
   // Allow a trailing `\n` / `\r` difference of 1 UTF-16 unit (DirectWrite strips
-  // trailing newlineLength from `line.end`), but reject anything shorter.
+  // trailing newlineLength from `line.end`), and a trailing `\u{200B}` (+1) ONLY
+  // when `visible` ends with `\n`. Reject both shorter stale layouts (after insert)
+  // AND longer stale layouts (after Backspace / Delete) immediately so caret
+  // updates never stall waiting on an asynchronous TextLayout round-trip!
   let min_expected = visible
     .trim_end_matches(['\n', '\r'])
     .encode_utf16()
     .count() as u32;
-  if max_end < min_expected {
+  let max_expected = if visible.ends_with('\n') {
+    u16_len + 1
+  } else {
+    u16_len
+  };
+  if max_end < min_expected || max_end > max_expected {
     return false;
   }
   let has_non_ws = visible.chars().any(|c| !c.is_whitespace());
@@ -744,5 +752,19 @@ mod tests {
     // Hit-testing middle of line 1 resolves a real mid-string offset, never stuck at 0!
     let hit = offset_at_point(&resolved, 160.0, 12.0, "", &fixed_measure);
     assert!(hit > 10 && hit < total_u16, "expected mid-line hit offset, got {hit}");
+  }
+
+  #[test]
+  fn lines_usable_for_text_rejects_stale_longer_layout_after_backspace() {
+    let stale = vec![mk_line("hello_world", 0, 0.0)];
+    assert!(lines_usable_for_text(&stale, "hello_world"));
+    assert!(
+      !lines_usable_for_text(&stale, "hello_worl"),
+      "1-char Backspace shrinking text must reject stale longer TextLayout immediately"
+    );
+    assert!(
+      !lines_usable_for_text(&stale, "hello"),
+      "multi-char Backspace must reject stale longer TextLayout"
+    );
   }
 }

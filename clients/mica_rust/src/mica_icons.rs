@@ -231,6 +231,22 @@ pub fn divider_icon(color: &str) -> Svg {
   stroked(17.0, color, r##"<path d="M3.5 10H16.5"/>"##)
 }
 
+pub fn indent_increase(color: &str) -> Svg {
+  stroked(
+    17.0,
+    color,
+    r##"<path d="M3.5 5H16.5M9.5 8.5H16.5M9.5 12H16.5M3.5 15.5H16.5M3.5 8L6.5 10.25L3.5 12.5"/>"##,
+  )
+}
+
+pub fn indent_decrease(color: &str) -> Svg {
+  stroked(
+    17.0,
+    color,
+    r##"<path d="M3.5 5H16.5M9.5 8.5H16.5M9.5 12H16.5M3.5 15.5H16.5M6.5 8L3.5 10.25L6.5 12.5"/>"##,
+  )
+}
+
 pub fn table_icon(color: &str) -> Svg {
   stroked(
     17.0,

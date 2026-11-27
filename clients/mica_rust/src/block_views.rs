@@ -538,19 +538,52 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         })
         .px_6()
         .relative()
-        .child(dynamic(move || {
-          let Some(block_id) = cell_block_id.get() else {
-            return view().h(px(1.0)).into_element();
-          };
-          let rev_sig = bridge.block_rev_signal(&block_id);
-          rev_sig.get();
-          let Some(block) = bridge.block_by_id(&block_id) else {
-            return view().h(px(1.0)).into_element();
-          };
-          let idx_now = live_index(at);
-          layouts_reg.borrow_mut().register_row_ref(&block_id, idx_now, row_ref);
-          render_block_body(&env, at, block)
-        }))
+        .child({
+          // Keep `code_block` mounted across in-block typing / Enter / Backspace so
+          // rapid Backspace repeats never tear down and rebuild the whole code card,
+          // toolbar, overlays, or `text_ref`. Other block kinds keep their exact
+          // per-block `rev_sig` rebuild path; kind or `li` changes still switch cleanly.
+          let br_id_check = bridge.clone();
+          let cell_render_key = computed(move || {
+            let block_id = cell_block_id.get()?;
+            let rev_sig = br_id_check.block_rev_signal(&block_id);
+            let rev = rev_sig.get();
+            let block = br_id_check.block_by_id(&block_id)?;
+            let is_code = effective_block_kind(&block) == "code_block";
+            let li_bits = list_continuation_inset_px(&block).to_bits();
+            Some((block_id, is_code, li_bits, if is_code { 0 } else { rev }))
+          });
+          dynamic(move || {
+            let Some((block_id, is_code, _, _)) = cell_render_key.get() else {
+              return view().h(px(1.0)).into_element();
+            };
+            let idx_now = live_index(at);
+            layouts_reg.borrow_mut().register_row_ref(&block_id, idx_now, row_ref);
+            if is_code {
+              let rev_sig = bridge.block_rev_signal(&block_id);
+              let li_inset = bridge
+                .block_by_id(&block_id)
+                .map(|b| list_continuation_inset_px(&b))
+                .unwrap_or(0.0);
+              let inner = render_code_block_view(&env, at, block_id, rev_sig).into_element();
+              if li_inset > 0.0 {
+                view()
+                  .test_id("list-nested-block")
+                  .w_full()
+                  .pl(px(li_inset))
+                  .child(inner)
+                  .into_element()
+              } else {
+                inner
+              }
+            } else {
+              let Some(block) = bridge.block_by_id(&block_id) else {
+                return view().h(px(1.0)).into_element();
+              };
+              render_block_body(&env, at, block)
+            }
+          })
+        })
         // Scoped non-interactive selection highlight for marquee block selection
         // AND cross-block range selections spanning non-prose blocks (tables,
         // dividers, code blocks, images, boards, Mermaid, math).
@@ -582,7 +615,10 @@ pub(crate) fn list_continuation_inset_px(block: &EditorBlock) -> f32 {
 fn render_block_body(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> AnyElement {
   let li_inset = list_continuation_inset_px(&block);
   let inner = match effective_block_kind(&block) {
-    "code_block" => render_code_block_view(env, at, block).into_element(),
+    "code_block" => {
+      let rev_sig = env.bridge.block_rev_signal(&block.id);
+      render_code_block_view(env, at, block.id, rev_sig).into_element()
+    }
     "board" => render_board_block_view(env, at, block).into_element(),
     "mermaid" => render_mermaid_block_view(env, at, block).into_element(),
     "math" | "math_block" => render_math_block_view(env, at, block).into_element(),
@@ -1632,7 +1668,40 @@ const CODE_LANGUAGES: &[&str] = &[
   "xml", "yaml",
 ];
 
-fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
+/// Resolves `(highlight_lang, toolbar_badge_label)` for a code block:
+/// - Explicit user choice (non-empty and not `"auto"`) is preserved verbatim.
+/// - Empty / `"auto"` runs `mica_md::highlight::detect_code_language` on a bounded
+///   prefix of `source`: whenever a concrete language (other than `"plaintext"`) is
+///   detected, both syntax highlighting and the badge show that detected language
+///   instead of `"auto"`.
+pub fn resolve_code_block_language_display(raw_lang: &str, source: &str) -> (String, String) {
+  let trimmed = raw_lang.trim();
+  if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("auto") {
+    return (trimmed.to_string(), trimmed.to_string());
+  }
+  let sample = if source.len() > 4096 {
+    let mut cut = 4096;
+    while cut > 0 && !source.is_char_boundary(cut) {
+      cut -= 1;
+    }
+    &source[..cut]
+  } else {
+    source
+  };
+  let detected = mica_md::highlight::detect_code_language(sample);
+  if !detected.is_empty() && detected != "plaintext" {
+    (detected.clone(), detected)
+  } else {
+    ("plaintext".to_string(), "auto".to_string())
+  }
+}
+
+fn render_code_block_view(
+  env: &BlockRenderEnv,
+  at: Position,
+  block_id: String,
+  rev_sig: Signal<u64>,
+) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let layouts = env.layouts.clone();
@@ -1647,7 +1716,6 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let editor_focused = env.editor_focused;
   let caret_blink_on = env.caret_blink_on;
   let sink_clear_rev = env.sink_clear_rev;
-  let block_id = block.id.clone();
   let ai_cb = use_context::<CodeAiCallback>();
 
   let hovered = signal(false);
@@ -1667,27 +1735,49 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let text_ref = element_ref();
   layouts.borrow_mut().register_text_ref(&block_id, text_ref);
 
-  let raw_lang = block
-    .data
-    .get("language")
-    .and_then(Value::as_str)
-    .unwrap_or("")
-    .trim()
-    .to_string();
-  let lang_label = if raw_lang.is_empty() { "auto".to_string() } else { raw_lang.clone() };
-  let wrap = block.data.get("wrap").and_then(Value::as_bool).unwrap_or(false);
-  let line_numbers = block.data.get("lineNumbers").and_then(Value::as_bool).unwrap_or(false);
-  let title = block
-    .data
-    .get("title")
-    .and_then(Value::as_str)
-    .unwrap_or("")
-    .to_string();
+  let br_snap = bridge.clone();
+  let bid_snap = block_id.clone();
+  let live_block = computed(move || {
+    rev_sig.get();
+    br_snap.block_by_id(&bid_snap)
+  });
+  let live_src = computed(move || {
+    live_block.get().map(|b| b.text).unwrap_or_default()
+  });
+  let live_meta = computed(move || {
+    live_block
+      .get()
+      .map(|b| {
+        let raw_lang = b
+          .data
+          .get("language")
+          .and_then(Value::as_str)
+          .unwrap_or("")
+          .trim()
+          .to_string();
+        let wrap = b.data.get("wrap").and_then(Value::as_bool).unwrap_or(false);
+        let line_numbers = b.data.get("lineNumbers").and_then(Value::as_bool).unwrap_or(false);
+        let title = b
+          .data
+          .get("title")
+          .and_then(Value::as_str)
+          .unwrap_or("")
+          .to_string();
+        (raw_lang, wrap, line_numbers, title)
+      })
+      .unwrap_or_else(|| (String::new(), false, false, String::new()))
+  });
+  let live_lang = computed(move || {
+    let (raw_lang, _, _, _) = live_meta.get();
+    let src = live_src.get();
+    resolve_code_block_language_display(&raw_lang, &src)
+  });
+  let live_wrap = computed(move || live_meta.get().1);
+  let live_line_numbers = computed(move || live_meta.get().2);
+  let live_title = computed(move || live_meta.get().3);
+
   let title_editing = signal(false);
-  let title_draft = signal(title.clone());
-  let source = block.text.clone();
-  let live_src = signal(source.clone());
-  let src_ai = source.clone();
+  let title_draft = signal(live_title.get_untracked());
 
   let br_caret_chk = bridge.clone();
   let is_caret_in_block = computed(move || {
@@ -1703,13 +1793,9 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let br_ln = bridge.clone();
   let br_title = bridge.clone();
   let br_del = bridge.clone();
-  let lang_for_hl = raw_lang.clone();
-  let lang_for_picker = lang_label.clone();
 
   let code_font = "14px monospace";
   let code_line_h = 22.0_f32;
-  let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
-  let text_u16_len = utf16_len(&source);
 
   let code_text_box = {
     let layouts_f = layouts.clone();
@@ -1728,9 +1814,6 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
     let br_sel = bridge.clone();
     let br_find = bridge.clone();
     let preedit_overlay_sig = bridge.ime_preedit_signal();
-    let text_click = source.clone();
-    let text_render = source.clone();
-    let lang_hl = lang_for_hl.clone();
     let measure: TextMeasureFn = Rc::new(text_measurer());
     let measure_sel = measure.clone();
     let measure_click = measure.clone();
@@ -1744,11 +1827,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
     let tap_tracker_code = env.touch_tap_tracker.clone();
     let layouts_code_lp = layouts.clone();
     let bid_code_lp = block_id.clone();
-    let text_code_lp = source.clone();
     let br_code_lp = bridge.clone();
 
-    let code_sel_text = source.clone();
-    let text_code_move = source.clone();
     let code_page_w = env.page_width;
     let code_sel_page_w = env.page_width;
     let hit_code_offset = move |layouts_ref: &Rc<RefCell<VisibleLayoutCache>>,
@@ -1760,7 +1840,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           -> u32 {
       let cache = layouts_ref.borrow();
       let eff = code_page_w.get_untracked();
-      let fallback_w = if wrap {
+      let fallback_w = if live_wrap.get_untracked() {
         if crate::page_width::is_full_width(eff) {
           820.0
         } else {
@@ -1777,7 +1857,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         code_line_h,
         &|f, t| meas(f, t),
       );
-      offset_at_point(&lines, lx, ly, code_font, &|f, t| meas(f, t)).min(text_u16_len)
+      offset_at_point(&lines, lx, ly, code_font, &|f, t| meas(f, t)).min(utf16_len(block_text))
     };
 
     view()
@@ -1811,6 +1891,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         marquee_origin_page.set(None);
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
 
+        let text_click = live_src.get_untracked();
+        let text_u16_len = utf16_len(&text_click);
         let off = hit_code_offset(&layouts_click, &bid_click, &text_click, &measure_click, e.position.x.0, e.position.y.0);
         let is_touch = last_ptr_touch_code.get_untracked();
         let click_count = if is_touch {
@@ -1855,6 +1937,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         blank_marquee_ready.set(false);
         marquee_origin_page.set(None);
         drag_anchor.set(None);
+        let text_code_lp = live_src.get_untracked();
         let off = hit_code_offset(&layouts_code_lp, &bid_code_lp, &text_code_lp, &measure_lp, e.position.x.0, e.position.y.0);
         let idx = live_index(at);
         let (ws, we) = crate::touch_selection::touch_word_bounds(&text_code_lp, off);
@@ -1871,7 +1954,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           marquee_selected.set(None);
           focused_code.set(None);
           focused_cell.set(None);
-          br_press.set_selection(DocSelection::caret(idx, text_u16_len));
+          let end = utf16_len(&live_src.get_untracked());
+          br_press.set_selection(DocSelection::caret(idx, end));
           br_press.request_focus();
         }
       })
@@ -1884,6 +1968,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         };
         inner_drag_hit_code.set(Some((e.page_position.x.0, e.page_position.y.0)));
         let idx = live_index(at);
+        let text_code_move = live_src.get_untracked();
         let off = hit_code_offset(&layouts_move, &bid_move, &text_code_move, &measure_move, e.position.x.0, e.position.y.0);
         let next = DocSelection::from_positions(anchor, DocPosition::new(idx, off));
         if br_move.selection().as_ref() != Some(&next) {
@@ -1896,6 +1981,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         let br_ov_find = br_find.clone();
         let local_overlay = computed(move || {
           let idx = at.index();
+          let rev = rev_sig.get();
           let in_marquee = marquee_selected
             .get()
             .is_some_and(|(lo, hi)| idx >= lo && idx <= hi);
@@ -1931,20 +2017,22 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           if sel_relevant.is_none() && !has_find {
             None
           } else {
-            Some((idx, layout_rev.get(), dark_mode.get(), sel_relevant, has_find, find_active))
+            Some((idx, rev, layout_rev.get(), dark_mode.get(), sel_relevant, has_find, find_active))
           }
         });
         dynamic(move || {
-          let Some((idx, _lrev, dark, sel_relevant, has_find, find_active)) = local_overlay.get() else {
+          let Some((idx, _rev, _lrev, dark, sel_relevant, has_find, find_active)) = local_overlay.get() else {
             return view()
               .absolute()
               .inset_0()
               .pointer_events(PointerEvents::None);
           };
           let p = palette(dark);
+          let code_sel_text = live_src.get_untracked();
+          let text_u16_len = utf16_len(&code_sel_text);
           let cache = layouts_sel.borrow();
           let eff = code_sel_page_w.get_untracked();
-          let fallback_w = if wrap {
+          let fallback_w = if live_wrap.get_untracked() {
             if crate::page_width::is_full_width(eff) {
               820.0
             } else {
@@ -2084,10 +2172,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
       })
       // 2. Ghost placeholder when empty (pointer-events none so caret stays at (0, 0))
       .child(when(
-        {
-          let is_empty = text_render.is_empty();
-          move || is_empty
-        },
+        move || live_src.get().is_empty(),
         move || {
           view()
             .absolute()
@@ -2103,9 +2188,11 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
             )
         },
       ))
-      // 3. Single unified syntax-highlighted code text (identical whether focused or unfocused,
-      //    zero theme jump, zero indent guide lines, native `EventKind::TextLayout`!)
+      // 3. Single unified syntax-highlighted code text (updates in-place on typing /
+      //    Backspace without tearing down the outer card, toolbar, or overlays!)
       .child(dynamic(move || {
+        let text_render = live_src.get();
+        let (lang_hl, _) = live_lang.get();
         render_highlighted_code_text(&text_render, &lang_hl, dark_mode)
           .on(EventKind::TextLayout, {
             let layouts_tl = layouts_l.clone();
@@ -2129,16 +2216,11 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
   let touch_sel_card = env.touch_selection_active;
   let last_ptr_touch_card = env.last_pointer_is_touch;
   let br_card_down = bridge.clone();
-  let mut code_row = view()
+  let code_row = view()
     .w_full()
     .flex_row()
-    .items_start();
-  if line_numbers {
-    let nums: String = (1..=line_count)
-      .map(|n| n.to_string())
-      .collect::<Vec<_>>()
-      .join("\n");
-    code_row = code_row.child(
+    .items_start()
+    .child(when(move || live_line_numbers.get(), move || {
       view()
         .min_w(px(28.0))
         .pr(px(12.0))
@@ -2146,15 +2228,20 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         .items_end()
         .pointer_events(PointerEvents::None)
         .child(
-          text(nums)
-            .text_size(px(13.0))
-            .line_height(px(code_line_h))
-            .font_family("monospace")
-            .text_color(move || palette(dark_mode.get()).text_faint),
-        ),
-    );
-  }
-  code_row = code_row.child(code_text_box);
+          text(move || {
+            let line_count = live_src.get().bytes().filter(|&b| b == b'\n').count() + 1;
+            (1..=line_count)
+              .map(|n| n.to_string())
+              .collect::<Vec<_>>()
+              .join("\n")
+          })
+          .text_size(px(13.0))
+          .line_height(px(code_line_h))
+          .font_family("monospace")
+          .text_color(move || palette(dark_mode.get()).text_faint),
+        )
+    }))
+    .child(code_text_box);
 
   let layouts_row = layouts;
   let bid_row = block_id;
@@ -2195,6 +2282,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
           touch_sel_card.set(false);
           sink_clear_rev.update(|v| *v = v.wrapping_add(1));
           let idx = live_index(at);
+          let text_u16_len = utf16_len(&live_src.get_untracked());
           let off = if e.position.x.0 < 14.0 { 0 } else { text_u16_len };
           let pos = DocPosition::new(idx, off);
           drag_anchor.set(if last_ptr_touch_card.get_untracked() {
@@ -2219,7 +2307,6 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                 || copied.get())
           },
           move || {
-            let lbl = lang_label.clone();
             view()
               .test_id("code-block-toolbar")
               .absolute()
@@ -2249,7 +2336,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                     lang_open.set(!lang_open.get_untracked());
                   })
                   .child(
-                    text(format!("{lbl} ▾"))
+                    text(move || format!("{} ▾", live_lang.get().1))
                       .text_size(px(12.0))
                       .text_color(move || palette(dark_mode.get()).text_muted),
                   ),
@@ -2319,10 +2406,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         // Top-level `overlay()` Language Picker — NEVER occluded by boards below!
         .child(when(move || lang_open.get(), {
           let br_l = br_lang.clone();
-          let cur_lang = lang_for_picker.clone();
           move || {
             let br_l2 = br_l.clone();
-            let cur_l2 = cur_lang.clone();
             overlay()
               .anchor(&lang_btn_ref)
               .placement(Placement::Bottom)
@@ -2359,6 +2444,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                   )
                   .child(scroll().w_full().h(px(220.0)).child(dynamic(move || {
                     let q = lang_query.get().trim().to_ascii_lowercase();
+                    let cur_l2 = live_lang.get().1;
                     let p = palette(dark_mode.get());
                     let mut list = view().w_full();
                     let mut count = 0usize;
@@ -2422,10 +2508,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
         // Top-level `overlay()` Ask AI menu
         .child(when(move || ai_open.get(), {
           let ai_cb_m = ai_cb.clone();
-          let src_m = src_ai.clone();
           move || {
             let ai_cb_i = ai_cb_m.clone();
-            let src_i = src_m.clone();
             let items: [(CodeAiAction, &str, &str); 4] = [
               (CodeAiAction::Explain, "解释代码", "code-ai-explain"),
               (CodeAiAction::Improve, "优化代码", "code-ai-improve"),
@@ -2442,7 +2526,6 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
               .border_color(move || palette(dark_mode.get()).border_normal);
             for (action, label, tid) in items {
               let cb = ai_cb_i.clone();
-              let src = src_i.clone();
               menu = menu.child(
                 button()
                   .test_id(tid)
@@ -2457,7 +2540,7 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                   .on_press(move || {
                     ai_open.set(false);
                     if let Some(c) = &cb {
-                      (c.0)(action, live_index(at), src.clone());
+                      (c.0)(action, live_index(at), live_src.get_untracked());
                     } else {
                       ai_notice.set(Some("请先在设置中配置 AI 模型".to_string()));
                       let g = ai_notice_gen.get_untracked().wrapping_add(1);
@@ -2519,11 +2602,11 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                       .items_center()
                       .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                       .on_press(move || {
-                        bw.update_block_data_attr_at(live_index(at), "wrap", Value::Bool(!wrap));
+                        bw.update_block_data_attr_at(live_index(at), "wrap", Value::Bool(!live_wrap.get_untracked()));
                         more_open.set(false);
                       })
                       .child(
-                        text(if wrap { "取消换行" } else { "自动换行" })
+                        text(move || if live_wrap.get() { "取消换行" } else { "自动换行" })
                           .text_size(px(12.5))
                           .text_color(move || palette(dark_mode.get()).text_primary),
                       ),
@@ -2539,11 +2622,11 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                       .items_center()
                       .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                       .on_press(move || {
-                        bl.update_block_data_attr_at(live_index(at), "lineNumbers", Value::Bool(!line_numbers));
+                        bl.update_block_data_attr_at(live_index(at), "lineNumbers", Value::Bool(!live_line_numbers.get_untracked()));
                         more_open.set(false);
                       })
                       .child(
-                        text(if line_numbers { "隐藏行号" } else { "显示行号" })
+                        text(move || if live_line_numbers.get() { "隐藏行号" } else { "显示行号" })
                           .text_size(px(12.5))
                           .text_color(move || palette(dark_mode.get()).text_primary),
                       ),
@@ -2560,13 +2643,16 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                       .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                       .on_press(move || {
                         more_open.set(false);
+                        title_draft.set(live_title.get_untracked());
                         title_editing.set(true);
                       })
                       .child(
-                        text(if title_draft.get_untracked().trim().is_empty() {
-                          "添加标题"
-                        } else {
-                          "编辑标题"
+                        text(move || {
+                          if live_title.get().trim().is_empty() {
+                            "添加标题"
+                          } else {
+                            "编辑标题"
+                          }
                         })
                         .text_size(px(12.5))
                         .text_color(move || palette(dark_mode.get()).text_primary),
@@ -2662,25 +2748,19 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
       }
     }))
     .child(when(
-      {
-        let has_t = !title.trim().is_empty();
-        move || has_t && !title_editing.get()
-      },
-      {
-        let t_cap = title.clone();
-        move || {
-          view()
-            .test_id("code-block-caption")
-            .w_full()
-            .h(px(22.0))
-            .items_center()
-            .justify_center()
-            .child(
-              text(t_cap.clone())
-                .text_size(px(12.0))
-                .text_color(move || palette(dark_mode.get()).text_muted),
-            )
-        }
+      move || !live_title.get().trim().is_empty() && !title_editing.get(),
+      move || {
+        view()
+          .test_id("code-block-caption")
+          .w_full()
+          .h(px(22.0))
+          .items_center()
+          .justify_center()
+          .child(
+            text(move || live_title.get())
+              .text_size(px(12.0))
+              .text_color(move || palette(dark_mode.get()).text_muted),
+          )
       },
     ))
 }
@@ -4047,6 +4127,27 @@ mod tests {
     assert_eq!(
       hit_link_in_lines(&lines, text, &marks, 320.0, 10.0, "400 15px sans-serif", 24.0, &measure),
       None
+    );
+  }
+
+  #[test]
+  fn resolve_code_block_language_display_detects_bash_and_hides_auto() {
+    let bash_cmd = "ping -D 8.8.8.8 | tee -a /tmp/fgt_upgrade_ping_$(date +%Y%m%d_%H%M).log";
+    assert_eq!(
+      resolve_code_block_language_display("", bash_cmd),
+      ("bash".to_string(), "bash".to_string())
+    );
+    assert_eq!(
+      resolve_code_block_language_display("auto", bash_cmd),
+      ("bash".to_string(), "bash".to_string())
+    );
+    assert_eq!(
+      resolve_code_block_language_display("", ""),
+      ("plaintext".to_string(), "auto".to_string())
+    );
+    assert_eq!(
+      resolve_code_block_language_display("python", bash_cmd),
+      ("python".to_string(), "python".to_string())
     );
   }
 }

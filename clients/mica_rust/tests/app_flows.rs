@@ -2114,3 +2114,146 @@ fn regression_table_default_fits_page_live_column_drag_and_right_edge_resize() {
     title_box.size.width.0
   );
 }
+
+#[test]
+fn regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons() {
+  use nsh_core::{
+    EventKind, EventPayload, PressEvent,
+    geometry::point,
+    keymap::Modifiers,
+  };
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面").unwrap();
+
+  // 1. Auto language detection in code block: inserting a code block starts as `auto`,
+  //    and typing/pasting a shell pipeline immediately switches the badge to `bash ▾` (no `auto`).
+  app.press("id:ed-code-block").unwrap();
+  app.wait_for("id:code-block-editor").unwrap();
+  app.wait_for("auto ▾").unwrap();
+  let cmd = "ping -D 8.8.8.8 | tee -a /tmp/out.log";
+  app.type_text("id:mica-editor-ime-sink", cmd).unwrap();
+  app.wait_for("bash ▾").unwrap();
+  assert!(
+    !app.shows("auto ▾"),
+    "recognized code language must display detected language instead of 'auto'"
+  );
+
+  // 2. Rapid Backspace inside the stably-mounted code block deletes characters smoothly
+  //    without dropping focus or stalling.
+  for _ in 0..8 {
+    app.press_key("backspace").unwrap();
+  }
+  app.wait_for("ping -D 8.8.8.8 | tee -a /tmp").unwrap();
+  assert!(
+    !app.shows("/tmp/out.log"),
+    "repeated Backspace inside code block must delete trailing chars cleanly"
+  );
+
+  // 3. Clicking the right side of an image block shows the trailing caret and pressing Enter
+  //    inserts a fresh paragraph below the image!
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面").unwrap();
+  let mut img_paste = nsh_core::PasteEvent::default();
+  img_paste.text = "![示例图](https://example.com/demo.png)".into();
+  app.paste("id:mica-editor-ime-sink", &img_paste).unwrap();
+  app.wait_for("id:node-view-image").unwrap();
+
+  let img_row = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("node-view-image"))
+    .expect("node-view-image must be laid out");
+  let right_local = point(
+    px((img_row.bounds.size.width.0 - 12.0).max(10.0)),
+    px(img_row.bounds.size.height.0 * 0.5),
+  );
+  let right_page = point(
+    img_row.bounds.origin.x + right_local.x,
+    img_row.bounds.origin.y + right_local.y,
+  );
+  app.engine().control().dispatch_event(
+    img_row.id,
+    EventKind::PressDown,
+    EventPayload::Press(PressEvent {
+      position: right_local,
+      page_position: right_page,
+      modifiers: Modifiers::default(),
+      clicks: 1,
+    }),
+  );
+  app.settle();
+  app.wait_for("id:image-trailing-caret").unwrap();
+
+  app.press_key("enter").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "图片下方新行").unwrap();
+  app.wait_for("图片下方新行").unwrap();
+  app.wait_for("id:node-view-image").unwrap();
+
+  // 4. Toolbar & floating selection bubble menu both expose increase/decrease indent buttons.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面").unwrap();
+  let mut list_paste = nsh_core::PasteEvent::default();
+  list_paste.text = "- 第一项\n- 第二项".into();
+  app.paste("id:mica-editor-ime-sink", &list_paste).unwrap();
+  app.wait_for("第二项").unwrap();
+
+  // Top toolbar indent/outdent buttons move the second bullet item right then back left.
+  let item2_x = |app: &Headless| -> f32 {
+    app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .find(|n| n.test_id.as_deref() == Some("block-text-1"))
+      .expect("second list item must exist")
+      .bounds
+      .origin
+      .x
+      .0
+  };
+  let x_base = item2_x(&app);
+  app.press("id:ed-indent").unwrap();
+  app.settle();
+  let x_indented = item2_x(&app);
+  assert!(
+    x_indented > x_base + 12.0,
+    "toolbar ed-indent must indent second list item: {x_base} -> {x_indented}"
+  );
+  app.press("id:ed-outdent").unwrap();
+  app.settle();
+  let x_outdented = item2_x(&app);
+  assert!(
+    (x_outdented - x_base).abs() <= 2.0,
+    "toolbar ed-outdent must restore second list item indent: {x_base} vs {x_outdented}"
+  );
+
+  // Select text in the second list item via Shift+Left to reveal the floating bubble
+  // menu and test `bubble-indent` + `bubble-outdent`.
+  app.press_key("shift+left").unwrap();
+  app.press_key("shift+left").unwrap();
+  app.settle();
+  app.wait_for("id:editor-bubble-menu").unwrap();
+  app.wait_for("id:bubble-indent").unwrap();
+  app.wait_for("id:bubble-outdent").unwrap();
+  app.press("id:bubble-indent").unwrap();
+  app.settle();
+  let x_bubble_indented = item2_x(&app);
+  assert!(
+    x_bubble_indented > x_base + 12.0,
+    "floating bubble-indent must indent selected list item: {x_base} -> {x_bubble_indented}"
+  );
+  app.press("id:bubble-outdent").unwrap();
+  app.settle();
+  let x_bubble_outdented = item2_x(&app);
+  assert!(
+    (x_bubble_outdented - x_base).abs() <= 2.0,
+    "floating bubble-outdent must outdent selected list item: {x_base} vs {x_bubble_outdented}"
+  );
+}

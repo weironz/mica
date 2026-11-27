@@ -13,7 +13,7 @@
 ## 能力与交互规格
 
 ### 复制与剪切
-- **`CAP-03-01` 同应用复制/剪切粘贴 100% 保留 Markdown 结构**：在页面内选中任意单块或多块（含标题、加粗/斜体/行内代码/删除线/链接、嵌套列表、待办勾选状态、引用与 GFM Callout、表格、带语言标签的代码块、Mermaid、公式、内嵌白板），执行 `Mod+C` / `Mod+X` 后粘贴到同页面或其他页面，所有块类型与行内格式完整保留。
+- **`CAP-03-01` 同应用复制/剪切粘贴 100% 保留 Markdown 结构（单代码块内选区除外）**：在页面内选中任意单块或多块（含标题、加粗/斜体/行内代码/删除线/链接、嵌套列表、待办勾选状态、引用与 GFM Callout、表格、带语言标签的代码块、Mermaid、公式、内嵌白板），执行 `Mod+C` / `Mod+X` 后粘贴到同页面或其他页面，所有块类型与行内格式完整保留；**特例**：当选区完全位于单个代码块内部时，复制/剪切仅输出纯代码文本（不附带 ```` ```lang ... ``` ```` Markdown 围栏语法或 `<pre><code>` HTML），便于直接粘贴到终端或 IDE；跨块选区仍完整保留带围栏的 Markdown 与 HTML。
 - **`CAP-03-02` 整页复制 Markdown**：页面右上角 `⋯` 菜单「复制页面内容」将整页导出为规范 Markdown 写入剪贴板，并给出状态提示。
 - **`CAP-03-03` 跨应用导出 HTML 兼容**：复制内容粘贴到外部富文本编辑器（Word、飞书、浏览器编辑器）时，通过 `HtmlProfile::Clipboard` 输出干净语义 HTML。
 
@@ -47,7 +47,7 @@
 
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
-| `CAP-03-01` 同应用复制/剪切粘贴无损 | P0 | 全端 | ✅ | `editor_bridge::tests::markdown_and_html_paste_round_trip_headings_quotes_lists_tables_and_images` + `app_flows::regression_fifteen_editor_ux_fixes` |
+| `CAP-03-01` 同应用复制/剪切粘贴无损（含单代码块纯代码复制） | P0 | 全端 | ✅ | `editor_bridge::tests::markdown_and_html_paste_round_trip_headings_quotes_lists_tables_and_images` + `mica-editor::copy_inside_single_code_block_outputs_plain_code_without_markdown_fences` + `app_flows::regression_fifteen_editor_ux_fixes` |
 | `CAP-03-02` 整页复制 Markdown | P1 | 全端 | ✅ | `editor_view.rs::page-menu-copy-md` |
 | `CAP-03-03` 跨应用导出 HTML | P1 | 桌面/Web | ✅ | `mica-editor::paste_markdown_copy_cut_and_set_link` |
 | `CAP-03-04` Windows `CF_HTML` 字节偏移切片 | P0 | Windows | ✅ | `clipboard_platform::tests::extract_cf_html_fragment_slices_exact_utf8_byte_offsets` |
@@ -64,3 +64,4 @@
 
 - **2026-11-23**：完整沉淀剪贴板双通道、`CF_HTML` 字节偏移切片、v0.14.11 互操作、截图/文件图片粘贴与表格/图片仲裁规则（对应 `ff104b87`）。
 - **2026-11-23（补齐迭代）**：在 `editor_view.rs` 补齐 `Mod+Shift+V` 纯文本字面粘贴快捷键绑定（`CAP-03-07`）。
+- **2026-11-27（单代码块复制去围栏修复）**：在 `crates/mica-editor/src/paste.rs` 的 `build_clipboard_payload` 中对单代码块内部文本选区仅写入 `plain` 通道（清空 `markdown`/`html`），避免复制代码时携带 ```` ```lang ... ``` ```` 围栏语法；跨块复制仍保留围栏与富文本（`CAP-03-01`）。

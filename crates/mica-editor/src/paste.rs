@@ -607,6 +607,24 @@ pub fn build_clipboard_payload(
     return (!payload.plain.is_empty() || !payload.html.is_empty()).then_some(payload);
   }
 
+  // Selection strictly inside a single code block copies literal code only
+  // (never wrapping it in Markdown ```lang fences or HTML <pre><code>).
+  if let NormalizedSelection::Text { start, end } = selection.normalized()
+    && start.node == end.node
+    && let Some(block) = blocks.get(start.node)
+    && block.is_code()
+  {
+    let len = block.utf16_len();
+    let from = start.offset.min(len);
+    let to = end.offset.clamp(from, len);
+    let selected = utf16_slice(&block.text, from, to).to_string();
+    return (!selected.is_empty()).then_some(ClipboardPayload {
+      plain: selected,
+      markdown: String::new(),
+      html: String::new(),
+    });
+  }
+
   let md_blocks = selection_md_blocks(blocks, selection);
   if md_blocks.is_empty() {
     return None;

@@ -208,6 +208,67 @@ fn backwards_selection_toggle_mark_copy_and_delete_behave_identically_to_forward
 }
 
 #[test]
+fn copy_inside_single_code_block_outputs_plain_code_without_markdown_fences() {
+  let code = "ping -D 8.8.8.8 | tee -a /tmp/fgt_upgrade_ping_$(date +%Y%m%d_%H%M).log";
+  let md = format!("Intro line\n\n```bash\n{code}\n```");
+  let mut s = EditorSession::from_markdown(&md);
+  assert_eq!(s.blocks()[1].kind, "code_block");
+
+  // 1. Selecting text strictly inside the code block MUST copy plain code only (no ```bash fences).
+  let full_len = s.blocks()[1].utf16_len();
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::from_positions(
+      DocPosition::new(1, 0),
+      DocPosition::new(1, full_len),
+    )),
+  });
+  let clip_single = s
+    .dispatch(EditorCommand::CopySelection {
+      image_urls: BTreeMap::new(),
+    })
+    .clipboard_out
+    .expect("single code block copy payload");
+  assert_eq!(clip_single.plain, code);
+  assert!(
+    clip_single.markdown.is_empty(),
+    "single code block copy must not emit fenced markdown: {:?}",
+    clip_single.markdown
+  );
+  assert!(clip_single.html.is_empty());
+
+  // 2. Partial slice inside the code block also copies literal slice only.
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::from_positions(
+      DocPosition::new(1, 0),
+      DocPosition::new(1, 15),
+    )),
+  });
+  let clip_slice = s
+    .dispatch(EditorCommand::CopySelection {
+      image_urls: BTreeMap::new(),
+    })
+    .clipboard_out
+    .expect("partial code block copy payload");
+  assert_eq!(clip_slice.plain, "ping -D 8.8.8.8");
+  assert!(clip_slice.markdown.is_empty());
+
+  // 3. Cross-block selection spanning prose + code block still preserves fenced Markdown.
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::from_positions(
+      DocPosition::new(0, 0),
+      DocPosition::new(1, 15),
+    )),
+  });
+  let clip_cross = s
+    .dispatch(EditorCommand::CopySelection {
+      image_urls: BTreeMap::new(),
+    })
+    .clipboard_out
+    .expect("cross-block copy payload");
+  assert!(clip_cross.markdown.contains("```bash"));
+}
+
+#[test]
 fn active_marks_reports_formatting_at_caret_and_across_multi_block_selection() {
   let s = EditorSession::from_markdown("**Hello** plain\n\n**World**");
   let inside_bold = active_marks_for_selection(s.blocks(), Some(&DocSelection::caret(0, 2)));

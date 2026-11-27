@@ -18,7 +18,7 @@
 - **`CAP-06-03` 大文档懒挂载**：非聚焦代码块以轻量等宽文本预览渲染，保障 141KB+ 含数十个代码块的文档毫秒级滚动；用户点击代码块或通过 `` ``` `` 输入规则创建时，即时挂载完整代码编辑器并自动聚焦。
 
 ### 工具条与弹层菜单
-- **`CAP-06-04` 悬停浮现右上角工具条**：仅在鼠标悬停、正在编辑、弹层打开或复制确认期间（`1600ms` 绿勾反馈）在右上角浮现工具条：`[语言胶囊 "rust ▾"]`、`[AI 助手]`、`[复制]`、`[⋯ 更多]`。
+- **`CAP-06-04` 悬停浮现右上角工具条**：仅在鼠标悬停、正在编辑、弹层打开或复制确认期间（`1600ms` 绿勾反馈）在右上角浮现工具条：`[语言胶囊 "bash ▾" / "auto ▾"]`、`[AI 助手]`、`[复制]`、`[⋯ 更多]`。新建代码块（斜杠 `/code`、顶栏按钮、浮动选区菜单）默认使用 `auto` 自动识别；当 `language` 为空或 `"auto"` 且 L1 `mica_md::highlight::detect_code_language` 识别到明确语言时，语言胶囊直接显示识别出的语言名（如 `bash ▾`）并按该语言高亮，仅在无法识别时回退显示 `auto ▾`。
 - **`CAP-06-05` 可搜索语言选择器（顶层浮层）**：点击语言胶囊弹出可搜索语言列表（`auto` 置顶 + 涵盖全部常用语言与 `mermaid`/`mica-board` 切换），通过顶层 `overlay()` 锚定触发按钮，上方有画板/表格也绝不被遮挡。
 - **`CAP-06-06` 更多菜单与持久化属性**：支持切换「自动换行 / 取消换行」、「显示行号 / 隐藏行号」、「添加/编辑底部居中标题」（显示在代码块下方外部）及红色「删除代码块」；`language`、`wrap`、`lineNumbers`、`title` 均持久化在块 `data` 并通过 CRDT 同步。
 - **`CAP-06-07` AI 代码助手菜单**：提供「解释代码」「优化代码」「查找问题」「自定义提问」4 项预设，未配置 AI 服务商时给出清晰轻提示。
@@ -37,6 +37,7 @@
 - **反例 3（代码块内按 Backspace 误删正文）**：正文全局 `backspace` 绑定未在 `focused_code_block.is_some()` 时注销，导致代码块内按键被外层劫持。
 - **反例 4（`nsh_base::editor()` 获焦后 LIFO 键位表覆盖导致空代码块 Backspace/Delete 无效）**：`nsh-core::Keymap::find_with` 采用逆序查找（后注册者优先）。`editor_view.rs` 在设置 `focused_code_block` 时先注册了 `backspace`，一帧后子组件 `nsh_base::editor()` 收到 OS Focus 触发其内部 `effect` 在队尾追加了自身的 `backspace`/`delete`，彻底遮蔽了外层删块绑定，且空代码块未绑定 `delete`。根治方案：在 `editor().on_focus`（同步 + 微任务 `spawn`）、`on_change` 与 `on_selection_change` 中递增 `code_key_rev` 重新排到键位表队尾，`on_blur` 清空避免干扰标题/语言输入，并对空代码块同时绑定 `backspace` 与 `delete`（`app_flows::regression_code_block_backspace_and_delete_after_live_focus` 覆盖全路径）。
 - **反例 5（代码块内按回车光标向上跳动）**：`nsh_base::editor()` 在 `Command::Newline` 后同步调用 `show_caret()`，此时 `grow_height` 尚未完成新一帧布局，`viewport.height` 仍是旧高度（少 1 行），导致内部 `vscroll` 误判光标越界并将 `scroll_y` 向上推 1 行（文字与光标瞬间上跳 22px）。根治方案：取消 `max_rows` 内滚上限（改为随行自然增高，外层文档虚拟列表统一滚动）、`cursor_surrounding_lines(Some(0))`，并在 `on_change` 行数变化时于同帧微任务调用 `EditorApi::scroll_to_line(0)`，在帧提交前将内部 `scroll_y` 归零。
+- **反例 6（代码块内连续 Backspace 严重卡顿甚至无响应，且自动识别语言不生效）**：两处叠加导致：① `render_virtual_block_row` 按 `rev_sig` 每次敲键整卡销毁重建代码块（含工具栏、3 个 `overlay()`、`text_ref` 与全部高亮子视图），高频 Backspace 连发时反复丢失在途 `TextLayout`；② `text_geometry::lines_usable_for_text` 只检查 `max_end < min_expected`（文本变长时失效），未在文本变短时拒绝过期更长布局（`max_end > max_expected`）。同时 `render_code_block_view` 将空语言直接传给 `highlight_code` 且硬编码显示 `"auto"`，从未调用 `detect_code_language`。根治方案：代码块在 `cell_render_key` 中去耦 `rev_sig` 保持稳定挂载并按细粒度 signal 更新内容/高亮/语言胶囊；`lines_usable_for_text` 双向校验长度上下界；引入 `resolve_code_block_language_display` 调用 `detect_code_language` 并展示识别出的语言名。
 
 ---
 
@@ -49,9 +50,9 @@
 | `CAP-06-03` 懒挂载编辑态与 `` ``` `` 自动聚焦 | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
 | `CAP-06-04` / `05` 悬停工具条与顶层防遮挡语言选择 | P0 | 桌面/Web | ✅ | `app_flows::virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch` |
 | `CAP-06-06` / `07` 换行/行号/标题/AI/删除 | P1 | 桌面/Web | ✅ | `app_flows::regression_capability_gaps_closed`（换行/行号/AI/删除 + `code-menu-title` 底部内联标题编辑并持久化 `code-block-caption`） |
-| `CAP-06-08` 代码块内输入与 Backspace/Delete | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
+| `CAP-06-08` 代码块内输入与 Backspace/Delete | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `text_geometry::tests::lines_usable_for_text_rejects_stale_longer_layout_after_backspace` |
 | `CAP-06-09` 光标在 `(0,0)` 或空块按 Backspace/Delete 删除代码块 | P0 | 桌面/Web | ✅ | `app_flows::regression_code_block_backspace_and_delete_after_live_focus` + `app_flows::regression_fifteen_editor_ux_fixes` |
-| `CAP-06-10` 语法高亮主题适配 | P1 | 全端 | ✅ | `block_views::render_highlighted_code_preview`（L1 `mica_md::highlight::highlight_code` 6 色主题 token 渲染，>12KB 自动降级保 60fps）+ `app_flows::regression_capability_gaps_closed` |
+| `CAP-06-10` 语法高亮主题适配与自动语言识别 | P1 | 全端 | ✅ | `block_views::tests::resolve_code_block_language_display_detects_bash_and_hides_auto` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `app_flows::regression_capability_gaps_closed` |
 
 ---
 
@@ -60,3 +61,4 @@
 - **2026-11-23**：沉淀顶层 `overlay()` 防遮挡、非受控编辑器修复 Backspace、懒挂载与 `(0,0)` 按 Backspace 删除代码块规则（对应 `3f033c30` / `72d84877` / `ff104b87`）。
 - **2026-11-23（补齐迭代）**：补齐非聚焦预览态基于 L1 `md-core` 的 6 色语法高亮与底部居中标题内联编辑（`CAP-06-06` / `10`）。
 - **2026-11-23（根因修复）**：修复 `nsh_base::editor()` 获焦后 LIFO 键位表覆盖外层 `backspace`/`delete` 导致空代码块无法按后退/删除键删除的根因，新增 `code_is_empty` + `code_key_rev`（`on_focus` 同步+微任务重排、`on_blur` 释放）并补齐 `Delete` 删空块及 4 场景真实焦点回归测试。
+- **2026-11-27（代码块 Backspace 流畅度与自动语言识别修复）**：代码块外层行挂载与 `rev_sig` 解耦避免敲键整卡销毁重建，`lines_usable_for_text` 拒绝删字后的过期超长布局；新建代码块默认 `auto` 并接入 `mica_md::highlight::detect_code_language`，识别到语言后直接展示具体语言名（如 `bash ▾`）替代 `auto ▾`（`CAP-06-04`/`08`/`10`）。

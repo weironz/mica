@@ -1015,6 +1015,15 @@ pub fn render_image_block_view(
   let page_width = env.page_width;
   let marquee_selected = env.marquee_selected;
   let editor_focused = env.editor_focused;
+  let caret_blink_on = env.caret_blink_on;
+  let focused_code = env.focused_code_block;
+  let focused_cell = env.focused_table_cell;
+  let table_sel = env.table_selection;
+  let table_drag = env.table_drag_anchor;
+  let drag_anchor = env.drag_anchor;
+  let blank_marquee_ready = env.body_blank_marquee_ready;
+  let marquee_origin_page = env.marquee_origin_page;
+  let sink_clear_rev = env.sink_clear_rev;
   let last_click = env.last_click;
 
   let hovered = signal(false);
@@ -1079,12 +1088,42 @@ pub fn render_image_block_view(
     })
   };
 
+  // Whether the editor's active collapsed caret currently sits on this image block
+  // (shows a blinking vertical caret right next to the image's right edge so pressing
+  // Enter naturally inserts a new paragraph line below).
+  let is_caret_on_image = computed(move || {
+    if !editor_focused.get() || marquee_selected.get().is_some() {
+      return false;
+    }
+    let idx = live_idx();
+    sel_sig
+      .get()
+      .is_some_and(|s| s.is_collapsed() && s.focus_pos().node == idx)
+  });
+
+  let br_outer = bridge.clone();
   let mut outer = view()
     .test_id("node-view-image")
     .w_full()
     .my_2()
+    .cursor(Cursor::Text)
     .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
-    .on_mouse_leave(move |_: &MouseEvent| hovered.set(false));
+    .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
+    .on_press_down(move |_: &PressEvent| {
+      focused_code.set(None);
+      focused_cell.set(None);
+      table_sel.set(None);
+      table_drag.set(None);
+      marquee_selected.set(None);
+      drag_anchor.set(None);
+      blank_marquee_ready.set(false);
+      marquee_origin_page.set(None);
+      sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+      editor_focused.set(true);
+      let idx = live_idx();
+      br_outer.set_selection(DocSelection::caret(idx, 0));
+      br_outer.request_focus();
+    });
   outer = match align.as_str() {
     "center" => outer.items_center(),
     "right" => outer.items_end(),
@@ -1136,6 +1175,7 @@ pub fn render_image_block_view(
         editor_focused.set(true);
         let idx = live_idx();
         br_click.set_selection(DocSelection::caret(idx, 0));
+        br_click.request_focus();
         // Double-click detection (matching `v0.14.11`: single click selects, double click zooms).
         let now_ms = crate::touch_selection::now_ms();
         let (prev_idx, _prev_off, prev_t, prev_clicks) = last_click.get_untracked();
@@ -1402,7 +1442,29 @@ pub fn render_image_block_view(
         })
     }));
 
-  outer.child(card).child(when(
+  let card_with_caret = view()
+    .flex_row()
+    .items_end()
+    .child(card)
+    .child(when(move || is_caret_on_image.get(), move || {
+      view()
+        .test_id("image-trailing-caret")
+        .ml(px(4.0))
+        .mb(px(2.0))
+        .w(px(2.0))
+        .h(px(22.0))
+        .rounded(px(1.0))
+        .pointer_events(PointerEvents::None)
+        .bg(move || {
+          if caret_blink_on.get() {
+            palette(dark_mode.get()).accent
+          } else {
+            crate::block_views::TRANSPARENT_RGBA
+          }
+        })
+    }));
+
+  outer.child(card_with_caret).child(when(
     move || !caption_display.trim().is_empty(),
     move || {
       let cap_label = caption_for_btn.clone();

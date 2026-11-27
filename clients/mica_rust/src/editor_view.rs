@@ -1076,7 +1076,7 @@ pub fn editor_view(
   let prop_slot = header.property_panel_slot.clone();
   let backlinks_slot = header.backlinks_panel_slot.clone();
   let header_width = signal(1000.0_f32);
-  let header_single_row = computed(move || header_width.get() >= 1180.0);
+  let header_single_row = computed(move || header_width.get() >= 1240.0);
 
   let render_format_bar: Rc<dyn Fn() -> AnyElement> = {
     let b_undo = b_undo.clone();
@@ -1094,6 +1094,8 @@ pub fn editor_view(
     let b_list = b_list.clone();
     let b_ordered = b_ordered.clone();
     let b_todo = b_todo.clone();
+    let b_outdent = bridge.clone();
+    let b_indent = bridge.clone();
     let b_quote = b_quote.clone();
     let b_code_blk = b_code_blk.clone();
     let b_div = b_div.clone();
@@ -1116,6 +1118,8 @@ pub fn editor_view(
       let b_list = b_list.clone();
       let b_ordered = b_ordered.clone();
       let b_todo = b_todo.clone();
+      let b_outdent = b_outdent.clone();
+      let b_indent = b_indent.clone();
       let b_quote = b_quote.clone();
       let b_code_blk = b_code_blk.clone();
       let b_div = b_div.clone();
@@ -1253,6 +1257,28 @@ pub fn editor_view(
           move || toggle_block_type(&b_todo, "todo", None),
           mica_icons::todo_box,
         ))
+        .child(toolbar_btn(
+          "ed-outdent",
+          "减少缩进 (Shift+Tab)",
+          dark_mode,
+          signal(false),
+          move || {
+            b_outdent.dispatch(EditorCommand::Indent { delta: -1 });
+            b_outdent.request_focus();
+          },
+          mica_icons::indent_decrease,
+        ))
+        .child(toolbar_btn(
+          "ed-indent",
+          "增加缩进 (Tab)",
+          dark_mode,
+          signal(false),
+          move || {
+            b_indent.dispatch(EditorCommand::Indent { delta: 1 });
+            b_indent.request_focus();
+          },
+          mica_icons::indent_increase,
+        ))
         .child(toolbar_btn_active(
           "ed-quote",
           "引用块",
@@ -1266,7 +1292,7 @@ pub fn editor_view(
           "代码块",
           dark_mode,
           computed(move || active_kind.get() == "code_block"),
-          move || b_code_blk.insert_custom_block("code_block", "", Some("rust")),
+          move || b_code_blk.insert_custom_block("code_block", "", None),
           terminal_icon,
         ))
         .child(toolbar_sep(dark_mode))
@@ -3596,6 +3622,8 @@ fn bubble_menu_view(
     let b_bullet = bridge.clone();
     let b_ordered = bridge.clone();
     let b_todo = bridge.clone();
+    let b_outdent = bridge.clone();
+    let b_indent = bridge.clone();
     let b_quote = bridge.clone();
     let b_code_blk = bridge.clone();
     let b_ai = bridge.clone();
@@ -3720,6 +3748,28 @@ fn bubble_menu_view(
         mica_icons::todo_box,
       ))
       .child(bubble_btn(
+        "bubble-outdent",
+        "减少缩进 (Shift+Tab)",
+        dark_mode,
+        computed(|| false),
+        move || {
+          b_outdent.dispatch(EditorCommand::Indent { delta: -1 });
+          b_outdent.request_focus();
+        },
+        mica_icons::indent_decrease,
+      ))
+      .child(bubble_btn(
+        "bubble-indent",
+        "增加缩进 (Tab)",
+        dark_mode,
+        computed(|| false),
+        move || {
+          b_indent.dispatch(EditorCommand::Indent { delta: 1 });
+          b_indent.request_focus();
+        },
+        mica_icons::indent_increase,
+      ))
+      .child(bubble_btn(
         "bubble-quote",
         "引用",
         dark_mode,
@@ -3732,7 +3782,7 @@ fn bubble_menu_view(
         "代码块",
         dark_mode,
         computed(move || active_kind.get() == "code_block"),
-        move || b_code_blk.insert_custom_block("code_block", "", Some("rust")),
+        move || b_code_blk.insert_custom_block("code_block", "", None),
         terminal_icon,
       ))
       .child(when(move || ai_enabled.get(), {
@@ -3783,32 +3833,38 @@ where
   F: Fn(&'static str) -> I + 'static,
   I: IntoElement + 'static,
 {
-  button()
-    .test_id(tid)
-    .accessibility_label(a11y)
-    .w(px(28.0))
-    .h(px(28.0))
-    .items_center()
-    .justify_center()
-    .rounded(px(5.0))
-    .bg(move || {
-      let p = palette(dark_mode.get());
-      if active.get() {
-        p.surface_hover
-      } else {
-        p.surface_overlay
-      }
-    })
-    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-    .on_press(on_click)
-    .child(dynamic(move || {
-      let p = palette(dark_mode.get());
-      icon_fn(if active.get() {
-        p.text_primary_hex
-      } else {
-        p.text_muted_hex
+  crate::tooltip::with_tooltip(
+    button()
+      .test_id(tid)
+      .accessibility_label(a11y)
+      .w(px(28.0))
+      .h(px(28.0))
+      .items_center()
+      .justify_center()
+      .rounded(px(5.0))
+      .bg(move || {
+        let p = palette(dark_mode.get());
+        if active.get() {
+          p.surface_hover
+        } else {
+          p.surface_overlay
+        }
       })
-    }))
+      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+      .on_press(move || {
+        crate::tooltip::hide_tooltip();
+        on_click();
+      })
+      .child(dynamic(move || {
+        let p = palette(dark_mode.get());
+        icon_fn(if active.get() {
+          p.text_primary_hex
+        } else {
+          p.text_muted_hex
+        })
+      })),
+    a11y,
+  )
 }
 
 fn local_stroked(size_px: f32, color: &str, inner: &str) -> Svg {

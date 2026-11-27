@@ -14,7 +14,7 @@
 
 ### 块类型与行内格式
 - **`CAP-04-01` 全量文本块类型**：支持正文段落、`H1`–`H6`、无序列表（按缩进层级切换 `•`/`◦`/`▪`）、有序列表（按同级连续计算可见序号）、待办清单（可点击勾选框切换 `checked`）、引用块、5 种 GFM Callout（`NOTE`/`TIP`/`IMPORTANT`/`WARNING`/`CAUTION`，各自独立主题色与图标）、水平分割线。
-- **`CAP-04-02` 列表缩进与容器附着**：支持 `Tab` 缩进、`Shift+Tab` 反缩进（最多 8 级）；支持把代码块/表格/引用等容器块通过 `data.li` 附着在列表项下并保持 Markdown 往返一致。
+- **`CAP-04-02` 列表缩进与容器附着**：支持 `Tab` 缩进、`Shift+Tab` 反缩进（最多 8 级），并在顶栏格式条（`ed-outdent` / `ed-indent`）与浮动选区菜单（`bubble-outdent` / `bubble-indent`）同步提供减少/增加缩进快捷按钮；支持把代码块/表格/引用等容器块通过 `data.li` 附着在列表项下并保持 Markdown 往返一致。
 - **`CAP-04-03` 全量行内 Marks**：支持加粗（`Mod+B`）、斜体（`Mod+I`）、删除线（`Mod+Shift+S`）、高亮（`Mod+Shift+H` / `==高亮==` ↔ `<mark>`，浅/深色主题自适应底色；刻意不引入任意 10×2 字体/背景色调色盘，详见 [行内高亮与颜色策略](../features/inline-highlight-and-color-policy.md)）、行内代码（`Mod+E`，暖灰底色而非刺眼红色）、下划线、超链接（`Mod+K`，编辑/移除浮窗，支持悬停/点击打开）、行内数学公式。
 
 ### 斜杠命令菜单（`/`）
@@ -26,8 +26,8 @@
 ### 浮动选区菜单、顶栏格式条与页内查找
 - **`CAP-04-05` 贴近被选内容的浮动气泡菜单**：
   - 当产生非折叠文本选区时，在**被选内容正上方**（上方不足时自动翻转到**正下方**，水平居中并夹紧在视口内）弹出浮动菜单，严禁写死固定在窗口顶部；滚动页面时自动跟随选区位置。
-  - 包含：加粗、斜体、删除线、高亮、行内代码、链接、H1–H3、正文、无序/有序/待办、引用、代码块、以及启用 AI 时的「用 AI 改写所选」。
-- **`CAP-04-06` 响应式顶栏格式条**：受设置「格式工具栏」开关控制；宽屏单行内嵌在页面顶栏中，窄屏自动折落为干净的 `36px` 第二行，不挤压左侧面包屑与复制路径按钮。
+  - 包含：加粗、斜体、删除线、高亮、行内代码、链接、H1–H3、正文、无序/有序/待办、减少/增加缩进（`Shift+Tab` / `Tab`）、引用、代码块、以及启用 AI 时的「用 AI 改写所选」。
+- **`CAP-04-06` 响应式顶栏格式条**：受设置「格式工具栏」开关控制；宽屏单行内嵌在页面顶栏中，窄屏自动折落为干净的 `36px` 第二行，不挤压左侧面包屑与复制路径按钮；内含撤销/重做、段落/标题、行内格式、列表与减少/增加缩进按钮、引用、代码块、分割线、表格、图片与快速插入入口。
 - **`CAP-04-07` 页内查找与高亮（`Mod+F`）**：右上角弹出查找条，实时高亮全文匹配项（当前激活项橙色、其余黄色），显示 `当前/总数`（或「无结果」），支持 `Enter` 下一个、`Shift+Enter` 上一个、`Esc` 关闭并清除高亮同时归还正文焦点。
 
 ---
@@ -49,8 +49,8 @@
 | `CAP-04-02` 列表缩进与容器附着 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` + `mica-editor::list_nested_code_blocks_via_fence_slash_indent_and_html_paste` + `mica-md::list_nested_wrapped_code_blocks_roundtrip_with_li` + `block_views::tests::list_continuation_inset_matches_list_text_column` |
 | `CAP-04-03` 行内 marks 与链接编辑 | P0 | 全端 | ✅ | `mica-editor::mark_apply_toggle_remove_and_normalize_merge_adjacent` + `mica-markdown::highlight` + `mica-editor::highlight_toggle_paste_and_markdown_roundtrip_work_end_to_end` |
 | `CAP-04-04` 22 项斜杠菜单与过滤 | P0 | 全端 | ✅ | `editor_slash::tests` + `editor_positioning::schedule_slash_anchor_update`（`measure()` 实时锚定光标下方/上方） |
-| `CAP-04-05` 贴近选区的浮动气泡菜单 | P0 | 桌面/Web | ✅ | `editor_view.rs::schedule_bubble_anchor_update`（待桌面真机复测各种滚动位置） |
-| `CAP-04-06` 响应式顶栏格式条 | P1 | 桌面/Web | ✅ | `editor_view.rs` |
+| `CAP-04-05` 贴近选区的浮动气泡菜单 | P0 | 桌面/Web | ✅ | `editor_view.rs::schedule_bubble_anchor_update` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |
+| `CAP-04-06` 响应式顶栏格式条 | P1 | 桌面/Web | ✅ | `editor_view.rs` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |
 | `CAP-04-07` `Mod+F` 页内查找高亮 | P1 | 桌面/Web | ✅ | `mica-editor::find_replace_and_replace_all_in_one_undo_batch` |
 
 ---
@@ -62,3 +62,4 @@
 - **2026-11-24（列表嵌套代码块修复）**：补齐 L3 `data.li` 左缩进（`26 + 24 * li` px）、L1 HTML 粘贴支持 `<div class="code-block"><pre>` 卡片嵌套与语言头回退、L2 列表续行输入 `` ``` `` / `~~~` / `/code` 自动附着 `data.li` 及 `visible_ordinal` 外层续块截断子列表序号修复（`CAP-04-02`）。
 - **2026-11-26（行内高亮 `==高亮==` 与颜色策略定案）**：经对标 Notion/飞书与 Obsidian/Typora/GitHub，拍板不引入任意字体/背景色调色盘，全栈三层新增单一语义行内高亮（`==高亮==` ↔ `<mark>`，`Mod+Shift+H`，工具栏/浮动气泡/HTML 导出与公开分享 CSS/剪贴板粘贴互操作；`CAP-04-03`、`CAP-04-05`）。
 - **2026-11-27（正文与表格超链接点击跳转修复）**：在 `block_views.rs` 与 `table_view.rs` 接入像素级 `hit_link_in_lines` 命中判定、`Cursor::Pointer` 悬停光标、`open_url` 外链打开与 `OpenMicaPageCallback` 内部 `mica://page/<uuid>` 跳转；单击链接直接打开，拖选/双三击/`Alt+单击`/点击行尾空白区不误触跳转（`CAP-04-03`）。
+- **2026-11-27（缩进/反缩进工具栏与浮动菜单按钮）**：新增 `mica_icons::{indent_decrease, indent_increase}` 图标，在顶栏格式条（`ed-outdent`/`ed-indent`）与浮动选区菜单（`bubble-outdent`/`bubble-indent`）补齐减少/增加缩进按钮及悬浮提示（`CAP-04-02`/`05`/`06`）。

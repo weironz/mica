@@ -948,7 +948,9 @@ impl MicaDocumentBridge {
       }
       "code_block" => {
         delete_slash();
-        self.insert_custom_block("code_block", "", Some("rust"));
+        // Default to auto language detection (`None` -> `""`) so pasting/typing
+        // shell, Python, JSON, Rust, etc. detects and highlights automatically.
+        self.insert_custom_block("code_block", "", None);
         // `insert_custom_block("code_block", ...)` already requested focus on
         // the live code block editor — do NOT steal focus back to the prose sink!
         return;
