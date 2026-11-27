@@ -82,10 +82,27 @@ jobs:
               || { echo "::error::Latest is $latest; refusing to deploy v$VERSION from Ship"; exit 1; }
           fi
 
+      - name: Cache ansible & collections
+        id: ansible-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/pipx
+            ~/.local/share/pipx
+            ~/.local/bin/ansible*
+            ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-v2-${{ hashFiles('ansible/requirements.yml') }}
+
       - name: Install ansible
         run: |
-          pipx install --include-deps ansible-core
-          ansible-galaxy collection install -r ansible/requirements.yml
+          if ! command -v ansible-playbook >/dev/null 2>&1 || [ ! -d "$HOME/.ansible/collections/ansible_collections/community/docker" ]; then
+            export PIPX_HOME="$HOME/.local/pipx"
+            export PIPX_BIN_DIR="$HOME/.local/bin"
+            pipx install --force --include-deps ansible-core
+            ansible-galaxy collection install -r ansible/requirements.yml
+          else
+            echo "ansible-core + community.docker restored from cache"
+          fi
 
       - name: Set up the deploy key
         env:

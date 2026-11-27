@@ -795,9 +795,8 @@ fn list_nested_code_blocks_via_fence_slash_indent_and_html_paste() {
 
 #[test]
 fn multi_line_list_tab_indent_includes_first_item_and_exports_valid_markdown() {
-  let mut s = EditorSession::from_markdown(
-    "标题\n\n- 变更时间窗口\n- 升级方式\n- 业务影响评估\n- 联系人",
-  );
+  let mut s =
+    EditorSession::from_markdown("标题\n\n- 变更时间窗口\n- 升级方式\n- 业务影响评估\n- 联系人");
   // Blocks: 0 = paragraph "标题", 1..=4 = four bulleted_list items at indent 0.
   assert_eq!(s.blocks().len(), 5);
   s.dispatch(EditorCommand::SetSelection {
@@ -819,7 +818,9 @@ fn multi_line_list_tab_indent_includes_first_item_and_exports_valid_markdown() {
   let md = s.export_markdown(&BTreeMap::new());
   let reparsed = EditorSession::from_markdown(&md);
   assert!(
-    reparsed.blocks()[1..=4].iter().all(|b| b.kind == "bulleted_list"),
+    reparsed.blocks()[1..=4]
+      .iter()
+      .all(|b| b.kind == "bulleted_list"),
     "exported markdown must re-parse as list items, got:\n{md}"
   );
 

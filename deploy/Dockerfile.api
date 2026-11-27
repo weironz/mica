@@ -24,11 +24,10 @@ RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,s
     cargo build --locked --release -p mica-api-server \
  && cp target/release/mica-api-server /usr/local/bin/mica-api-server-staged
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime-base
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=build /usr/local/bin/mica-api-server-staged /usr/local/bin/mica-api-server
 ENV RUST_LOG=info
 EXPOSE 8080
 # /api/ready (not /api/health): it pings the Postgres pool, so an api that is
@@ -43,3 +42,13 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=10 \
   CMD ["curl", "-fsS", "--max-time", "2", "-o", "/dev/null", "http://127.0.0.1:8080/api/ready"]
 CMD ["mica-api-server"]
+
+# Fast packaging target for CI/Ship runs that already compiled the glibc-2.36
+# binary inside `rust:1.100-slim-bookworm` with Actions cache.
+FROM runtime-base AS runtime-prebuilt
+ARG PREBUILT_BIN=deploy/prebuilt/mica-api-server
+COPY --chmod=0755 ${PREBUILT_BIN} /usr/local/bin/mica-api-server
+
+# Default standalone target: compiles from source inside `build` above.
+FROM runtime-base AS runtime
+COPY --from=build /usr/local/bin/mica-api-server-staged /usr/local/bin/mica-api-server

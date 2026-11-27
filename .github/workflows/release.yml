@@ -47,6 +47,14 @@ on:
       build_linux_deb:
         type: boolean
         default: false
+      web_bundle_artifact:
+        description: 'Prebuilt deploy/web artifact name uploaded by CI for the same SHA'
+        type: string
+        default: ''
+      server_bins_artifact:
+        description: 'Prebuilt glibc-2.36 api+cli binaries artifact uploaded by CI for the same SHA'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -111,9 +119,14 @@ jobs:
           key: mica-rust-win-release
       - name: Build pure-Rust Windows desktop binary
         run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --release --locked
-      - name: Install Inno Setup
+      - name: Install Inno Setup (skip if preinstalled)
         shell: pwsh
-        run: choco install innosetup -y --no-progress
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          } else {
+            Write-Host "Inno Setup 6 already preinstalled"
+          }
       - name: Build Windows installer
         shell: pwsh
         env:
@@ -208,16 +221,33 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.draft.outputs.sha }}
+      - name: Download prebuilt pure-Rust Web bundle from CI
+        if: ${{ matrix.web && inputs.web_bundle_artifact != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.web_bundle_artifact }}
+          path: deploy/web
       - uses: ./.github/actions/setup-rust
-        if: ${{ matrix.web }}
-      - name: Build pure-Rust WebAssembly bundle
-        if: ${{ matrix.web }}
+        if: ${{ matrix.web && inputs.web_bundle_artifact == '' }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ matrix.web && inputs.web_bundle_artifact == '' }}
+        with:
+          workspaces: clients/mica_rust
+          key: mica-rust-client
+      - name: Build pure-Rust WebAssembly bundle (standalone fallback)
+        if: ${{ matrix.web && inputs.web_bundle_artifact == '' }}
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends brotli clang
           rustup target add wasm32-unknown-unknown
           bash scripts/install-web-tools.sh
           bash scripts/test-web-csp-hashes.sh
           bash scripts/build-web-rust.sh
+      - name: Download prebuilt glibc-2.36 server binaries from CI
+        if: ${{ !matrix.web && inputs.server_bins_artifact != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.server_bins_artifact }}
+          path: deploy/prebuilt
       - uses: docker/setup-buildx-action@v3
       - name: Login to Aliyun ACR
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
@@ -237,6 +267,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile.${{ matrix.img }}
+          target: ${{ (!matrix.web && inputs.server_bins_artifact != '') && 'runtime-prebuilt' || '' }}
           provenance: false
           sbom: false
           push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}

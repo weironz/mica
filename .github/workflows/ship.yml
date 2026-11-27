@@ -80,6 +80,8 @@ jobs:
       previous_tag: ${{ needs.prepare.outputs.previous_tag }}
       version: ${{ needs.prepare.outputs.version }}
       publish: ${{ !inputs.dry_run }}
+      web_bundle_artifact: ${{ needs.ci.outputs.web_bundle_artifact }}
+      server_bins_artifact: ${{ needs.ci.outputs.server_bins_artifact }}
     secrets: inherit
 
   deploy:

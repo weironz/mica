@@ -1388,18 +1388,20 @@ impl EditorSession {
     let indent = &line[..indent_len_bytes];
     // Second Enter on a whitespace-only auto-indented line strips the invisible
     // trailing spaces from the blank line and resets the new line to column 0.
-    let (next_text, next_pos, auto_indented) =
-      if !line.is_empty() && indent_len_bytes == line.len() && (after.is_empty() || after.starts_with('\n')) {
-        let clean_before = &before[..line_start];
-        let pos = utf16_len(clean_before) + 1;
-        (format!("{clean_before}\n{after}"), pos, None)
-      } else {
-        let new_line_start = at + 1;
-        let pos = new_line_start + utf16_len(indent);
-        let tracked = (!indent.is_empty() && (after.is_empty() || after.starts_with('\n')))
-          .then_some((idx, new_line_start, pos));
-        (format!("{before}\n{indent}{after}"), pos, tracked)
-      };
+    let (next_text, next_pos, auto_indented) = if !line.is_empty()
+      && indent_len_bytes == line.len()
+      && (after.is_empty() || after.starts_with('\n'))
+    {
+      let clean_before = &before[..line_start];
+      let pos = utf16_len(clean_before) + 1;
+      (format!("{clean_before}\n{after}"), pos, None)
+    } else {
+      let new_line_start = at + 1;
+      let pos = new_line_start + utf16_len(indent);
+      let tracked = (!indent.is_empty() && (after.is_empty() || after.starts_with('\n')))
+        .then_some((idx, new_line_start, pos));
+      (format!("{before}\n{indent}{after}"), pos, tracked)
+    };
     self.blocks[idx].text = next_text;
     ctx.ops.push(Self::update_text_data_op(&self.blocks[idx]));
     ctx.typing_block = Some(self.blocks[idx].id.clone());

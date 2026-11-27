@@ -27,6 +27,13 @@ on:
         description: 'Git ref for diff scope'
         type: string
         default: origin/main
+    outputs:
+      web_bundle_artifact:
+        description: 'Uploaded deploy/web artifact name when client job ran'
+        value: ${{ jobs.client.outputs.web_bundle_artifact }}
+      server_bins_artifact:
+        description: 'Uploaded glibc-2.36 mica-api-server + mica-cli artifact name when container job ran'
+        value: ${{ jobs.container.outputs.server_bins_artifact }}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ inputs.source_sha || github.ref }}
@@ -46,8 +53,10 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
-      - name: Install pinned cargo-audit
-        run: cargo install cargo-audit --locked --version 0.23.0
+      - name: Install pinned prebuilt cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.23.0
       - name: Audit root and pure-Rust client lockfiles
         run: bash scripts/check-rust-audit.sh
 
@@ -154,6 +163,8 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.paths.outputs.client == 'true'
     needs: paths
+    outputs:
+      web_bundle_artifact: ${{ steps.web-artifact.outputs.name }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -181,6 +192,15 @@ jobs:
         run: |
           bash scripts/test-web-csp-hashes.sh
           bash scripts/build-web-rust.sh
+      - name: Record web bundle artifact name
+        id: web-artifact
+        run: echo "name=web-bundle-${{ inputs.source_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.web-artifact.outputs.name }}
+          path: deploy/web
+          retention-days: 1
+          if-no-files-found: error
 
   mcp:
     name: MCP (official inspector against mica-cli mcp)
@@ -222,14 +242,29 @@ jobs:
   container:
     name: Container (Dockerfile.api + Dockerfile.web + Dockerfile.cli)
     runs-on: ubuntu-latest
-    if: needs.paths.outputs.container == 'true'
-    needs: paths
+    needs: [paths, client]
+    if: ${{ !failure() && !cancelled() && needs.paths.outputs.container == 'true' }}
+    outputs:
+      server_bins_artifact: ${{ steps.bins-artifact.outputs.name }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
+      - name: Download prebuilt pure-Rust Web bundle from client job
+        if: ${{ needs.client.result == 'success' && needs.client.outputs.web_bundle_artifact != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.client.outputs.web_bundle_artifact }}
+          path: deploy/web
       - uses: ./.github/actions/setup-rust
-      - name: Build pure-Rust Web bundle for Dockerfile.web
+        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
+        with:
+          workspaces: clients/mica_rust
+          key: mica-rust-client
+      - name: Build pure-Rust Web bundle fallback (when client job was skipped)
+        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends brotli clang
@@ -237,16 +272,61 @@ jobs:
           bash scripts/install-web-tools.sh
           bash scripts/test-web-csp-hashes.sh
           bash scripts/build-web-rust.sh
+      - name: Cache bookworm Cargo build for mica-api-server + mica-cli
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ci-bookworm-cache/cargo/registry/index
+            .ci-bookworm-cache/cargo/registry/cache
+            .ci-bookworm-cache/cargo/git/db
+            .ci-bookworm-cache/target
+          key: ${{ runner.os }}-bookworm-bins-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bookworm-bins-
+      - name: Build glibc-2.36 mica-api-server + mica-cli in pinned bookworm builder
+        run: |
+          set -euo pipefail
+          sh scripts/check-migration-bytes.sh
+          rust_pin=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          builder_img="rust:${rust_pin%.*}-slim-bookworm"
+          mkdir -p .ci-bookworm-cache/cargo .ci-bookworm-cache/target deploy/prebuilt
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e CARGO_HOME=/cargo \
+            -e CARGO_TARGET_DIR=/target \
+            -v "$PWD:/src" \
+            -v "$PWD/.ci-bookworm-cache/cargo:/cargo" \
+            -v "$PWD/.ci-bookworm-cache/target:/target" \
+            -w /src \
+            "$builder_img" \
+            cargo build --locked --release -p mica-api-server -p mica-cli
+          cp .ci-bookworm-cache/target/release/mica-api-server deploy/prebuilt/mica-api-server
+          cp .ci-bookworm-cache/target/release/mica-cli deploy/prebuilt/mica-cli
+          # Trim huge final binaries & incremental scratch from cache before saving.
+          rm -rf .ci-bookworm-cache/target/release/incremental .ci-bookworm-cache/target/release/mica-api-server .ci-bookworm-cache/target/release/mica-cli
+      - name: Record server binaries artifact name
+        id: bins-artifact
+        run: echo "name=server-bins-${{ inputs.source_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.bins-artifact.outputs.name }}
+          path: deploy/prebuilt
+          retention-days: 1
+          if-no-files-found: error
       - name: Build Docker images
         run: |
           docker build -f deploy/Dockerfile.web -t mica-web:ci .
-          docker build -f deploy/Dockerfile.cli -t mica-cli:ci .
-          docker build -f deploy/Dockerfile.api -t mica-api:ci .
+          docker build -f deploy/Dockerfile.cli --target runtime-prebuilt -t mica-cli:ci .
+          docker build -f deploy/Dockerfile.api --target runtime-prebuilt -t mica-api:ci .
       - name: Boot CI container stack & run Playwright pure-Rust Web E2E
         run: |
           bash scripts/ci-container-stack.sh up
           bash scripts/web-entry-cache-check.sh http://127.0.0.1
-          (cd e2e && npm ci --no-audit --no-fund && npx playwright install chromium --with-deps)
+          (cd e2e && npm ci --no-audit --no-fund)
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            (cd e2e && npx playwright install chromium --with-deps)
+          fi
           node e2e/web_e2e.mjs --base http://127.0.0.1 --email e2e@mica.test --password E2ePassword123! --register
       - name: Dump CI stack logs on failure
         if: failure()

@@ -20,15 +20,24 @@ RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,s
  && cp target/release/mica-cli /usr/local/bin/mica-cli-staged
 
 # ── runtime ──────────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime-base
 # ca-certificates: TLS for HTTPS API endpoints and optional HEALTHCHECK_URL.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /usr/local/bin/mica-cli-staged /usr/local/bin/mica-cli
 ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
 # ENTRYPOINT is the binary; CMD provides the default daemon schedule so ad-hoc
 # invocations (`docker exec mica-backup-1 mica-cli backup run` or `export ...`)
 # work directly without `--entrypoint`.
 ENTRYPOINT ["/usr/local/bin/mica-cli"]
 CMD ["backup", "daemon"]
+
+# Fast packaging target for CI/Ship runs that already compiled the glibc-2.36
+# binary inside `rust:1.100-slim-bookworm` with Actions cache.
+FROM runtime-base AS runtime-prebuilt
+ARG PREBUILT_BIN=deploy/prebuilt/mica-cli
+COPY --chmod=0755 ${PREBUILT_BIN} /usr/local/bin/mica-cli
+
+# Default standalone target: compiles from source inside `build` above.
+FROM runtime-base AS runtime
+COPY --from=build /usr/local/bin/mica-cli-staged /usr/local/bin/mica-cli

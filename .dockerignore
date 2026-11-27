@@ -1,4 +1,5 @@
 target
+.ci-bookworm-cache
 .git
 appflowy-src
 .env
