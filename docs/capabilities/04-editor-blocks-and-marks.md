@@ -14,7 +14,7 @@
 
 ### 块类型与行内格式
 - **`CAP-04-01` 全量文本块类型**：支持正文段落、`H1`–`H6`、无序列表（按缩进层级切换 `•`/`◦`/`▪`）、有序列表（按同级连续计算可见序号）、待办清单（可点击勾选框切换 `checked`）、引用块、5 种 GFM Callout（`NOTE`/`TIP`/`IMPORTANT`/`WARNING`/`CAUTION`，各自独立主题色与图标）、水平分割线。
-- **`CAP-04-02` 列表缩进与容器附着**：支持 `Tab` 缩进、`Shift+Tab` 反缩进（最多 8 级），并在顶栏格式条（`ed-outdent` / `ed-indent`）与浮动选区菜单（`bubble-outdent` / `bubble-indent`）同步提供减少/增加缩进快捷按钮；支持把代码块/表格/引用等容器块通过 `data.li` 附着在列表项下并保持 Markdown 往返一致。
+- **`CAP-04-02` 列表缩进与容器附着**：支持 `Tab` 缩进、`Shift+Tab` 反缩进（最多 8 级；支持选中包含列表首项在内的多行一并缩进，首项不再被锁死在 0 级，且 Markdown 导出自动对孤立前置缩进列表做基准归一化避免误导出为 4 空格代码块），并在顶栏格式条（`ed-outdent` / `ed-indent`）与浮动选区菜单（`bubble-outdent` / `bubble-indent`）同步提供减少/增加缩进快捷按钮；支持把代码块/表格/引用等容器块通过 `data.li` 附着在列表项下并保持 Markdown 往返一致。
 - **`CAP-04-03` 全量行内 Marks**：支持加粗（`Mod+B`）、斜体（`Mod+I`）、删除线（`Mod+Shift+S`）、高亮（`Mod+Shift+H` / `==高亮==` ↔ `<mark>`，浅/深色主题自适应底色；刻意不引入任意 10×2 字体/背景色调色盘，详见 [行内高亮与颜色策略](../features/inline-highlight-and-color-policy.md)）、行内代码（`Mod+E`，暖灰底色而非刺眼红色）、下划线、超链接（`Mod+K`，编辑/移除浮窗，支持悬停/点击打开）、行内数学公式。
 
 ### 斜杠命令菜单（`/`）
@@ -63,3 +63,4 @@
 - **2026-11-26（行内高亮 `==高亮==` 与颜色策略定案）**：经对标 Notion/飞书与 Obsidian/Typora/GitHub，拍板不引入任意字体/背景色调色盘，全栈三层新增单一语义行内高亮（`==高亮==` ↔ `<mark>`，`Mod+Shift+H`，工具栏/浮动气泡/HTML 导出与公开分享 CSS/剪贴板粘贴互操作；`CAP-04-03`、`CAP-04-05`）。
 - **2026-11-27（正文与表格超链接点击跳转修复）**：在 `block_views.rs` 与 `table_view.rs` 接入像素级 `hit_link_in_lines` 命中判定、`Cursor::Pointer` 悬停光标、`open_url` 外链打开与 `OpenMicaPageCallback` 内部 `mica://page/<uuid>` 跳转；单击链接直接打开，拖选/双三击/`Alt+单击`/点击行尾空白区不误触跳转（`CAP-04-03`）。
 - **2026-11-27（缩进/反缩进工具栏与浮动菜单按钮）**：新增 `mica_icons::{indent_decrease, indent_increase}` 图标，在顶栏格式条（`ed-outdent`/`ed-indent`）与浮动选区菜单（`bubble-outdent`/`bubble-indent`）补齐减少/增加缩进按钮及悬浮提示（`CAP-04-02`/`05`/`06`）。
+- **2026-11-27（多行列表含首项 Tab 缩进修复）**：解除 `cmd_indent` 对列表首项 `max_indent = 0` 的锁死，选中包含第一行在内的多行列表按 `Tab` 时全部行同步缩进；`md-core` 导出层对孤立前置缩进列表按运行期最小层级归一化，保证 Markdown 导出永不退化为缩进代码块（`CAP-04-02`）。

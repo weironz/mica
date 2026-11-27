@@ -792,3 +792,102 @@ fn list_nested_code_blocks_via_fence_slash_indent_and_html_paste() {
   assert_eq!(p.blocks()[2].text, "步骤二");
   assert_eq!(visible_ordinal(p.blocks(), 2), Some(2));
 }
+
+#[test]
+fn multi_line_list_tab_indent_includes_first_item_and_exports_valid_markdown() {
+  let mut s = EditorSession::from_markdown(
+    "标题\n\n- 变更时间窗口\n- 升级方式\n- 业务影响评估\n- 联系人",
+  );
+  // Blocks: 0 = paragraph "标题", 1..=4 = four bulleted_list items at indent 0.
+  assert_eq!(s.blocks().len(), 5);
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::from_positions(
+      DocPosition::new(1, 0),
+      DocPosition::new(4, 3),
+    )),
+  });
+  s.dispatch(EditorCommand::Indent { delta: 1 });
+  for i in 1..=4 {
+    assert_eq!(
+      s.blocks()[i].indent(),
+      1,
+      "selected list item {i} (including first list item) must indent to level 1"
+    );
+  }
+  // Markdown export of a leading-indented list must remain valid list items
+  // (never 4-space indented code blocks).
+  let md = s.export_markdown(&BTreeMap::new());
+  let reparsed = EditorSession::from_markdown(&md);
+  assert!(
+    reparsed.blocks()[1..=4].iter().all(|b| b.kind == "bulleted_list"),
+    "exported markdown must re-parse as list items, got:\n{md}"
+  );
+
+  // Shift+Tab brings all 4 items back cleanly to indent 0.
+  s.dispatch(EditorCommand::Indent { delta: -1 });
+  for i in 1..=4 {
+    assert_eq!(s.blocks()[i].indent(), 0);
+  }
+}
+
+#[test]
+fn code_block_enter_and_paste_do_not_leave_unwanted_leading_whitespace() {
+  let mut s = EditorSession::from_markdown(
+    "```bash\nF100-FW-01 # show full-configuration system ha | grep priority\n    set priority 200\n```",
+  );
+  assert_eq!(s.blocks().len(), 1);
+  let end_off = s.blocks()[0].utf16_len();
+  s.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, end_off)),
+  });
+
+  // 1. Pressing Enter once after `    set priority 200` auto-indents 4 spaces,
+  //    then immediately pasting a single copied command line replaces that
+  //    auto-indent instead of shifting the pasted line right by 4 spaces.
+  s.dispatch(EditorCommand::SplitBlock);
+  s.dispatch(EditorCommand::Paste {
+    input: PasteInput::Plain {
+      text: "F100-FW-01 # show full-configuration system ha | grep priority".into(),
+    },
+  });
+  assert_eq!(
+    s.blocks()[0].text,
+    "F100-FW-01 # show full-configuration system ha | grep priority\n    set priority 200\nF100-FW-01 # show full-configuration system ha | grep priority"
+  );
+
+  // 2. Pressing Enter once after an indented line and pasting a 2-line snippet
+  //    preserves exact alignment on BOTH line 1 (col 0) and line 2 (col 4).
+  let mut s2 = EditorSession::from_markdown(
+    "```bash\nF100-FW-01 # show full-configuration system ha | grep priority\n    set priority 200\n```",
+  );
+  let end2 = s2.blocks()[0].utf16_len();
+  s2.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, end2)),
+  });
+  s2.dispatch(EditorCommand::SplitBlock);
+  s2.dispatch(EditorCommand::Paste {
+    input: PasteInput::Plain {
+      text: "F100-FW-01 # show full-configuration system ha | grep priority\n    set priority 200"
+        .into(),
+    },
+  });
+  assert_eq!(
+    s2.blocks()[0].text,
+    "F100-FW-01 # show full-configuration system ha | grep priority\n    set priority 200\nF100-FW-01 # show full-configuration system ha | grep priority\n    set priority 200"
+  );
+
+  // 3. Pressing Enter twice after an indented line cleans up trailing spaces
+  //    on the blank separator line and places the caret at column 0.
+  let mut s3 = EditorSession::from_markdown("```bash\n    set priority 200\n```");
+  let end3 = s3.blocks()[0].utf16_len();
+  s3.dispatch(EditorCommand::SetSelection {
+    selection: Some(DocSelection::caret(0, end3)),
+  });
+  s3.dispatch(EditorCommand::SplitBlock);
+  s3.dispatch(EditorCommand::SplitBlock);
+  assert_eq!(s3.blocks()[0].text, "    set priority 200\n\n");
+  assert_eq!(
+    s3.selection(),
+    Some(&DocSelection::caret(0, s3.blocks()[0].utf16_len()))
+  );
+}

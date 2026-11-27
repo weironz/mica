@@ -1065,22 +1065,21 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
               .pointer_events(PointerEvents::None);
           };
           let p = palette(dark);
-          let cache = layouts_sel.borrow();
+          let mut cache = layouts_sel.borrow_mut();
           let eff = sel_page_w.get_untracked();
           let fallback_w = if crate::page_width::is_full_width(eff) {
             820.0
           } else {
             (eff - 48.0).max(200.0)
           };
-          let lines = resolve_lines_for_block(
-            cache.blocks.get(&bid_sel),
+          let lines = cache.resolve_lines_cached(
+            &bid_sel,
             &sel_text,
             fallback_w,
             &font_sel,
             line_h,
             &|f, t| measure_sel(f, t),
           );
-          let lines = lines.as_ref();
 
           let mut layer = view()
             .absolute()
@@ -1838,7 +1837,7 @@ fn render_code_block_view(
                                 lx: f32,
                                 ly: f32|
           -> u32 {
-      let cache = layouts_ref.borrow();
+      let mut cache = layouts_ref.borrow_mut();
       let eff = code_page_w.get_untracked();
       let fallback_w = if live_wrap.get_untracked() {
         if crate::page_width::is_full_width(eff) {
@@ -1849,15 +1848,15 @@ fn render_code_block_view(
       } else {
         f32::INFINITY
       };
-      let lines = resolve_lines_for_block(
-        cache.blocks.get(bid),
+      let lines = cache.resolve_lines_cached(
+        bid,
         block_text,
         fallback_w,
         code_font,
         code_line_h,
         &|f, t| meas(f, t),
       );
-      offset_at_point(&lines, lx, ly, code_font, &|f, t| meas(f, t)).min(utf16_len(block_text))
+      offset_at_point(lines, lx, ly, code_font, &|f, t| meas(f, t)).min(utf16_len(block_text))
     };
 
     view()
@@ -2030,7 +2029,7 @@ fn render_code_block_view(
           let p = palette(dark);
           let code_sel_text = live_src.get_untracked();
           let text_u16_len = utf16_len(&code_sel_text);
-          let cache = layouts_sel.borrow();
+          let mut cache = layouts_sel.borrow_mut();
           let eff = code_sel_page_w.get_untracked();
           let fallback_w = if live_wrap.get_untracked() {
             if crate::page_width::is_full_width(eff) {
@@ -2041,15 +2040,14 @@ fn render_code_block_view(
           } else {
             f32::INFINITY
           };
-          let lines = resolve_lines_for_block(
-            cache.blocks.get(&bid_sel),
+          let lines = cache.resolve_lines_cached(
+            &bid_sel,
             &code_sel_text,
             fallback_w,
             code_font,
             code_line_h,
             &|f, t| measure_sel(f, t),
           );
-          let lines = lines.as_ref();
 
           let mut layer = view()
             .absolute()

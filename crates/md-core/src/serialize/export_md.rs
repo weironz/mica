@@ -65,6 +65,7 @@ pub(crate) fn append_markdown_children(
   // Each flat nesting level has its own run. Recursive child trees get their
   // own walker, so numbering never leaks between parents.
   let mut runs: Vec<Option<(&str, u64, usize)>> = Vec::new();
+  let mut list_base_indent: Option<usize> = None;
   let mut run_quote = 0;
   for child_id in child_ids {
     let child_index = index
@@ -78,13 +79,26 @@ pub(crate) fn append_markdown_children(
       && (quote != run_quote || child.data.get("qbreak").is_some() || !is_item(&child.kind))
     {
       runs.clear();
+      list_base_indent = None;
     }
     if li_child.is_none() {
       run_quote = quote;
     }
-    let mut numbered;
+    let mut adjusted;
     let rendered = if is_item(&child.kind) && li_child.is_none() {
-      let level = list_indent(child);
+      let raw_level = list_indent(child);
+      let base = match list_base_indent {
+        Some(b) => {
+          let next_b = b.min(raw_level);
+          list_base_indent = Some(next_b);
+          next_b
+        }
+        None => {
+          list_base_indent = Some(raw_level);
+          raw_level
+        }
+      };
+      let level = raw_level.saturating_sub(base);
       runs.truncate(level + 1);
       runs.resize((level + 1).max(runs.len()), None);
       let tag = list_tag_for(&child.kind).unwrap_or("ul");
@@ -99,15 +113,24 @@ pub(crate) fn append_markdown_children(
         4
       };
       runs[level] = Some((tag, n.saturating_add(1), width));
-      if tag == "ol" {
-        numbered = child.clone();
-        if !numbered.data.is_object() {
-          numbered.data = json!({});
+      if tag == "ol" || base > 0 {
+        adjusted = child.clone();
+        if !adjusted.data.is_object() {
+          adjusted.data = json!({});
         }
-        // CommonMark permits at most nine source digits. A later item's
-        // source number does not affect its rendered ordinal.
-        numbered.data["start"] = json!(if n <= 999_999_999 { n } else { 1 });
-        &numbered
+        if tag == "ol" {
+          // CommonMark permits at most nine source digits. A later item's
+          // source number does not affect its rendered ordinal.
+          adjusted.data["start"] = json!(if n <= 999_999_999 { n } else { 1 });
+        }
+        if base > 0 {
+          if level > 0 {
+            adjusted.data["indent"] = json!(level);
+          } else if let Some(obj) = adjusted.data.as_object_mut() {
+            obj.remove("indent");
+          }
+        }
+        &adjusted
       } else {
         child
       }

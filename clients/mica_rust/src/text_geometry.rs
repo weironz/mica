@@ -6,7 +6,11 @@
 //! click/drag UTF-16 hit-test offsets, and vertical arrow navigation without
 //! ever laying out off-screen blocks.
 
-use std::{borrow::Cow, collections::HashMap};
+use std::{
+  borrow::Cow,
+  collections::{HashMap, hash_map::DefaultHasher},
+  hash::{Hash, Hasher},
+};
 
 use mica_editor::utf16::{utf16_len, utf16_slice};
 use nsh_core::{
@@ -30,6 +34,22 @@ pub struct BlockTextLayout {
   pub row_frame: Bounds<Points>,
 }
 
+#[derive(Clone, Debug)]
+struct SynthesizedLinesCache {
+  text_len: usize,
+  text_hash: u64,
+  width_bits: u32,
+  font: String,
+  line_height_bits: u32,
+  lines: Vec<TextLine>,
+}
+
+fn hash_str(s: &str) -> u64 {
+  let mut h = DefaultHasher::new();
+  s.hash(&mut h);
+  h.finish()
+}
+
 /// Shared visible-only layout cache keyed by `block_id`.
 /// Only blocks mounted inside `virtual_list` populate entries here.
 #[derive(Default)]
@@ -39,6 +59,9 @@ pub struct VisibleLayoutCache {
   pub row_refs: HashMap<String, (usize, ElementRef)>,
   /// Live `ElementRef` for each currently mounted prose text box (`block_id -> ref`).
   pub text_refs: HashMap<String, ElementRef>,
+  /// Per-block memoized fallback lines when native `EventKind::TextLayout` is
+  /// stale (e.g. immediately after Backspace / typing before next layout tick).
+  synth_cache: HashMap<String, SynthesizedLinesCache>,
 }
 
 impl VisibleLayoutCache {
@@ -62,6 +85,7 @@ impl VisibleLayoutCache {
       entry.lines = lines;
       entry.font = font;
       entry.line_height = line_height;
+      self.synth_cache.remove(block_id);
     }
     changed
   }
@@ -113,6 +137,7 @@ impl VisibleLayoutCache {
     self.blocks.retain(|id, _| live_ids.contains(id.as_str()));
     self.row_refs.retain(|id, _| live_ids.contains(id.as_str()));
     self.text_refs.retain(|id, _| live_ids.contains(id.as_str()));
+    self.synth_cache.retain(|id, _| live_ids.contains(id.as_str()));
   }
 
   pub fn get(&self, block_id: &str) -> Option<&BlockTextLayout> {
@@ -123,6 +148,111 @@ impl VisibleLayoutCache {
     self.blocks.clear();
     self.row_refs.clear();
     self.text_refs.clear();
+    self.synth_cache.clear();
+  }
+
+  /// Resolves visual `TextLine`s for `block_id`, using:
+  /// 1. Native `EventKind::TextLayout` lines in O(1) when fresh and usable;
+  /// 2. Per-block memoized synthesized lines in O(1) on repeat reads within the
+  ///    same edit frame (e.g. IME sink + caret overlay + KeepVisible scroll);
+  /// 3. Incremental line synthesis reusing unchanged lines from the previous
+  ///    layout so single-line Backspace/typing in a 100-line code block makes
+  ///    only ~1 `text_measurer` call instead of 100-400!
+  pub fn resolve_lines_cached<F>(
+    &mut self,
+    block_id: &str,
+    text: &str,
+    fallback_width: f32,
+    font: &str,
+    line_height: f32,
+    measure: &F,
+  ) -> &[TextLine]
+  where
+    F: Fn(&str, &str) -> Points,
+  {
+    let native_usable = self
+      .blocks
+      .get(block_id)
+      .is_some_and(|info| lines_usable_for_text(&info.lines, text));
+    if native_usable {
+      return &self.blocks[block_id].lines;
+    }
+
+    let (eff_font, eff_lh, eff_w) = match self.blocks.get(block_id) {
+      Some(info) => (
+        if !info.font.is_empty() {
+          info.font.clone()
+        } else {
+          font.to_owned()
+        },
+        if info.line_height > 1.0 {
+          info.line_height
+        } else {
+          line_height
+        },
+        if info.text_frame.size.width.0 > 24.0 {
+          info.text_frame.size.width.0
+        } else {
+          fallback_width
+        },
+      ),
+      None => (font.to_owned(), line_height, fallback_width),
+    };
+
+    let text_len = text.len();
+    let text_hash = hash_str(text);
+    let width_bits = eff_w.to_bits();
+    let lh_bits = eff_lh.to_bits();
+
+    let cache_hit = self.synth_cache.get(block_id).is_some_and(|c| {
+      c.text_len == text_len
+        && c.text_hash == text_hash
+        && c.width_bits == width_bits
+        && c.line_height_bits == lh_bits
+        && c.font == eff_font
+    });
+    if cache_hit {
+      return &self.synth_cache[block_id].lines;
+    }
+
+    let (prev_lines, prev_width_matches): (Option<&[TextLine]>, bool) =
+      if let Some(prev) = self.synth_cache.get(block_id)
+        && prev.font == eff_font
+        && prev.line_height_bits == lh_bits
+      {
+        (Some(prev.lines.as_slice()), prev.width_bits == width_bits)
+      } else if let Some(info) = self.blocks.get(block_id)
+        && !info.lines.is_empty()
+        && (info.font.is_empty() || info.font == eff_font)
+      {
+        let native_w_match = info.text_frame.size.width.0 > 24.0
+          && (info.text_frame.size.width.0 - eff_w).abs() <= 0.5;
+        (Some(info.lines.as_slice()), native_w_match)
+      } else {
+        (None, false)
+      };
+
+    let lines = synthesize_wrapped_lines_reusing(
+      text,
+      eff_w,
+      &eff_font,
+      eff_lh,
+      prev_lines,
+      prev_width_matches,
+      measure,
+    );
+    self.synth_cache.insert(
+      block_id.to_owned(),
+      SynthesizedLinesCache {
+        text_len,
+        text_hash,
+        width_bits,
+        font: eff_font,
+        line_height_bits: lh_bits,
+        lines,
+      },
+    );
+    &self.synth_cache[block_id].lines
   }
 }
 
@@ -209,6 +339,30 @@ pub fn lines_usable_for_text(lines: &[TextLine], text: &str) -> bool {
   lines.len() > explicit_breaks
 }
 
+/// Measures horizontal advance width of `text` in `font`, preserving trailing
+/// whitespace width on engines (notably Windows DirectWrite) whose bare
+/// `GetMetrics().width` excludes trailing spaces.
+fn measure_text_advance<F>(font: &str, text: &str, measure: &F) -> f32
+where
+  F: Fn(&str, &str) -> Points,
+{
+  if text.is_empty() {
+    return 0.0;
+  }
+  if text.ends_with(char::is_whitespace) {
+    let mut probe = String::with_capacity(text.len() + 1);
+    probe.push_str(text);
+    probe.push('|');
+    let with_sentinel = measure(font, &probe).0;
+    let only_sentinel = measure(font, "|").0;
+    let adv = (with_sentinel - only_sentinel).max(0.0);
+    if adv > 0.0 {
+      return adv;
+    }
+  }
+  measure(font, text).0.max(0.0)
+}
+
 /// Pure-Rust wrapped visual line synthesizer backed by the platform's exact
 /// `text_measurer`. Used ONLY as an on-demand fallback when `EventKind::TextLayout`
 /// has not populated usable lines for a visible block (e.g. under NSH content
@@ -218,6 +372,24 @@ pub fn synthesize_wrapped_lines<F>(
   max_width: f32,
   font: &str,
   line_height: f32,
+  measure: &F,
+) -> Vec<TextLine>
+where
+  F: Fn(&str, &str) -> Points,
+{
+  synthesize_wrapped_lines_reusing(text, max_width, font, line_height, None, false, measure)
+}
+
+/// Incremental version of [`synthesize_wrapped_lines`] that reuses unchanged
+/// logical lines from `prev_lines` in O(1) without calling `measure`, so editing
+/// one line of a large code block never re-measures every unchanged line.
+pub fn synthesize_wrapped_lines_reusing<F>(
+  text: &str,
+  max_width: f32,
+  font: &str,
+  line_height: f32,
+  prev_lines: Option<&[TextLine]>,
+  prev_width_matches: bool,
   measure: &F,
 ) -> Vec<TextLine>
 where
@@ -249,6 +421,46 @@ where
     None
   };
 
+  // Index reusable paragraphs from `prev_lines`:
+  // - Single-line paragraphs: exact trimmed text -> previous `TextLine`
+  // - Wrapped multi-line paragraphs (only when wrap width is unchanged):
+  //   concatenated trimmed text -> slice of wrapped `TextLine`s.
+  let mut prev_single: HashMap<&str, &TextLine> = HashMap::new();
+  let mut prev_wrapped: HashMap<String, &[TextLine]> = HashMap::new();
+  if let Some(prev) = prev_lines
+    && !prev.is_empty()
+  {
+    let mut i = 0usize;
+    while i < prev.len() {
+      let mut j = i;
+      while j + 1 < prev.len()
+        && prev[j + 1].start == prev[j].end
+        && !prev[j].text.trim_end_matches('\u{200B}').ends_with('\n')
+      {
+        j += 1;
+      }
+      if i == j {
+        let trimmed = prev[i].text.trim_end_matches(['\n', '\r', '\u{200B}']);
+        if !trimmed.is_empty()
+          && !trimmed.ends_with(char::is_whitespace)
+          && prev[i].width.0 > 0.5
+          && wrap_w.is_none_or(|limit| prev[i].width.0 <= limit + 0.5)
+        {
+          prev_single.entry(trimmed).or_insert(&prev[i]);
+        }
+      } else if prev_width_matches {
+        let mut joined = String::new();
+        for line in &prev[i..=j] {
+          joined.push_str(line.text.trim_end_matches(['\n', '\r', '\u{200B}']));
+        }
+        if !joined.is_empty() && !joined.ends_with(char::is_whitespace) {
+          prev_wrapped.entry(joined).or_insert(&prev[i..=j]);
+        }
+      }
+      i = j + 1;
+    }
+  }
+
   let mut out = Vec::new();
   let mut line_idx = 0usize;
   let mut para_u16_start = 0u32;
@@ -262,7 +474,43 @@ where
       continue;
     }
 
-    let full_w = measure(font, para).0.max(0.0);
+    if let Some(reused) = prev_single.get(para) {
+      let mut line = (*reused).clone();
+      line.text = para.to_owned();
+      line.start = para_u16_start;
+      line.end = para_u16_start + para_u16_len;
+      line.x = Points(0.0);
+      line.y = Points(line_idx as f32 * lh);
+      line.height = Points(lh);
+      out.push(line);
+      line_idx += 1;
+      para_u16_start = para_u16_start.saturating_add(para_u16_len + 1);
+      continue;
+    }
+
+    if !prev_wrapped.is_empty()
+      && let Some(reused_slice) = prev_wrapped.get(para)
+    {
+      let mut seg_u16 = para_u16_start;
+      for reused in *reused_slice {
+        let trimmed = reused.text.trim_end_matches(['\n', '\r', '\u{200B}']);
+        let seg_len = utf16_len(trimmed);
+        let mut line = reused.clone();
+        line.text = trimmed.to_owned();
+        line.start = seg_u16;
+        line.end = seg_u16 + seg_len;
+        line.x = Points(0.0);
+        line.y = Points(line_idx as f32 * lh);
+        line.height = Points(lh);
+        out.push(line);
+        line_idx += 1;
+        seg_u16 = seg_u16.saturating_add(seg_len);
+      }
+      para_u16_start = para_u16_start.saturating_add(para_u16_len + 1);
+      continue;
+    }
+
+    let full_w = measure_text_advance(font, para, measure);
     let Some(limit) = wrap_w else {
       out.push(make_line(
         para,
@@ -305,7 +553,7 @@ where
     let mut cur = 0usize;
     while cur < n_chars {
       let rem = &para[byte_offs[cur]..];
-      let rem_w = measure(font, rem).0.max(0.0);
+      let rem_w = measure_text_advance(font, rem, measure);
       if rem_w <= limit + 0.5 {
         let s_u16 = para_u16_start + u16_offs[cur];
         let e_u16 = para_u16_start + u16_offs[n_chars];
@@ -320,7 +568,7 @@ where
       while lo < hi {
         let mid = lo + (hi - lo).div_ceil(2);
         let seg = &para[byte_offs[cur]..byte_offs[mid]];
-        if measure(font, seg).0 <= limit + 0.5 {
+        if measure_text_advance(font, seg, measure) <= limit + 0.5 {
           lo = mid;
         } else {
           hi = mid - 1;
@@ -345,7 +593,7 @@ where
       }
 
       let seg = &para[byte_offs[cur]..byte_offs[cut]];
-      let seg_w = measure(font, seg).0.max(0.0);
+      let seg_w = measure_text_advance(font, seg, measure);
       let s_u16 = para_u16_start + u16_offs[cur];
       let e_u16 = para_u16_start + u16_offs[cut];
       out.push(make_line(seg, s_u16, e_u16, line_idx as f32 * lh, seg_w));
@@ -390,12 +638,27 @@ where
     .map(|i| i.text_frame.size.width.0)
     .filter(|&w| w > 24.0)
     .unwrap_or(fallback_width);
-  Cow::Owned(synthesize_wrapped_lines(text, eff_w, eff_font, eff_lh, measure))
+  let prev_lines = cached.filter(|i| !i.lines.is_empty()).map(|i| i.lines.as_slice());
+  let prev_w_match = cached.is_some_and(|i| {
+    i.text_frame.size.width.0 > 24.0 && (i.text_frame.size.width.0 - eff_w).abs() <= 0.5
+  });
+  Cow::Owned(synthesize_wrapped_lines_reusing(
+    text,
+    eff_w,
+    eff_font,
+    eff_lh,
+    prev_lines,
+    prev_w_match,
+    measure,
+  ))
 }
 
 /// Measures the horizontal advance of UTF-16 prefix `prefix_u16` within `line`,
 /// proportionally calibrated against the platform engine's exact `line.width` so
 /// caret & click hit-testing match DirectWrite / CoreText / DOM subpixel metrics.
+/// Explicitly preserves trailing whitespace width (DirectWrite omits trailing
+/// spaces from `line.width`, which otherwise freezes the caret at `x = 0` on
+/// indented blank lines).
 fn measure_line_prefix<F>(line: &TextLine, offset_in_line_u16: u32, font: &str, measure: &F) -> f32
 where
   F: Fn(&str, &str) -> Points,
@@ -405,13 +668,17 @@ where
     return 0.0;
   }
   let line_u16_len = utf16_len(visible);
+  let has_trailing_ws = visible.ends_with(char::is_whitespace);
   if offset_in_line_u16 >= line_u16_len {
-    return line.width.0.max(0.0);
+    if !has_trailing_ws && line.width.0 > 0.0 {
+      return line.width.0;
+    }
+    return measure_text_advance(font, visible, measure).max(line.width.0.max(0.0));
   }
   let sub = utf16_slice(visible, 0, offset_in_line_u16);
-  let measured = measure(font, sub).0.max(0.0);
-  if line.width.0 > 0.0 {
-    let full_measured = measure(font, visible).0;
+  let measured = measure_text_advance(font, sub, measure);
+  if !has_trailing_ws && line.width.0 > 0.0 {
+    let full_measured = measure_text_advance(font, visible, measure);
     if full_measured > 0.5 {
       (measured * (line.width.0 / full_measured)).clamp(0.0, line.width.0)
     } else {
@@ -765,6 +1032,76 @@ mod tests {
     assert!(
       !lines_usable_for_text(&stale, "hello"),
       "multi-char Backspace must reject stale longer TextLayout"
+    );
+  }
+
+  #[test]
+  fn caret_on_whitespace_only_code_line_measures_trailing_spaces_even_when_line_width_is_zero() {
+    // Simulate Windows DirectWrite where `line.width` and bare `measure("    ")`
+    // exclude trailing spaces (return 0.0), while `measure("    |") - measure("|")`
+    // reports the true 4-space advance width.
+    let dwrite_like_measure = |_font: &str, s: &str| -> Points {
+      let trimmed = s.trim_end_matches(char::is_whitespace);
+      Points(trimmed.chars().count() as f32 * 8.4)
+    };
+    let mut ws_line = mk_line("    ", 0, 0.0);
+    ws_line.width = Points(0.0);
+    let (cx4, _, _) = caret_rect_for_offset(&[ws_line.clone()], 4, "14px monospace", 22.0, &dwrite_like_measure);
+    let (cx2, _, _) = caret_rect_for_offset(&[ws_line], 2, "14px monospace", 22.0, &dwrite_like_measure);
+    assert!(
+      (cx4 - 33.6).abs() < 0.5,
+      "caret after 4 spaces must render at col 4 (~33.6px), never frozen at x=0, got {cx4}"
+    );
+    assert!(
+      (cx2 - 16.8).abs() < 0.5,
+      "caret after 2 spaces must move visibly left to col 2 (~16.8px), got {cx2}"
+    );
+  }
+
+  #[test]
+  fn resolve_lines_cached_reuses_unchanged_lines_and_memoizes_same_frame_reads() {
+    use std::cell::Cell;
+
+    let mut lines_src: Vec<String> = (0..60).map(|i| format!("line_{i:02}: set option_{i} enable")).collect();
+    let initial_text = lines_src.join("\n");
+    let measure_calls = Cell::new(0usize);
+    let counting_measure = |font: &str, s: &str| -> Points {
+      measure_calls.set(measure_calls.get() + 1);
+      fixed_measure(font, s)
+    };
+
+    let mut cache = VisibleLayoutCache::default();
+    // Seed native layout from initial 60-line code block.
+    let initial_lines = synthesize_wrapped_lines(&initial_text, 760.0, "14px monospace", 22.0, &fixed_measure);
+    cache.update_lines("code-1", initial_lines, "14px monospace".into(), 22.0);
+    cache.update_text_frame(
+      "code-1",
+      Bounds {
+        origin: nsh_core::geometry::point(Points(0.0), Points(0.0)),
+        size: nsh_core::geometry::size(Points(760.0), Points(1320.0)),
+      },
+    );
+
+    // Backspace deletes 1 char on line 59 (leaving 59 of 60 lines unchanged).
+    lines_src[59].pop();
+    let after_bs = lines_src.join("\n");
+    measure_calls.set(0);
+    let resolved1 = cache.resolve_lines_cached("code-1", &after_bs, 760.0, "14px monospace", 22.0, &counting_measure);
+    assert_eq!(resolved1.len(), 60);
+    assert!(
+      measure_calls.get() <= 2,
+      "Backspace on 1 of 60 lines must reuse 59 cached lines (<=2 measure calls), got {}",
+      measure_calls.get()
+    );
+
+    // Second read on the exact same frame (e.g. IME sink + caret overlay) hits O(1) cache!
+    let calls_before_second = measure_calls.get();
+    let resolved2 = cache.resolve_lines_cached("code-1", &after_bs, 760.0, "14px monospace", 22.0, &counting_measure);
+    assert_eq!(resolved2.len(), 60);
+    assert_eq!(
+      measure_calls.get(),
+      calls_before_second,
+      "second same-frame read must hit synth_cache with 0 measure calls"
     );
   }
 }

@@ -5,7 +5,11 @@
 //!   candidate windows open right beside the caret rather than at `(0, 0)`)
 //! - Cross-block vertical arrow navigation preserving visual `preferred_x`
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+  cell::{Cell, RefCell},
+  rc::Rc,
+  time::Duration,
+};
 
 use mica_editor::{DocPosition, DocSelection, EditorCommand, utf16::utf16_len};
 use nsh_base::{button, input};
@@ -25,9 +29,10 @@ use crate::{
   },
 };
 
-/// Schedules an async measurement to place the hidden native IME input sink at
-/// the active caret's local coordinates inside `paper_ref`, so Windows/macOS CJK
-/// IME candidate windows follow the typing caret accurately.
+/// Schedules a coalesced async measurement to place the hidden native IME input
+/// sink at the active caret's local coordinates inside `paper_ref`, so
+/// Windows/macOS CJK IME candidate windows follow the typing caret accurately
+/// without flooding the platform measure bridge during rapid key-repeat bursts.
 pub fn schedule_ime_sink_pos_update(
   bridge: &MicaDocumentBridge,
   layouts: &Rc<RefCell<VisibleLayoutCache>>,
@@ -35,25 +40,37 @@ pub fn schedule_ime_sink_pos_update(
   pos: DocPosition,
   ime_sink_pos: Signal<(f32, f32)>,
 ) {
+  thread_local! {
+    static IME_POS_GEN: Cell<u64> = const { Cell::new(0) };
+  }
+  let seq = IME_POS_GEN.with(|c| {
+    let next = c.get().wrapping_add(1);
+    c.set(next);
+    next
+  });
   let Some(bid) = bridge.block_id_at(pos.node) else {
     return;
   };
   let (text_ref, row_ref, caret_local) = {
-    let cache = layouts.borrow();
+    let mut cache = layouts.borrow_mut();
     let tref = cache.text_refs.get(&bid).copied();
     let rref = cache.row_refs.get(&bid).map(|(_, r)| *r);
     let measure = text_measurer();
     let block_text = bridge.block_at(pos.node).map(|b| b.text).unwrap_or_default();
-    let caret = cache.blocks.get(&bid).map(|info| {
-      let lines = resolve_lines_for_block(
-        Some(info),
+    let meta = cache
+      .blocks
+      .get(&bid)
+      .map(|info| (info.font.clone(), info.line_height));
+    let caret = meta.map(|(font, lh)| {
+      let lines = cache.resolve_lines_cached(
+        &bid,
         &block_text,
         760.0,
-        &info.font,
-        info.line_height.max(24.0),
+        &font,
+        lh.max(24.0),
         &measure,
       );
-      caret_rect_for_offset(&lines, pos.offset, &info.font, info.line_height, &measure)
+      caret_rect_for_offset(lines, pos.offset, &font, lh, &measure)
     });
     (tref, rref, caret)
   };
@@ -61,9 +78,16 @@ pub fn schedule_ime_sink_pos_update(
     return;
   }
   spawn(async move {
+    timer(Duration::from_millis(16)).await;
+    if IME_POS_GEN.with(Cell::get) != seq {
+      return;
+    }
     let Some(pm) = paper_ref.measure().await else {
       return;
     };
+    if IME_POS_GEN.with(Cell::get) != seq {
+      return;
+    }
     let vw = pm.frame.size.width.0.max(120.0);
     let vh = pm.frame.size.height.0.max(80.0);
     let anchor_m = if let Some(tref) = text_ref {
@@ -73,6 +97,9 @@ pub fn schedule_ime_sink_pos_update(
     } else {
       None
     };
+    if IME_POS_GEN.with(Cell::get) != seq {
+      return;
+    }
     let Some(tm) = anchor_m else {
       return;
     };
@@ -668,6 +695,49 @@ pub fn inline_math_popover_view(
   })
 }
 
+/// Computes the minimal new `scroll_offset_y` needed to keep a vertical target
+/// span `[rel_top, rel_bottom]` (relative to the viewport top) visible inside a
+/// viewport of height `viewport_h`, returning `None` when no scroll is needed.
+///
+/// Crucially, when editing near the bottom of a tall code block whose top half
+/// is scrolled above the viewport, the caller passes the active **caret** span
+/// rather than the whole block's bounds — so pressing Enter never yanks the
+/// hidden top of the code block back into view!
+pub fn compute_keep_visible_scroll_target(
+  cur_scroll_y: f32,
+  viewport_h: f32,
+  rel_top: f32,
+  rel_bottom: f32,
+) -> Option<f32> {
+  if viewport_h <= 1.0 {
+    return None;
+  }
+  let top_pad = 12.0_f32;
+  let bottom_pad = 16.0_f32;
+  if rel_top >= top_pad && rel_bottom <= viewport_h - bottom_pad {
+    return None;
+  }
+  let target_h = (rel_bottom - rel_top).max(0.0);
+  // Fallback guard for tall atomic/unmeasured blocks already spanning across
+  // the viewport: never yank their clipped top back into view.
+  if target_h > (viewport_h - top_pad - bottom_pad)
+    && rel_top < top_pad
+    && rel_bottom > viewport_h - bottom_pad
+  {
+    return None;
+  }
+  let margin = 24.0_f32.min(viewport_h * 0.15);
+  if rel_top < top_pad {
+    let next = (cur_scroll_y + rel_top - margin).max(0.0);
+    ((next - cur_scroll_y).abs() > 0.5).then_some(next)
+  } else if rel_bottom > viewport_h - bottom_pad {
+    let next = (cur_scroll_y + (rel_bottom - (viewport_h - margin))).max(0.0);
+    ((next - cur_scroll_y).abs() > 0.5).then_some(next)
+  } else {
+    None
+  }
+}
+
 pub use mica_editor::interaction::edge_autoscroll_speed;
 
 #[cfg(test)]
@@ -683,5 +753,33 @@ mod tests {
     let bot_inner = edge_autoscroll_speed(550.0, 600.0);
     let bot_outside = edge_autoscroll_speed(650.0, 600.0);
     assert!(bot_inner > 0.0 && bot_outside > bot_inner);
+  }
+
+  #[test]
+  fn keep_visible_scroll_never_yanks_clipped_tall_code_block_upward() {
+    // Tall code block top is scrolled 300px above viewport (`rel_top = -300`),
+    // while active caret at bottom of code block sits at `[360, 382]` inside a
+    // 700px viewport -> ZERO scroll!
+    assert_eq!(compute_keep_visible_scroll_target(500.0, 700.0, 360.0, 382.0), None);
+
+    // Pressing Enter pushes caret just past the bottom edge (`[690, 712]`):
+    // scroll DOWN minimally by ~36px, NEVER upward!
+    let next_down = compute_keep_visible_scroll_target(500.0, 700.0, 690.0, 712.0)
+      .expect("caret past bottom edge should scroll down slightly");
+    assert!(
+      next_down > 500.0 && next_down < 560.0,
+      "expected minimal downward nudge from 500.0, got {next_down}"
+    );
+
+    // Caret moving above top edge (`[-10, 12]`): scroll UP minimally by ~34px.
+    let next_up = compute_keep_visible_scroll_target(500.0, 700.0, -10.0, 12.0)
+      .expect("caret above top edge should scroll up slightly");
+    assert!(
+      next_up < 500.0 && next_up > 440.0,
+      "expected minimal upward nudge from 500.0, got {next_up}"
+    );
+
+    // Fallback atomic block taller than viewport spanning `[-250, 820]`: ZERO jump!
+    assert_eq!(compute_keep_visible_scroll_target(500.0, 700.0, -250.0, 820.0), None);
   }
 }

@@ -30,7 +30,7 @@ use nsh_core::{
   color::Rgba,
   element::{
     ClipboardItem, ElementRef, ImageSrc, KeyOptions, Spawned, Svg, clipboard_string, element_ref,
-    on_key_with, set_clipboard, set_clipboard_item, set_interval, svg, virtual_list,
+    on_key_with, set_clipboard, set_clipboard_item, set_interval, svg, text_measurer, virtual_list,
   },
   geometry::{Bounds, Points, px},
   keymap::When,
@@ -45,13 +45,14 @@ use crate::{
   },
   editor_bridge::{MicaDocumentBridge, ScrollMode},
   editor_positioning::{
-    move_caret_vertical_preserving_x, schedule_bubble_anchor_update, schedule_ime_sink_pos_update,
-    schedule_slash_anchor_update, schedule_touch_handles_update,
+    compute_keep_visible_scroll_target, move_caret_vertical_preserving_x,
+    schedule_bubble_anchor_update, schedule_ime_sink_pos_update, schedule_slash_anchor_update,
+    schedule_touch_handles_update,
   },
   editor_slash::{SlashItem, extract_slash_query, filter_slash_items},
   mica_icons,
   mica_theme::palette,
-  text_geometry::VisibleLayoutCache,
+  text_geometry::{VisibleLayoutCache, caret_rect_for_offset},
   touch_selection::{
     TouchHandleAnchors, TouchHandlesProps, TouchTapTracker, touch_selection_handles_layer,
   },
@@ -545,15 +546,18 @@ pub fn editor_view(
 
   // Scroll `virtual_list` according to ScrollMode:
   // - `Jump` (page switch, outline jump, find match): align target cleanly into view.
-  // - `KeepVisible` (Enter, Backspace, typing, arrows): measure target row against
-  //   the viewport and scroll ONLY when it actually leaves the visible bounds, so
-  //   normal editing NEVER jumps or scrolls content upward!
+  // - `KeepVisible` (Enter, Backspace, typing, arrows): measure the active caret's
+  //   vertical span (falling back to the row bounds for atomic blocks) against the
+  //   viewport and nudge `scroll_offset_y` minimally ONLY when the caret actually
+  //   leaves the visible bounds — NEVER yanking a tall clipped code block's top
+  //   back into view when pressing Enter at the bottom!
   {
     let scroll_req = bridge.scroll_request_signal();
     let b_scroll = bridge.clone();
     let l_scroll = layouts.clone();
     let lref = list_ref;
     let pref = paper_ref;
+    let pw_scroll = header.page_width;
     effect(move || {
       if let Some((idx, mode, _seq)) = scroll_req.get() {
         match mode {
@@ -575,9 +579,17 @@ pub fn editor_view(
               if scroll_req.get_untracked().map(|(_, _, s)| s) != Some(_seq) {
                 return;
               }
-              let row_ref_opt = b_sc
-                .block_id_at(idx)
-                .and_then(|bid| l_sc.borrow().row_refs.get(&bid).map(|(_, r)| *r));
+              let bid_opt = b_sc.block_id_at(idx);
+              let (row_ref_opt, text_ref_opt) = {
+                let cache = l_sc.borrow();
+                let r = bid_opt
+                  .as_deref()
+                  .and_then(|bid| cache.row_refs.get(bid).map(|(_, r)| *r));
+                let t = bid_opt
+                  .as_deref()
+                  .and_then(|bid| cache.text_refs.get(bid).copied());
+                (r, t)
+              };
               let Some(rref) = row_ref_opt else {
                 // Target row is genuinely outside the mounted virtual window -> bring it in.
                 if idx == 0 {
@@ -587,7 +599,7 @@ pub fn editor_view(
                 }
                 return;
               };
-              let (Some(pm), Some(rm)) = (pref.measure().await, rref.measure().await) else {
+              let Some(pm) = pref.measure().await else {
                 return;
               };
               if scroll_req.get_untracked().map(|(_, _, s)| s) != Some(_seq) {
@@ -597,16 +609,90 @@ pub fn editor_view(
               if vh <= 1.0 {
                 return;
               }
-              let rel_top = rm.page.y.0 - pm.page.y.0;
-              let rel_bottom = rel_top + rm.frame.size.height.0;
-              if rel_top < 12.0 {
-                if idx == 0 {
-                  lref.scroll_to_offset(px(0.0), false);
+
+              // Prefer exact active caret vertical bounds when editing inside a
+              // text or code block so tall clipped blocks never jump upward!
+              let caret_span: Option<(f32, f32, bool)> = if let (Some(bid), Some(tref), Some(sel)) =
+                (bid_opt.as_deref(), text_ref_opt, b_sc.selection())
+                && sel.focus_node() == idx
+                && let Some(tm) = tref.measure().await
+              {
+                let blk = b_sc.block_at(idx);
+                let blk_text = blk.as_ref().map(|b| b.text.as_str()).unwrap_or("");
+                let is_code = blk
+                  .as_ref()
+                  .is_some_and(|b| crate::editor_bridge::effective_block_kind(b) == "code_block");
+                let default_font = if is_code { "14px monospace" } else { "16px sans-serif" };
+                let default_lh = if is_code { 22.0_f32 } else { 26.0_f32 };
+                let eff_pw = pw_scroll.get_untracked();
+                let fallback_w = if crate::page_width::is_full_width(eff_pw) {
+                  820.0
                 } else {
-                  lref.scroll_to_index(idx as u32, Percentage(0.1), px(0.0), false);
+                  (eff_pw - 64.0).max(200.0)
+                };
+                let measure = text_measurer();
+                let (_, cy, ch) = {
+                  let mut cache = l_sc.borrow_mut();
+                  let (font, lh) = cache
+                    .blocks
+                    .get(bid)
+                    .map(|i| {
+                      (
+                        if i.font.is_empty() {
+                          default_font.to_owned()
+                        } else {
+                          i.font.clone()
+                        },
+                        if i.line_height > 1.0 {
+                          i.line_height
+                        } else {
+                          default_lh
+                        },
+                      )
+                    })
+                    .unwrap_or_else(|| (default_font.to_owned(), default_lh));
+                  let lines = cache.resolve_lines_cached(
+                    bid,
+                    blk_text,
+                    fallback_w,
+                    &font,
+                    lh,
+                    &measure,
+                  );
+                  caret_rect_for_offset(lines, sel.focus_pos().offset, &font, lh, &measure)
+                };
+                let rel_top = (tm.page.y.0 - pm.page.y.0) + cy;
+                Some((rel_top, rel_top + ch.max(default_lh), cy < 4.0))
+              } else {
+                None
+              };
+
+              if scroll_req.get_untracked().map(|(_, _, s)| s) != Some(_seq) {
+                return;
+              }
+
+              let (rel_top, rel_bottom, at_first_line) = if let Some(span) = caret_span {
+                span
+              } else {
+                let Some(rm) = rref.measure().await else {
+                  return;
+                };
+                if scroll_req.get_untracked().map(|(_, _, s)| s) != Some(_seq) {
+                  return;
                 }
-              } else if rel_bottom > vh - 16.0 {
-                lref.scroll_to_index(idx as u32, Percentage(0.85), px(0.0), false);
+                let rt = rm.page.y.0 - pm.page.y.0;
+                (rt, rt + rm.frame.size.height.0, true)
+              };
+
+              if idx == 0 && at_first_line && rel_top < 12.0 {
+                lref.scroll_to_offset(px(0.0), false);
+                return;
+              }
+              let cur_scroll = scroll_offset_y.get_untracked();
+              if let Some(next_y) =
+                compute_keep_visible_scroll_target(cur_scroll, vh, rel_top, rel_bottom)
+              {
+                lref.scroll_to_offset(px(next_y), false);
               }
             });
           }

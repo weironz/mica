@@ -92,6 +92,10 @@ pub struct EditorSession {
   pub(crate) prose_input: ProseInputState,
   pub(crate) slash_open: bool,
   pub(crate) page_link_open: bool,
+  /// Tracks `(block_index, line_start_u16, caret_u16)` when `insert_code_newline`
+  /// just auto-inserted leading whitespace on a fresh code line so an immediate
+  /// Paste replaces that auto-indent instead of shifting line 1 right.
+  pub(crate) last_auto_indent: Option<(usize, u32, u32)>,
 }
 
 impl EditorSession {
@@ -128,6 +132,7 @@ impl EditorSession {
       prose_input: ProseInputState::default(),
       slash_open: false,
       page_link_open: false,
+      last_auto_indent: None,
     }
   }
 
@@ -290,6 +295,15 @@ impl EditorSession {
     let before_hist_sel = HistorySelection::capture(&self.blocks, self.selection.as_ref());
     let sv_before = self.doc.state_vector();
     let mut ctx = DispatchCtx::default();
+    if !matches!(
+      cmd,
+      EditorCommand::Paste { .. }
+        | EditorCommand::CopySelection { .. }
+        | EditorCommand::ExportMarkdown { .. }
+        | EditorCommand::FlushHistoryBatch
+    ) {
+      self.last_auto_indent = None;
+    }
 
     match cmd {
       EditorCommand::InsertText { text } => self.cmd_insert_text(&text, &mut ctx),
@@ -1372,12 +1386,25 @@ impl EditorSession {
     let line = &before[line_start..];
     let indent_len_bytes = line.len() - line.trim_start_matches([' ', '\t']).len();
     let indent = &line[..indent_len_bytes];
-    let next_text = format!("{before}\n{indent}{after}");
-    let next_pos = at + 1 + utf16_len(indent);
+    // Second Enter on a whitespace-only auto-indented line strips the invisible
+    // trailing spaces from the blank line and resets the new line to column 0.
+    let (next_text, next_pos, auto_indented) =
+      if !line.is_empty() && indent_len_bytes == line.len() && (after.is_empty() || after.starts_with('\n')) {
+        let clean_before = &before[..line_start];
+        let pos = utf16_len(clean_before) + 1;
+        (format!("{clean_before}\n{after}"), pos, None)
+      } else {
+        let new_line_start = at + 1;
+        let pos = new_line_start + utf16_len(indent);
+        let tracked = (!indent.is_empty() && (after.is_empty() || after.starts_with('\n')))
+          .then_some((idx, new_line_start, pos));
+        (format!("{before}\n{indent}{after}"), pos, tracked)
+      };
     self.blocks[idx].text = next_text;
     ctx.ops.push(Self::update_text_data_op(&self.blocks[idx]));
     ctx.typing_block = Some(self.blocks[idx].id.clone());
     self.collapse_to(DocPosition::new(idx, next_pos));
+    self.last_auto_indent = auto_indented;
   }
 
   fn cmd_delete_backward(&mut self, ctx: &mut DispatchCtx) {

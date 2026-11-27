@@ -85,7 +85,7 @@ impl EditorSession {
         continue;
       }
 
-      let mut max_indent = 0u32;
+      let mut max_indent = MAX_NESTING_DEPTH;
       for p in (0..i).rev() {
         if self.blocks[p].is_list_kind() {
           max_indent = (self.blocks[p].indent() + 1).min(MAX_NESTING_DEPTH);
@@ -534,7 +534,7 @@ impl EditorSession {
         };
         let idx = sel.focus_node();
         if idx < self.blocks.len() && self.blocks[idx].is_code() && !sel.is_multi_node() {
-          self.splice_range(&sel, &normalized, &[], false, false, ctx);
+          self.paste_into_code_block(&sel, &normalized, ctx);
           return;
         }
         if !normalized.contains('\n') {
@@ -576,6 +576,43 @@ impl EditorSession {
     }
   }
 
+  /// Pastes verbatim `raw` text into a single code block without stacking
+  /// auto-inserted leading whitespace onto the pasted content.
+  fn paste_into_code_block(&mut self, sel: &DocSelection, raw: &str, ctx: &mut DispatchCtx) {
+    let auto_indent = self.last_auto_indent.take();
+    let idx = sel.focus_node();
+    let effective_sel = if sel.is_collapsed() && idx < self.blocks.len() {
+      let text = &self.blocks[idx].text;
+      let len = utf16_len(text);
+      let caret = sel.focus_pos().offset.min(len);
+      let line_start = if caret == 0 {
+        0
+      } else {
+        utf16_rfind_char_before(text, '\n', caret - 1).map_or(0, |p| p + 1)
+      };
+      let line_end = utf16_find_char_from(text, '\n', caret).unwrap_or(len);
+      let prefix = utf16_slice(text, line_start, caret);
+      let suffix = utf16_slice(text, caret, line_end);
+      let line_is_ws_only = !prefix.is_empty()
+        && prefix.bytes().all(|b| b == b' ' || b == b'\t')
+        && suffix.bytes().all(|b| b == b' ' || b == b'\t');
+      let just_auto_indented = auto_indent == Some((idx, line_start, caret));
+      let payload_carries_own_layout =
+        raw.contains('\n') || raw.starts_with(' ') || raw.starts_with('\t');
+      if line_is_ws_only && (just_auto_indented || payload_carries_own_layout) {
+        DocSelection::from_positions(
+          DocPosition::new(idx, line_start),
+          DocPosition::new(idx, caret),
+        )
+      } else {
+        sel.clone()
+      }
+    } else {
+      sel.clone()
+    };
+    self.splice_range(&effective_sel, raw, &[], false, false, ctx);
+  }
+
   fn paste_markdown_or_plain(
     &mut self,
     raw_markdown: &str,
@@ -595,11 +632,13 @@ impl EditorSession {
     let node_is_atomic = self.blocks[idx].is_atomic();
     let node_is_table = self.blocks[idx].kind == "table";
 
-    // Inside a single code block: paste verbatim preserving newlines.
+    // Inside a single code block: paste verbatim preserving newlines, without
+    // stacking auto-inserted leading whitespace onto pasted multi-line or
+    // already-indented code.
     if node_is_code && !sel.is_multi_node() {
       let raw = if !plain.is_empty() { plain } else { &markdown };
       if !raw.is_empty() {
-        self.splice_range(&sel, raw, &[], false, false, ctx);
+        self.paste_into_code_block(&sel, raw, ctx);
       }
       return;
     }
