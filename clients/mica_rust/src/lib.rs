@@ -432,6 +432,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   let tree_rev = signal(0u64);
   let active_doc: Signal<Option<Uuid>> = signal(initial_doc_id);
+  let initial_focused_nav_id = initial_doc_id.and_then(|did| {
+    tree
+      .borrow()
+      .all_live_rows()
+      .into_iter()
+      .find(|r| !r.is_folder && r.object_id == did)
+      .map(|r| r.view_id)
+  });
+  let focused_nav_id: Signal<Option<Uuid>> = signal(initial_focused_nav_id);
+  let root_focused: Signal<bool> = signal(false);
   let active_doc_id_str = signal(initial_doc_id.map(|id| id.to_string()).unwrap_or_default());
   let active_title = signal(initial_title.clone());
   let active_folder_name = signal(initial_folder_name);
@@ -1115,6 +1125,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
       br.load_markdown(&md);
       active_doc.set(Some(doc_id));
+      let nav_vid = tree_ref
+        .borrow()
+        .all_live_rows()
+        .into_iter()
+        .find(|r| !r.is_folder && r.object_id == doc_id)
+        .map(|r| r.view_id);
+      root_focused.set(false);
+      if let Some(vid) = nav_vid {
+        focused_nav_id.set(Some(vid));
+      }
       active_doc_id_str.set(doc_id.to_string());
       active_title.set(title.clone());
       active_is_favorite.set(favs.borrow().contains(&doc_id));
@@ -1320,6 +1340,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     workspace_name,
     workspaces,
     active_doc,
+    focused_nav_id,
+    root_focused,
     active_doc_id_str,
     active_title,
     title_input_focused: signal(false),
@@ -1373,51 +1395,102 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     views_watcher.set_on_session_expired(on_expired);
   }
 
-  let create_page_in_parent: Rc<dyn Fn(Option<Uuid>, String, String, bool)> = {
+  let create_page_in_parent: Rc<dyn Fn(tree_dnd::CreatePlacement, String, String, bool)> = {
     let tree_ref = tree.clone();
     let docs = docs_store.clone();
     let v = vault.clone();
     let inner = open_doc_internal.clone();
     let sync_t = sync_tree_snapshots.clone();
     let cs = cloud_session.clone();
-    Rc::new(move |parent: Option<Uuid>, name: String, markdown: String, in_new_tab: bool| {
-      let orig = active_origin.get_untracked();
-      let cur_ws = active_workspace_id.get_untracked();
-      let valid_parent = parent.filter(|&pid| {
-        tree_ref
-          .borrow()
-          .get(pid)
-          .is_some_and(|row| row.object_type == "folder" && !row.is_deleted)
-      });
-      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
-        cs.create_cloud_page(orig, cur_ws, valid_parent, name, markdown, in_new_tab);
-        return;
-      }
-      let new_doc_id = Uuid::new_v4();
-      let count = tree_ref.borrow().all_live_rows().len() + 1;
-      let pos = format!("{:010}", count * 10);
-      let view_row = make_view(cur_ws, new_doc_id, &name, "page", valid_parent, &pos);
-      let _ = v.save_view(&orig, &view_row);
-      let _ = v.save_markdown(&orig, new_doc_id, &markdown);
-      v.record_doc_created(&orig, cur_ws, new_doc_id, mica_core::ActivitySource::Manual, &markdown);
-      {
-        let mut t = tree_ref.borrow_mut();
-        t.upsert_view(view_row);
-        if let Some(pid) = valid_parent {
-          t.set_expanded(pid, true);
+    Rc::new(
+      move |placement: tree_dnd::CreatePlacement,
+            name: String,
+            markdown: String,
+            in_new_tab: bool| {
+        let orig = active_origin.get_untracked();
+        let cur_ws = active_workspace_id.get_untracked();
+        let valid_parent = placement.parent_id.filter(|&pid| {
+          tree_ref
+            .borrow()
+            .get(pid)
+            .is_some_and(|row| row.object_type == "folder" && !row.is_deleted)
+        });
+        let after_view_id = placement.after_view_id;
+        if cloud_sync::is_cloud_origin(&orig)
+          && is_cloud_signed_in.get_untracked()
+          && !cur_ws.is_nil()
+        {
+          cs.create_cloud_page(
+            orig,
+            cur_ws,
+            valid_parent,
+            after_view_id,
+            name,
+            markdown,
+            in_new_tab,
+          );
+          return;
         }
-      }
-      docs.borrow_mut().insert(new_doc_id, markdown);
-      sync_t();
-      inner(new_doc_id, name, true, in_new_tab);
-    })
+        let new_doc_id = Uuid::new_v4();
+        let pos = tree_dnd::next_sibling_position(&tree_ref.borrow(), valid_parent);
+        let view_row = make_view(cur_ws, new_doc_id, &name, "page", valid_parent, &pos);
+        let new_view_id = view_row.id;
+        let _ = v.save_view(&orig, &view_row);
+        let _ = v.save_markdown(&orig, new_doc_id, &markdown);
+        v.record_doc_created(
+          &orig,
+          cur_ws,
+          new_doc_id,
+          mica_core::ActivitySource::Manual,
+          &markdown,
+        );
+        {
+          let mut t = tree_ref.borrow_mut();
+          t.upsert_view(view_row);
+          t.reveal(new_view_id);
+        }
+        let reorder_ids = {
+          let rows = tree_ref.borrow().all_live_rows();
+          match after_view_id {
+            Some(anchor_id) => {
+              tree_dnd::ordered_siblings_placing_after(&rows, valid_parent, anchor_id, new_view_id)
+            }
+            None => tree_dnd::ordered_siblings_appending(&rows, valid_parent, new_view_id),
+          }
+        };
+        if let Some(ordered) = reorder_ids
+          && v.reorder_views(&orig, valid_parent, &ordered).is_ok()
+        {
+          cloud_sync::CloudSessionHandles::reload_tree_preserving_expanded(
+            &tree_ref,
+            &v,
+            &orig,
+            cur_ws,
+            new_view_id,
+            false,
+          );
+        }
+        root_focused.set(false);
+        focused_nav_id.set(Some(new_view_id));
+        docs.borrow_mut().insert(new_doc_id, markdown);
+        sync_t();
+        inner(new_doc_id, name, true, in_new_tab);
+      },
+    )
   };
 
   let create_page_with_content: Rc<dyn Fn(String, String)> = {
     let create = create_page_in_parent.clone();
+    let tree_ref = tree.clone();
     Rc::new(move |name: String, markdown: String| {
-      let fid = active_folder_id.get_untracked();
-      create((!fid.is_nil()).then_some(fid), name, markdown, false);
+      let rows = tree_ref.borrow().all_live_rows();
+      let p = tree_dnd::placement_for_located(
+        &rows,
+        focused_nav_id.get_untracked(),
+        root_focused.get_untracked(),
+        active_doc.get_untracked(),
+      );
+      create(p, name, markdown, false);
     })
   };
 
@@ -1428,46 +1501,82 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  let create_folder_in_parent: Rc<dyn Fn(Option<Uuid>, Option<String>) -> Uuid> = {
+  let create_folder_in_parent: Rc<dyn Fn(tree_dnd::CreatePlacement, Option<String>) -> Uuid> = {
     let tree_ref = tree.clone();
     let v = vault.clone();
     let sync_t = sync_tree_snapshots.clone();
     let cs = cloud_session.clone();
-    Rc::new(move |parent: Option<Uuid>, custom_name: Option<String>| {
-      let orig = active_origin.get_untracked();
-      let cur_ws = active_workspace_id.get_untracked();
-      let count = tree_ref.borrow().all_live_rows().len() + 1;
-      let name = custom_name.unwrap_or_else(|| "新文件夹".to_string());
-      let valid_parent = parent.filter(|&pid| {
-        tree_ref
-          .borrow()
-          .get(pid)
-          .is_some_and(|row| row.object_type == "folder" && !row.is_deleted)
-      });
-      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
-        cs.create_cloud_folder(orig, cur_ws, valid_parent, name);
-        return Uuid::nil();
-      }
-      let fid = Uuid::new_v4();
-      let folder = make_view(cur_ws, fid, &name, "folder", valid_parent, &format!("{:010}", count * 10));
-      let _ = v.save_view(&orig, &folder);
-      {
-        let mut t = tree_ref.borrow_mut();
-        t.upsert_view(folder.clone());
-        t.set_expanded(folder.id, true);
-        if let Some(pid) = valid_parent {
-          t.set_expanded(pid, true);
+    Rc::new(
+      move |placement: tree_dnd::CreatePlacement, custom_name: Option<String>| {
+        let orig = active_origin.get_untracked();
+        let cur_ws = active_workspace_id.get_untracked();
+        let name = custom_name.unwrap_or_else(|| "新文件夹".to_string());
+        let valid_parent = placement.parent_id.filter(|&pid| {
+          tree_ref
+            .borrow()
+            .get(pid)
+            .is_some_and(|row| row.object_type == "folder" && !row.is_deleted)
+        });
+        let after_view_id = placement.after_view_id;
+        if cloud_sync::is_cloud_origin(&orig)
+          && is_cloud_signed_in.get_untracked()
+          && !cur_ws.is_nil()
+        {
+          cs.create_cloud_folder(orig, cur_ws, valid_parent, after_view_id, name);
+          return Uuid::nil();
         }
-      }
-      sync_t();
-      fid
-    })
+        let fid = Uuid::new_v4();
+        let pos = tree_dnd::next_sibling_position(&tree_ref.borrow(), valid_parent);
+        let folder = make_view(cur_ws, fid, &name, "folder", valid_parent, &pos);
+        let folder_view_id = folder.id;
+        let _ = v.save_view(&orig, &folder);
+        {
+          let mut t = tree_ref.borrow_mut();
+          t.upsert_view(folder);
+          t.set_expanded(folder_view_id, true);
+          t.reveal(folder_view_id);
+        }
+        let reorder_ids = {
+          let rows = tree_ref.borrow().all_live_rows();
+          match after_view_id {
+            Some(anchor_id) => {
+              tree_dnd::ordered_siblings_placing_after(&rows, valid_parent, anchor_id, folder_view_id)
+            }
+            None => tree_dnd::ordered_siblings_appending(&rows, valid_parent, folder_view_id),
+          }
+        };
+        if let Some(ordered) = reorder_ids
+          && v.reorder_views(&orig, valid_parent, &ordered).is_ok()
+        {
+          cloud_sync::CloudSessionHandles::reload_tree_preserving_expanded(
+            &tree_ref,
+            &v,
+            &orig,
+            cur_ws,
+            folder_view_id,
+            true,
+          );
+        }
+        root_focused.set(false);
+        focused_nav_id.set(Some(folder_view_id));
+        sync_t();
+        fid
+      },
+    )
   };
 
   let on_new_folder: Rc<dyn Fn()> = {
     let create_f = create_folder_in_parent.clone();
+    let tree_ref = tree.clone();
     Rc::new(move || {
-      let _ = create_f(None, None);
+      let rows = tree_ref.borrow().all_live_rows();
+      let p = tree_dnd::placement_for_located(
+        &rows,
+        focused_nav_id.get_untracked(),
+        root_focused.get_untracked(),
+        active_doc.get_untracked(),
+      );
+      let _ = create_f(p, None);
     })
   };
 
@@ -2272,14 +2381,32 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_open_in_new_tab: on_open_in_new_tab.clone(),
     on_new_child_page: {
       let create = create_page_in_parent.clone();
+      let tree_ref = tree.clone();
       Rc::new(move |folder_id: Uuid| {
-        create(Some(folder_id), "未命名页面".to_string(), String::new(), false);
+        let rows = tree_ref.borrow().all_live_rows();
+        let p = tree_dnd::placement_in_folder(
+          &rows,
+          folder_id,
+          focused_nav_id.get_untracked(),
+          root_focused.get_untracked(),
+          active_doc.get_untracked(),
+        );
+        create(p, "未命名页面".to_string(), String::new(), false);
       })
     },
     on_new_child_folder: {
       let create_f = create_folder_in_parent.clone();
+      let tree_ref = tree.clone();
       Rc::new(move |folder_id: Uuid| {
-        let _ = create_f(Some(folder_id), None);
+        let rows = tree_ref.borrow().all_live_rows();
+        let p = tree_dnd::placement_in_folder(
+          &rows,
+          folder_id,
+          focused_nav_id.get_untracked(),
+          root_focused.get_untracked(),
+          active_doc.get_untracked(),
+        );
+        let _ = create_f(p, None);
       })
     },
     on_set_icon: on_set_icon.clone(),
@@ -3805,6 +3932,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               t.clone(),
               tree_rev,
               active_doc,
+              focused_nav_id,
+              root_focused,
               favorite_pages,
               sidebar_width,
               workspace_name,
@@ -3923,6 +4052,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             t.clone(),
             tree_rev,
             active_doc,
+            focused_nav_id,
+            root_focused,
             favorite_pages,
             sidebar_width,
             workspace_name,

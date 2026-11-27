@@ -215,6 +215,8 @@ struct TreeRowContext {
   tree: Rc<RefCell<PageTreeModel>>,
   tree_rev: Signal<u64>,
   active_doc: Signal<Option<Uuid>>,
+  focused_nav_id: Signal<Option<Uuid>>,
+  root_focused: Signal<bool>,
   dark_mode: Signal<bool>,
   sidebar_hovered: Signal<bool>,
   selection: Signal<TreeSelection>,
@@ -246,6 +248,8 @@ pub fn sidebar_view(
   tree: Rc<RefCell<PageTreeModel>>,
   tree_rev: Signal<u64>,
   active_doc: Signal<Option<Uuid>>,
+  focused_nav_id: Signal<Option<Uuid>>,
+  root_focused: Signal<bool>,
   favorite_pages: Signal<Vec<(Uuid, String)>>,
   sidebar_width: Signal<f32>,
   workspace_name: Signal<String>,
@@ -299,14 +303,20 @@ pub fn sidebar_view(
     let tree_vis = tree.clone();
     effect(move || {
       tree_rev.get();
-      let visible = tree_vis.borrow().visible_rows();
+      let tree_borrow = tree_vis.borrow();
+      let visible = tree_borrow.visible_rows();
       let mut s = selection.get_untracked();
       if s.retain_visible(&visible) { selection.set(s); }
+      if let Some(fid) = focused_nav_id.get_untracked()
+        && !tree_borrow.get(fid).is_some_and(|v| !v.is_deleted)
+      {
+        focused_nav_id.set(None);
+      }
     });
   }
 
   let tree_ctx = Rc::new(TreeRowContext {
-    tree: tree.clone(), tree_rev, active_doc, dark_mode, sidebar_hovered, selection,
+    tree: tree.clone(), tree_rev, active_doc, focused_nav_id, root_focused, dark_mode, sidebar_hovered, selection,
     context_menu, page_to_local, drag_state, drag_pointer, drag_page_pointer,
     drag_autoscroll_speed, tree_list_ref, tree_scroll_y, tree_content_h, tree_viewport_h,
     tree_page_origin, just_dragged, rename_modal_open, rename_modal_view, rename_modal_initial,
@@ -715,6 +725,7 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
   let row_ctx = ctx.clone();
   let root_ctx = ctx.clone();
   let root_click_ctx = ctx.clone();
+  let empty_click_ctx = ctx.clone();
   let scroll_ctx = ctx.clone();
   let layout_ctx = ctx.clone();
   let dark_mode = ctx.dark_mode;
@@ -722,6 +733,19 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
 
   view()
     .flex_1().w_full().min_h(px(0.0))
+    .on_press(move |_: &PressEvent| {
+      if empty_click_ctx.just_dragged.get_untracked() {
+        empty_click_ctx.just_dragged.set(false);
+        return;
+      }
+      empty_click_ctx.context_menu.set(None);
+      empty_click_ctx.root_focused.set(true);
+      empty_click_ctx.focused_nav_id.set(None);
+      let mut s = empty_click_ctx.selection.get_untracked();
+      if s.clear() {
+        empty_click_ctx.selection.set(s);
+      }
+    })
     .child(
       virtual_list(
         move || {
@@ -773,7 +797,13 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
         .test_id("sidebar-root-drop-zone")
         .w_full().h(px(48.0)).flex_shrink_0().pt(px(6.0))
         .on_press(move |_: &PressEvent| {
+          if root_click_ctx.just_dragged.get_untracked() {
+            root_click_ctx.just_dragged.set(false);
+            return;
+          }
           root_click_ctx.context_menu.set(None);
+          root_click_ctx.root_focused.set(true);
+          root_click_ctx.focused_nav_id.set(None);
           let mut s = root_click_ctx.selection.get_untracked();
           if s.clear() {
             root_click_ctx.selection.set(s);
@@ -829,6 +859,8 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
   let tree_read = ctx.tree.clone();
   let tree_rev = ctx.tree_rev;
   let active_doc = ctx.active_doc;
+  let focused_nav_id = ctx.focused_nav_id;
+  let root_focused = ctx.root_focused;
   let dark_mode = ctx.dark_mode;
   let sidebar_hovered = ctx.sidebar_hovered;
   let selection = ctx.selection;
@@ -851,8 +883,18 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
   });
   let row_view_id = computed(move || row_info.get().map(|r| r.view_id));
   let is_active = computed(move || {
+    if root_focused.get() {
+      return false;
+    }
+    let focused = focused_nav_id.get();
     let curr = active_doc.get();
-    row_info.get().is_some_and(|r| !r.is_folder && Some(r.object_id) == curr)
+    row_info.get().is_some_and(|r| {
+      if let Some(fid) = focused {
+        r.view_id == fid
+      } else {
+        !r.is_folder && Some(r.object_id) == curr
+      }
+    })
   });
   let is_multi_selected = computed(move || row_view_id.get().is_some_and(|vid| selection.get().contains(vid)));
   let is_menu_open = computed(move || {
@@ -1052,6 +1094,8 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   ctx_press.selection.set(sel);
                 }
                 ClickIntent::Open => {
+                  ctx_press.root_focused.set(false);
+                  ctx_press.focused_nav_id.set(Some(row.view_id));
                   let mut sel = ctx_press.selection.get_untracked();
                   if sel.anchor_on(row.view_id) {
                     ctx_press.selection.set(sel);
@@ -1142,6 +1186,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   view().flex_row().items_center()
                     .child(
                       button()
+                        .test_id(&format!("sidebar-row-new-page-{row_idx}"))
                         .accessibility_label("新建子页面")
                         .w(px(22.0)).h(px(22.0)).items_center().justify_center().rounded(px(4.0))
                         .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_sunken))
@@ -1154,6 +1199,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                     )
                     .child(
                       button()
+                        .test_id(&format!("sidebar-row-new-folder-{row_idx}"))
                         .accessibility_label("新建子文件夹")
                         .w(px(22.0)).h(px(22.0)).items_center().justify_center().rounded(px(4.0))
                         .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_sunken))

@@ -699,6 +699,8 @@ pub(crate) struct CloudSessionHandles {
   pub workspace_name: Signal<String>,
   pub workspaces: Signal<Vec<WorkspaceEntry>>,
   pub active_doc: Signal<Option<Uuid>>,
+  pub focused_nav_id: Signal<Option<Uuid>>,
+  pub root_focused: Signal<bool>,
   pub active_doc_id_str: Signal<String>,
   pub active_title: Signal<String>,
   pub title_input_focused: Signal<bool>,
@@ -945,6 +947,8 @@ impl CloudSessionHandles {
     self.workspace_name.set(ws_name);
     self.active_folder_id.set(fid);
     self.active_folder_name.set(fname);
+    self.root_focused.set(false);
+    self.focused_nav_id.set(opening_page.map(|p| p.id));
 
     if let Some(page) = opening_page {
       let doc_id = page.object_id;
@@ -1629,13 +1633,48 @@ impl CloudSessionHandles {
     );
   }
 
+  /// Reload `tree` from `vault` after a local `reorder_views`, preserving every
+  /// currently expanded folder and ensuring `reveal_id`'s ancestors (and optionally
+  /// `reveal_id` itself, for folders) are expanded.
+  pub(crate) fn reload_tree_preserving_expanded(
+    tree_ref: &RefCell<PageTreeModel>,
+    vault: &VaultStore,
+    origin: &str,
+    ws_id: Uuid,
+    reveal_id: Uuid,
+    expand_self: bool,
+  ) {
+    let expanded: Vec<Uuid> = tree_ref
+      .borrow()
+      .all_live_rows()
+      .into_iter()
+      .filter(|r| r.is_folder && r.expanded)
+      .map(|r| r.view_id)
+      .collect();
+    let views = vault.list_workspace_views(origin, ws_id);
+    let mut next_tree = PageTreeModel::new(views);
+    for id in expanded {
+      next_tree.set_expanded(id, true);
+    }
+    next_tree.reveal(reveal_id);
+    if expand_self {
+      next_tree.set_expanded(reveal_id, true);
+    }
+    *tree_ref.borrow_mut() = next_tree;
+  }
+
   /// Create a cloud page via `POST /api/workspaces/{ws}/documents` so its `id`
-  /// and `object_id` match the server authoritatively.
+  /// and `object_id` match the server authoritatively. When `after_view_id` is
+  /// `Some`, places the newly created page immediately after that sibling via
+  /// `POST /api/workspaces/{ws}/views/reorder` inside a `ViewOpGuard` so
+  /// intermediate WS broadcasts cannot jump the tree order.
+  #[allow(clippy::too_many_arguments)]
   pub(crate) fn create_cloud_page(
     &self,
     origin: String,
     ws_id: Uuid,
     parent: Option<Uuid>,
+    after_view_id: Option<Uuid>,
     name: String,
     markdown: String,
     in_new_tab: bool,
@@ -1646,7 +1685,9 @@ impl CloudSessionHandles {
     let h = self.clone();
     let name_req = name.clone();
     let md_req = markdown.clone();
+    let guard = ViewOpGuard::enter(self.clone());
     spawn(async move {
+      let _guard = guard;
       let res = async {
         let name_c = name_req.clone();
         let (mut view, mut rot) = with_auto_refresh(&mut conn, move |c| {
@@ -1678,43 +1719,96 @@ impl CloudSessionHandles {
         return;
       }
       match res {
-        Ok((conn, view, rot)) => {
-          *h.cloud_connector.borrow_mut() = conn;
+        Ok((mut conn, view, rot)) => {
+          *h.cloud_connector.borrow_mut() = conn.clone();
           if h.allow_local {
             persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
           }
+          let view_id = view.id;
           let doc_id = view.object_id;
           let title = view.name.clone();
           let _ = h.vault.save_view(&origin, &view);
           {
             let mut t = h.tree.borrow_mut();
             t.upsert_view(view);
-            if let Some(pid) = parent {
-              t.set_expanded(pid, true);
-            }
+            t.reveal(view_id);
           }
+          let reorder_ids = after_view_id.and_then(|anchor_id| {
+            let rows = h.tree.borrow().all_live_rows();
+            crate::tree_dnd::ordered_siblings_placing_after(&rows, parent, anchor_id, view_id)
+          });
+          if let Some(ref ordered) = reorder_ids
+            && h.vault.reorder_views(&origin, parent, ordered).is_ok()
+          {
+            Self::reload_tree_preserving_expanded(&h.tree, &h.vault, &origin, ws_id, view_id, false);
+          }
+          h.root_focused.set(false);
+          h.focused_nav_id.set(Some(view_id));
           h.docs_store.borrow_mut().insert(doc_id, markdown);
           (h.sync_tree_snapshots)();
           (h.open_doc_internal)(doc_id, title, true, in_new_tab);
+
+          if let Some(ordered) = reorder_ids {
+            let ord_req = ordered.clone();
+            let reorder_res = with_auto_refresh(&mut conn, move |c| {
+              let ids = ord_req.clone();
+              async move { c.reorder_views(ws_id, parent, &ids).await }
+            })
+            .await;
+            if h.active_origin.get_untracked() != origin {
+              return;
+            }
+            match reorder_res {
+              Ok((_, rot2)) if rot2.is_some() => {
+                *h.cloud_connector.borrow_mut() = conn;
+                if h.allow_local {
+                  persist_refreshed_tokens(&h.vault, &srv_url, &email, rot2);
+                }
+              }
+              Ok(_) => {}
+              Err(err) => {
+                if CloudConnector::is_unauthorized_error(&err) {
+                  h.mark_cloud_session_expired(&srv_url, false);
+                } else {
+                  let msg = format!("云端新建页面定位排序失败：{err}");
+                  h.cloud_status.set(msg.clone());
+                  h.bridge.set_status_flash(msg);
+                  h.pending_view_ops
+                    .borrow_mut()
+                    .mark_deferred_refresh(srv_url, origin, ws_id);
+                }
+              }
+            }
+          }
         }
-        Err(err) => h.cloud_status.set(format!("云端新建页面失败：{err}")),
+        Err(err) => {
+          if CloudConnector::is_unauthorized_error(&err) {
+            h.mark_cloud_session_expired(&srv_url, false);
+          } else {
+            h.cloud_status.set(format!("云端新建页面失败：{err}"));
+          }
+        }
       }
     });
   }
 
-  /// Create a cloud folder via `POST /api/workspaces/{ws}/folders`.
+  /// Create a cloud folder via `POST /api/workspaces/{ws}/folders`, optionally
+  /// placing it directly after `after_view_id` via `POST /views/reorder`.
   pub(crate) fn create_cloud_folder(
     &self,
     origin: String,
     ws_id: Uuid,
     parent: Option<Uuid>,
+    after_view_id: Option<Uuid>,
     name: String,
   ) {
     let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
+    let guard = ViewOpGuard::enter(self.clone());
     spawn(async move {
+      let _guard = guard;
       let res = async {
         let name_c = name.clone();
         let (mut view, rot) = with_auto_refresh(&mut conn, move |c| {
@@ -1734,24 +1828,72 @@ impl CloudSessionHandles {
         return;
       }
       match res {
-        Ok((conn, view, rot)) => {
-          *h.cloud_connector.borrow_mut() = conn;
+        Ok((mut conn, view, rot)) => {
+          *h.cloud_connector.borrow_mut() = conn.clone();
           if h.allow_local {
             persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
           }
+          let fid = view.id;
           let _ = h.vault.save_view(&origin, &view);
           {
             let mut t = h.tree.borrow_mut();
-            let fid = view.id;
             t.upsert_view(view);
             t.set_expanded(fid, true);
-            if let Some(pid) = parent {
-              t.set_expanded(pid, true);
+            t.reveal(fid);
+          }
+          let reorder_ids = after_view_id.and_then(|anchor_id| {
+            let rows = h.tree.borrow().all_live_rows();
+            crate::tree_dnd::ordered_siblings_placing_after(&rows, parent, anchor_id, fid)
+          });
+          if let Some(ref ordered) = reorder_ids
+            && h.vault.reorder_views(&origin, parent, ordered).is_ok()
+          {
+            Self::reload_tree_preserving_expanded(&h.tree, &h.vault, &origin, ws_id, fid, true);
+          }
+          h.root_focused.set(false);
+          h.focused_nav_id.set(Some(fid));
+          (h.sync_tree_snapshots)();
+
+          if let Some(ordered) = reorder_ids {
+            let ord_req = ordered.clone();
+            let reorder_res = with_auto_refresh(&mut conn, move |c| {
+              let ids = ord_req.clone();
+              async move { c.reorder_views(ws_id, parent, &ids).await }
+            })
+            .await;
+            if h.active_origin.get_untracked() != origin {
+              return;
+            }
+            match reorder_res {
+              Ok((_, rot2)) if rot2.is_some() => {
+                *h.cloud_connector.borrow_mut() = conn;
+                if h.allow_local {
+                  persist_refreshed_tokens(&h.vault, &srv_url, &email, rot2);
+                }
+              }
+              Ok(_) => {}
+              Err(err) => {
+                if CloudConnector::is_unauthorized_error(&err) {
+                  h.mark_cloud_session_expired(&srv_url, false);
+                } else {
+                  let msg = format!("云端新建文件夹定位排序失败：{err}");
+                  h.cloud_status.set(msg.clone());
+                  h.bridge.set_status_flash(msg);
+                  h.pending_view_ops
+                    .borrow_mut()
+                    .mark_deferred_refresh(srv_url, origin, ws_id);
+                }
+              }
             }
           }
-          (h.sync_tree_snapshots)();
         }
-        Err(err) => h.cloud_status.set(format!("云端新建文件夹失败：{err}")),
+        Err(err) => {
+          if CloudConnector::is_unauthorized_error(&err) {
+            h.mark_cloud_session_expired(&srv_url, false);
+          } else {
+            h.cloud_status.set(format!("云端新建文件夹失败：{err}"));
+          }
+        }
       }
     });
   }

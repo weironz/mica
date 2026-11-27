@@ -2407,3 +2407,184 @@ fn regression_image_context_menu_actions_survive_menu_close() {
     .wait_for_gone("id:node-view-image", std::time::Duration::from_millis(800))
     .unwrap();
 }
+
+/// Regression: sidebar located-creation placement rules (1:1 with Mica Flutter `v0.14.11`).
+///
+/// Verifies end-to-end through real sidebar clicks:
+/// 1. Active/located page -> top `+` / `folder+` creates sibling directly BELOW that page
+///    (same parent, next line — NOT appended at the end of the folder).
+/// 2. Focused folder -> top `+` creates page INSIDE that folder (depth + 1) and expands it.
+/// 3. Clicking blank area below the tree (`sidebar-root-drop-zone`) focuses workspace root ->
+///    top `folder+` and `+` create at depth 0 (workspace root) even while a doc stays open.
+/// 4. Folder row's own hover `+` button creates inside that folder, landing right after the
+///    located page when that page sits directly inside the clicked folder.
+#[test]
+fn regression_sidebar_located_creation_placement() {
+  use nsh_core::{EventKind, EventPayload, PressEvent, geometry::point, keymap::Modifiers};
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("id:sidebar-row-0").unwrap();
+
+  // `virtual_list` keys rows by `view_id`, so inserting in the middle reuses existing DOM
+  // elements (whose static `test_id` was captured at mount). Sort all laid-out row buttons
+  // (`sidebar-row-<digits>`) by visual `bounds.origin.y` to inspect true top-to-bottom order.
+  let visual_rows = |app: &mut Headless| {
+    let mut rows: Vec<_> = app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .filter(|n| {
+        n.test_id.as_deref().is_some_and(|tid| {
+          tid
+            .strip_prefix("sidebar-row-")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        })
+      })
+      .map(|n| {
+        (
+          n.id,
+          n.bounds.origin.x.0,
+          n.bounds.origin.y.0,
+          n.bounds.size.width.0,
+          n.bounds.size.height.0,
+        )
+      })
+      .collect();
+    rows.sort_by(|a, b| a.2.total_cmp(&b.2));
+    rows
+  };
+  let wait_row_count = |app: &mut Headless, expected: usize| {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+      app.settle();
+      if visual_rows(app).len() == expected {
+        return;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    panic!(
+      "expected {expected} visible sidebar rows, got {}",
+      visual_rows(app).len()
+    );
+  };
+  let row_x = |app: &mut Headless, idx: usize| -> f32 { visual_rows(app)[idx].1 };
+  let click_visual_row = |app: &mut Headless, idx: usize| {
+    let (id, x, y, w, h) = visual_rows(app)[idx];
+    let local = point(px(w * 0.5), px(h * 0.5));
+    let page = point(px(x + w * 0.5), px(y + h * 0.5));
+    app.engine().control().dispatch_event(
+      id,
+      EventKind::Press,
+      EventPayload::Press(PressEvent {
+        position: local,
+        page_position: page,
+        modifiers: Modifiers::default(),
+        clicks: 1,
+      }),
+    );
+    app.settle();
+  };
+  let paste_body = |app: &mut Headless, marker: &str| {
+    let mut paste = nsh_core::PasteEvent::default();
+    paste.text = marker.into();
+    app.paste("id:mica-editor-ime-sink", &paste).unwrap();
+    app.wait_for(marker).unwrap();
+  };
+
+  let root_x = row_x(&mut app, 0);
+
+  // 1. Initially `欢迎使用 Mica` (inside `知识库`) is open.
+  //    Create Page A and Page B via top `+`: both land inside `知识库` (depth 1).
+  app.press("id:new-page-btn").unwrap();
+  wait_row_count(&mut app, 3);
+  paste_body(&mut app, "MARKER-PAGE-A");
+
+  app.press("id:new-page-btn").unwrap();
+  wait_row_count(&mut app, 4);
+  paste_body(&mut app, "MARKER-PAGE-B");
+
+  // Layout inside `知识库` is now:
+  //   row 0: 知识库 (depth 0)
+  //   row 1: 欢迎使用 Mica (depth 1)
+  //   row 2: Page A (depth 1)
+  //   row 3: Page B (depth 1)
+  assert!((row_x(&mut app, 1) - (root_x + 16.0)).abs() <= 1.5);
+  assert!((row_x(&mut app, 2) - (root_x + 16.0)).abs() <= 1.5);
+  assert!((row_x(&mut app, 3) - (root_x + 16.0)).abs() <= 1.5);
+
+  // 2. Click visual row 1 (`欢迎使用 Mica`, the FIRST sibling) and create Page C:
+  //    MUST land directly below `欢迎使用 Mica` at visual row 2 (NOT at the bottom row 4!).
+  click_visual_row(&mut app, 1);
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  wait_row_count(&mut app, 5);
+  paste_body(&mut app, "MARKER-PAGE-C");
+
+  // Verify exact visual order: row 2 == Page C, row 3 == Page A, row 4 == Page B.
+  click_visual_row(&mut app, 3);
+  app.wait_for("MARKER-PAGE-A").unwrap();
+  click_visual_row(&mut app, 4);
+  app.wait_for("MARKER-PAGE-B").unwrap();
+  click_visual_row(&mut app, 2);
+  app.wait_for("MARKER-PAGE-C").unwrap();
+
+  // 3. While Page C (visual row 2, inside `知识库`) is located, click top `folder+`:
+  //    New folder MUST be created inside `知识库` right below Page C (visual row 3, depth 1)
+  //    and become the focused located node.
+  app.press("id:new-folder-btn").unwrap();
+  wait_row_count(&mut app, 6);
+  assert!(
+    (row_x(&mut app, 3) - (root_x + 16.0)).abs() <= 1.5,
+    "new folder created while located on a depth-1 page must land at depth 1 right below it"
+  );
+  // Immediately click top `+` while the brand-new folder (visual row 3) is focused:
+  //    New page MUST land INSIDE that new folder at visual row 4 (depth 2, +32px)!
+  app.press("id:new-page-btn").unwrap();
+  wait_row_count(&mut app, 7);
+  paste_body(&mut app, "MARKER-NESTED-IN-SUBFOLDER");
+  assert!(
+    (row_x(&mut app, 4) - (root_x + 32.0)).abs() <= 1.5,
+    "new page created while a depth-1 folder is focused must land inside it at depth 2"
+  );
+  // Verify visual row 5 is Page A (confirming subfolder + nested page were inserted between Page C and Page A).
+  click_visual_row(&mut app, 5);
+  app.wait_for("MARKER-PAGE-A").unwrap();
+
+  // 4. Click blank area below tree (`sidebar-root-drop-zone`) -> focuses workspace root.
+  //    Creating a folder and then clicking blank area again and creating a page must both
+  //    land at depth 0 (workspace root) at the bottom of the tree.
+  app.press("id:sidebar-root-drop-zone").unwrap();
+  app.press("id:new-folder-btn").unwrap();
+  wait_row_count(&mut app, 8);
+  assert!(
+    (row_x(&mut app, 7) - root_x).abs() <= 1.5,
+    "new folder created after clicking empty sidebar area must land at workspace root (depth 0)"
+  );
+
+  app.press("id:sidebar-root-drop-zone").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  wait_row_count(&mut app, 9);
+  paste_body(&mut app, "MARKER-ROOT-PAGE");
+  assert!(
+    (row_x(&mut app, 8) - root_x).abs() <= 1.5,
+    "new page created after clicking empty sidebar area must land at workspace root (depth 0)"
+  );
+
+  // 5. Folder row's own `+` button while `欢迎使用 Mica` (visual row 1, direct child of `知识库`)
+  //    is located -> creates right below `欢迎使用 Mica` at visual row 2!
+  click_visual_row(&mut app, 1);
+  app.hover("id:sidebar-row-0").unwrap();
+  app.wait_for("id:sidebar-row-new-page-0").unwrap();
+  app.press("id:sidebar-row-new-page-0").unwrap();
+  wait_row_count(&mut app, 10);
+  paste_body(&mut app, "MARKER-FOLDER-BTN-AFTER-WELCOME");
+  // Verify visual row 2 is the new page and visual row 3 is Page C.
+  click_visual_row(&mut app, 3);
+  app.wait_for("MARKER-PAGE-C").unwrap();
+  click_visual_row(&mut app, 2);
+  app.wait_for("MARKER-FOLDER-BTN-AFTER-WELCOME").unwrap();
+}

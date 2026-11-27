@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mica_client::TreeRow;
+use mica_client::{PageTreeModel, TreeRow};
 use mica_core::tree_rules::{MissingParent, ParentLookup, judge_parent};
 use uuid::Uuid;
 
@@ -480,6 +480,190 @@ pub fn tree_drag_row_at_y(
   Some((idx, local_y))
 }
 
+/// Placement target resolved for creating a new page or folder in the sidebar.
+///
+/// Mirrors Mica Flutter `v0.14.11` (`_createLocated`, `_createInFolder`,
+/// `createParentForLocated`, `orderedSiblingsPlacingAfter`):
+/// - Focused folder -> inside that folder, appended at the end (`after_view_id: None`).
+/// - Focused/active page -> sibling under that page's folder (or root), directly below
+///   that page (`after_view_id: Some(page.view_id)`).
+/// - Root focused (clicked blank area below tree) or nothing located -> workspace root end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CreatePlacement {
+  pub parent_id: Option<Uuid>,
+  pub after_view_id: Option<Uuid>,
+}
+
+fn effective_parent_id(row: &TreeRow, all_live_rows: &[TreeRow]) -> Option<Uuid> {
+  row.parent_view_id.filter(|&pid| {
+    all_live_rows
+      .iter()
+      .any(|r| r.view_id == pid && r.is_folder)
+  })
+}
+
+/// Resolve the currently located live tree row (page or folder) for sidebar creation.
+///
+/// Returns `None` when `root_focused` is `true` (user explicitly clicked empty space
+/// below the tree to target the workspace root, even while a document remains open).
+pub fn resolve_located_row(
+  all_live_rows: &[TreeRow],
+  focused_nav_id: Option<Uuid>,
+  root_focused: bool,
+  active_doc_object_id: Option<Uuid>,
+) -> Option<&TreeRow> {
+  if root_focused {
+    return None;
+  }
+  if let Some(fid) = focused_nav_id
+    && let Some(row) = all_live_rows.iter().find(|r| r.view_id == fid)
+  {
+    return Some(row);
+  }
+  if let Some(doc_id) = active_doc_object_id {
+    return all_live_rows
+      .iter()
+      .find(|r| !r.is_folder && r.object_id == doc_id);
+  }
+  None
+}
+
+/// Resolve `(parent_id, after_view_id)` for top-bar `+` (New Page) and `folder+` (New Folder).
+pub fn placement_for_located(
+  all_live_rows: &[TreeRow],
+  focused_nav_id: Option<Uuid>,
+  root_focused: bool,
+  active_doc_object_id: Option<Uuid>,
+) -> CreatePlacement {
+  let Some(located) =
+    resolve_located_row(all_live_rows, focused_nav_id, root_focused, active_doc_object_id)
+  else {
+    return CreatePlacement {
+      parent_id: None,
+      after_view_id: None,
+    };
+  };
+  if located.is_folder {
+    CreatePlacement {
+      parent_id: Some(located.view_id),
+      after_view_id: None,
+    }
+  } else {
+    CreatePlacement {
+      parent_id: effective_parent_id(located, all_live_rows),
+      after_view_id: Some(located.view_id),
+    }
+  }
+}
+
+/// Resolve `(parent_id, after_view_id)` when clicking a specific folder row's `+` / `folder+`
+/// button or its "新建子页面 / 新建子文件夹" context menu item.
+///
+/// Always places inside `folder_id`; if the currently located node is a page sitting
+/// directly inside `folder_id`, lands right below that page rather than at folder end.
+pub fn placement_in_folder(
+  all_live_rows: &[TreeRow],
+  folder_id: Uuid,
+  focused_nav_id: Option<Uuid>,
+  root_focused: bool,
+  active_doc_object_id: Option<Uuid>,
+) -> CreatePlacement {
+  if !all_live_rows
+    .iter()
+    .any(|r| r.view_id == folder_id && r.is_folder)
+  {
+    return CreatePlacement {
+      parent_id: None,
+      after_view_id: None,
+    };
+  }
+  let after_view_id =
+    resolve_located_row(all_live_rows, focused_nav_id, root_focused, active_doc_object_id)
+      .filter(|loc| !loc.is_folder && effective_parent_id(loc, all_live_rows) == Some(folder_id))
+      .map(|loc| loc.view_id);
+  CreatePlacement {
+    parent_id: Some(folder_id),
+    after_view_id,
+  }
+}
+
+/// Compute the desired sibling order under `parent_id` placing `created_view_id`
+/// immediately after `anchor_view_id`.
+///
+/// Returns `None` when `anchor_view_id` is missing from `parent_id`'s live siblings or
+/// when `created_view_id` already sits immediately after `anchor_view_id` (avoiding a
+/// redundant `reorder_views` round-trip).
+pub fn ordered_siblings_placing_after(
+  all_live_rows: &[TreeRow],
+  parent_id: Option<Uuid>,
+  anchor_view_id: Uuid,
+  created_view_id: Uuid,
+) -> Option<Vec<Uuid>> {
+  let current_siblings: Vec<Uuid> = all_live_rows
+    .iter()
+    .filter(|r| effective_parent_id(r, all_live_rows) == parent_id)
+    .map(|r| r.view_id)
+    .collect();
+  let without_created: Vec<Uuid> = current_siblings
+    .iter()
+    .copied()
+    .filter(|&id| id != created_view_id)
+    .collect();
+  let anchor_idx = without_created.iter().position(|&id| id == anchor_view_id)?;
+  let mut desired = Vec::with_capacity(without_created.len() + 1);
+  desired.extend_from_slice(&without_created[..=anchor_idx]);
+  desired.push(created_view_id);
+  desired.extend_from_slice(&without_created[anchor_idx + 1..]);
+  if current_siblings == desired {
+    None
+  } else {
+    Some(desired)
+  }
+}
+
+/// Compute the desired sibling order under `parent_id` ensuring `created_view_id` lands
+/// at the end, returning `None` if it is already last.
+pub fn ordered_siblings_appending(
+  all_live_rows: &[TreeRow],
+  parent_id: Option<Uuid>,
+  created_view_id: Uuid,
+) -> Option<Vec<Uuid>> {
+  let current_siblings: Vec<Uuid> = all_live_rows
+    .iter()
+    .filter(|r| effective_parent_id(r, all_live_rows) == parent_id)
+    .map(|r| r.view_id)
+    .collect();
+  if current_siblings.last() == Some(&created_view_id) {
+    return None;
+  }
+  let mut desired: Vec<Uuid> = current_siblings
+    .into_iter()
+    .filter(|&id| id != created_view_id)
+    .collect();
+  desired.push(created_view_id);
+  Some(desired)
+}
+
+/// Compute the next 10-digit zero-padded sibling position under `parent_id` strictly
+/// greater than every existing numeric sibling position in `tree`.
+pub fn next_sibling_position(tree: &PageTreeModel, parent_id: Option<Uuid>) -> String {
+  let all_rows = tree.all_live_rows();
+  let mut max_num: i64 = 0;
+  let mut count: i64 = 0;
+  for row in &all_rows {
+    if effective_parent_id(row, &all_rows) == parent_id {
+      count += 1;
+      if let Some(view) = tree.get(row.view_id)
+        && let Ok(n) = view.position.trim().parse::<i64>()
+      {
+        max_num = max_num.max(n);
+      }
+    }
+  }
+  let next = (max_num + 10).max((count + 1) * 10);
+  format!("{next:010}")
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -746,5 +930,173 @@ mod tests {
     assert_eq!(renamed_to("Old", "Old"), None);
     assert_eq!(renamed_to("  Old  ", "Old"), None);
     assert_eq!(renamed_to("  New Name  ", "Old"), Some("New Name".to_string()));
+  }
+
+  #[test]
+  fn placement_for_located_handles_folder_page_and_root_focus() {
+    let f1 = Uuid::new_v4();
+    let p1 = Uuid::new_v4();
+    let p2 = Uuid::new_v4();
+    let p_root = Uuid::new_v4();
+    let rows = vec![
+      mk_row(f1, "Folder 1", true, 0, None),
+      mk_row(p1, "Page 1", false, 1, Some(f1)),
+      mk_row(p2, "Page 2", false, 1, Some(f1)),
+      mk_row(p_root, "Root Page", false, 0, None),
+    ];
+
+    // 1. Focused folder -> inside that folder, appended at end.
+    assert_eq!(
+      placement_for_located(&rows, Some(f1), false, Some(p1_obj(&rows, p1))),
+      CreatePlacement {
+        parent_id: Some(f1),
+        after_view_id: None,
+      }
+    );
+
+    // 2. Focused page inside folder -> sibling inside same folder, directly after page.
+    assert_eq!(
+      placement_for_located(&rows, Some(p1), false, None),
+      CreatePlacement {
+        parent_id: Some(f1),
+        after_view_id: Some(p1),
+      }
+    );
+
+    // 3. Fallback to active_doc when focused_nav_id is None.
+    assert_eq!(
+      placement_for_located(&rows, None, false, Some(p1_obj(&rows, p_root))),
+      CreatePlacement {
+        parent_id: None,
+        after_view_id: Some(p_root),
+      }
+    );
+
+    // 4. Root focused (clicked blank area below tree) -> workspace root even with open doc.
+    assert_eq!(
+      placement_for_located(&rows, Some(f1), true, Some(p1_obj(&rows, p1))),
+      CreatePlacement {
+        parent_id: None,
+        after_view_id: None,
+      }
+    );
+
+    // 5. Nothing focused and no active doc -> workspace root.
+    assert_eq!(
+      placement_for_located(&rows, None, false, None),
+      CreatePlacement {
+        parent_id: None,
+        after_view_id: None,
+      }
+    );
+  }
+
+  fn p1_obj(rows: &[TreeRow], vid: Uuid) -> Uuid {
+    rows.iter().find(|r| r.view_id == vid).unwrap().object_id
+  }
+
+  #[test]
+  fn placement_in_folder_anchors_after_direct_child_page_only() {
+    let f1 = Uuid::new_v4();
+    let f2 = Uuid::new_v4();
+    let p1 = Uuid::new_v4();
+    let p2 = Uuid::new_v4();
+    let rows = vec![
+      mk_row(f1, "F1", true, 0, None),
+      mk_row(p1, "P1", false, 1, Some(f1)),
+      mk_row(f2, "F2", true, 1, Some(f1)),
+      mk_row(p2, "P2", false, 2, Some(f2)),
+    ];
+
+    // Located page is direct child of f1 -> lands right after p1 inside f1.
+    assert_eq!(
+      placement_in_folder(&rows, f1, Some(p1), false, None),
+      CreatePlacement {
+        parent_id: Some(f1),
+        after_view_id: Some(p1),
+      }
+    );
+
+    // Located page is in nested child folder f2, NOT direct child of f1 -> appends to f1 end.
+    assert_eq!(
+      placement_in_folder(&rows, f1, Some(p2), false, None),
+      CreatePlacement {
+        parent_id: Some(f1),
+        after_view_id: None,
+      }
+    );
+
+    // Located node is a folder itself (f2) -> appends to f1 end.
+    assert_eq!(
+      placement_in_folder(&rows, f1, Some(f2), false, None),
+      CreatePlacement {
+        parent_id: Some(f1),
+        after_view_id: None,
+      }
+    );
+
+    // Root focused -> appends to f1 end (explicit folder button still creates inside f1).
+    assert_eq!(
+      placement_in_folder(&rows, f1, Some(p1), true, None),
+      CreatePlacement {
+        parent_id: Some(f1),
+        after_view_id: None,
+      }
+    );
+  }
+
+  #[test]
+  fn ordered_siblings_placing_after_inserts_next_line_and_skips_when_already_adjacent() {
+    let f1 = Uuid::new_v4();
+    let p1 = Uuid::new_v4();
+    let p2 = Uuid::new_v4();
+    let p3 = Uuid::new_v4();
+    let created = Uuid::new_v4();
+
+    // `created` currently appended at end of f1: [p1, p2, p3, created]
+    let rows = vec![
+      mk_row(f1, "F1", true, 0, None),
+      mk_row(p1, "P1", false, 1, Some(f1)),
+      mk_row(p2, "P2", false, 1, Some(f1)),
+      mk_row(p3, "P3", false, 1, Some(f1)),
+      mk_row(created, "New", false, 1, Some(f1)),
+    ];
+
+    // Anchor p1 (first) -> [p1, created, p2, p3]
+    assert_eq!(
+      ordered_siblings_placing_after(&rows, Some(f1), p1, created),
+      Some(vec![p1, created, p2, p3])
+    );
+
+    // Anchor p2 (middle) -> [p1, p2, created, p3]
+    assert_eq!(
+      ordered_siblings_placing_after(&rows, Some(f1), p2, created),
+      Some(vec![p1, p2, created, p3])
+    );
+
+    // Anchor p3 (already immediately before created) -> None (no redundant reorder)
+    assert_eq!(
+      ordered_siblings_placing_after(&rows, Some(f1), p3, created),
+      None
+    );
+
+    // If created somehow sorted BEFORE last sibling p3: [p1, p2, created, p3],
+    // anchoring after p3 still emits [p1, p2, p3, created].
+    let misordered = vec![
+      mk_row(f1, "F1", true, 0, None),
+      mk_row(p1, "P1", false, 1, Some(f1)),
+      mk_row(p2, "P2", false, 1, Some(f1)),
+      mk_row(created, "New", false, 1, Some(f1)),
+      mk_row(p3, "P3", false, 1, Some(f1)),
+    ];
+    assert_eq!(
+      ordered_siblings_placing_after(&misordered, Some(f1), p3, created),
+      Some(vec![p1, p2, p3, created])
+    );
+    assert_eq!(
+      ordered_siblings_appending(&misordered, Some(f1), created),
+      Some(vec![p1, p2, p3, created])
+    );
+    assert_eq!(ordered_siblings_appending(&rows, Some(f1), created), None);
   }
 }
