@@ -420,15 +420,21 @@ pub fn touch_selection_handles_layer(props: TouchHandlesProps) -> impl IntoEleme
           if state.rows.is_empty() {
             return;
           }
-          let cache = lay_m.borrow();
-          if let Some(focus_pos) = resolve_doc_position_at_paper_point(
-            &state.rows,
-            &cache,
-            state.fixed,
-            local_x,
-            target_y,
-            &|f, t| mm(f, t),
-          ) {
+          // Drop the `VisibleLayoutCache` read borrow BEFORE `set_selection`,
+          // because `set_selection` synchronously triggers reactive overlays
+          // and effects that read/update layout caches.
+          let focus_pos = {
+            let cache = lay_m.borrow();
+            resolve_doc_position_at_paper_point(
+              &state.rows,
+              &cache,
+              state.fixed,
+              local_x,
+              target_y,
+              &|f, t| mm(f, t),
+            )
+          };
+          if let Some(focus_pos) = focus_pos {
             let next = DocSelection::from_positions(state.fixed, focus_pos);
             if br_m.selection().as_ref() != Some(&next) {
               br_m.set_selection(next);

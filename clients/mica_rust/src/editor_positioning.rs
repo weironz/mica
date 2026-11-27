@@ -52,25 +52,21 @@ pub fn schedule_ime_sink_pos_update(
     return;
   };
   let (text_ref, row_ref, caret_local) = {
-    let mut cache = layouts.borrow_mut();
+    let cache = layouts.borrow();
     let tref = cache.text_refs.get(&bid).copied();
     let rref = cache.row_refs.get(&bid).map(|(_, r)| *r);
     let measure = text_measurer();
     let block_text = bridge.block_at(pos.node).map(|b| b.text).unwrap_or_default();
-    let meta = cache
-      .blocks
-      .get(&bid)
-      .map(|info| (info.font.clone(), info.line_height));
-    let caret = meta.map(|(font, lh)| {
+    let caret = cache.blocks.get(&bid).map(|info| {
       let lines = cache.resolve_lines_cached(
         &bid,
         &block_text,
         760.0,
-        &font,
-        lh.max(24.0),
+        &info.font,
+        info.line_height.max(24.0),
         &measure,
       );
-      caret_rect_for_offset(lines, pos.offset, &font, lh, &measure)
+      caret_rect_for_offset(&lines, pos.offset, &info.font, info.line_height, &measure)
     });
     (tref, rref, caret)
   };

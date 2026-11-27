@@ -632,7 +632,7 @@ pub fn editor_view(
                 };
                 let measure = text_measurer();
                 let (_, cy, ch) = {
-                  let mut cache = l_sc.borrow_mut();
+                  let cache = l_sc.borrow();
                   let (font, lh) = cache
                     .blocks
                     .get(bid)
@@ -659,7 +659,7 @@ pub fn editor_view(
                     lh,
                     &measure,
                   );
-                  caret_rect_for_offset(lines, sel.focus_pos().offset, &font, lh, &measure)
+                  caret_rect_for_offset(&lines, sel.focus_pos().offset, &font, lh, &measure)
                 };
                 let rel_top = (tm.page.y.0 - pm.page.y.0) + cy;
                 Some((rel_top, rel_top + ch.max(default_lh), cy < 4.0))

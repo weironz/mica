@@ -8,8 +8,11 @@
 
 use std::{
   borrow::Cow,
+  cell::RefCell,
   collections::{HashMap, hash_map::DefaultHasher},
   hash::{Hash, Hasher},
+  ops::Deref,
+  rc::Rc,
 };
 
 use mica_editor::utf16::{utf16_len, utf16_slice};
@@ -41,7 +44,27 @@ struct SynthesizedLinesCache {
   width_bits: u32,
   font: String,
   line_height_bits: u32,
-  lines: Vec<TextLine>,
+  lines: Rc<[TextLine]>,
+}
+
+/// Zero-copy handle to resolved visual lines returned by
+/// [`VisibleLayoutCache::resolve_lines_cached`]: borrows directly from native
+/// `EventKind::TextLayout` lines when fresh, or clones an O(1) `Rc<[TextLine]>`
+/// from the interior memoization cache so callers never need `borrow_mut()`.
+pub enum ResolvedLines<'a> {
+  Borrowed(&'a [TextLine]),
+  Cached(Rc<[TextLine]>),
+}
+
+impl Deref for ResolvedLines<'_> {
+  type Target = [TextLine];
+
+  fn deref(&self) -> &[TextLine] {
+    match self {
+      Self::Borrowed(s) => s,
+      Self::Cached(rc) => rc,
+    }
+  }
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -61,7 +84,9 @@ pub struct VisibleLayoutCache {
   pub text_refs: HashMap<String, ElementRef>,
   /// Per-block memoized fallback lines when native `EventKind::TextLayout` is
   /// stale (e.g. immediately after Backspace / typing before next layout tick).
-  synth_cache: HashMap<String, SynthesizedLinesCache>,
+  /// Wrapped in `RefCell` so read-only callers holding `layouts.borrow()` can
+  /// resolve lines without colliding with re-entrant reactive signal observers.
+  synth_cache: RefCell<HashMap<String, SynthesizedLinesCache>>,
 }
 
 impl VisibleLayoutCache {
@@ -85,7 +110,7 @@ impl VisibleLayoutCache {
       entry.lines = lines;
       entry.font = font;
       entry.line_height = line_height;
-      self.synth_cache.remove(block_id);
+      self.synth_cache.get_mut().remove(block_id);
     }
     changed
   }
@@ -137,7 +162,7 @@ impl VisibleLayoutCache {
     self.blocks.retain(|id, _| live_ids.contains(id.as_str()));
     self.row_refs.retain(|id, _| live_ids.contains(id.as_str()));
     self.text_refs.retain(|id, _| live_ids.contains(id.as_str()));
-    self.synth_cache.retain(|id, _| live_ids.contains(id.as_str()));
+    self.synth_cache.get_mut().retain(|id, _| live_ids.contains(id.as_str()));
   }
 
   pub fn get(&self, block_id: &str) -> Option<&BlockTextLayout> {
@@ -148,7 +173,7 @@ impl VisibleLayoutCache {
     self.blocks.clear();
     self.row_refs.clear();
     self.text_refs.clear();
-    self.synth_cache.clear();
+    self.synth_cache.get_mut().clear();
   }
 
   /// Resolves visual `TextLine`s for `block_id`, using:
@@ -158,24 +183,26 @@ impl VisibleLayoutCache {
   /// 3. Incremental line synthesis reusing unchanged lines from the previous
   ///    layout so single-line Backspace/typing in a 100-line code block makes
   ///    only ~1 `text_measurer` call instead of 100-400!
+  ///
+  /// Takes `&self` (interior `RefCell` around `synth_cache` only during lookup
+  /// and insert) so callers holding `layouts.borrow()` can never trigger a
+  /// re-entrant `BorrowMutError` across synchronous reactive updates.
   pub fn resolve_lines_cached<F>(
-    &mut self,
+    &self,
     block_id: &str,
     text: &str,
     fallback_width: f32,
     font: &str,
     line_height: f32,
     measure: &F,
-  ) -> &[TextLine]
+  ) -> ResolvedLines<'_>
   where
     F: Fn(&str, &str) -> Points,
   {
-    let native_usable = self
-      .blocks
-      .get(block_id)
-      .is_some_and(|info| lines_usable_for_text(&info.lines, text));
-    if native_usable {
-      return &self.blocks[block_id].lines;
+    if let Some(info) = self.blocks.get(block_id)
+      && lines_usable_for_text(&info.lines, text)
+    {
+      return ResolvedLines::Borrowed(&info.lines);
     }
 
     let (eff_font, eff_lh, eff_w) = match self.blocks.get(block_id) {
@@ -204,44 +231,58 @@ impl VisibleLayoutCache {
     let width_bits = eff_w.to_bits();
     let lh_bits = eff_lh.to_bits();
 
-    let cache_hit = self.synth_cache.get(block_id).is_some_and(|c| {
-      c.text_len == text_len
-        && c.text_hash == text_hash
-        && c.width_bits == width_bits
-        && c.line_height_bits == lh_bits
-        && c.font == eff_font
-    });
-    if cache_hit {
-      return &self.synth_cache[block_id].lines;
-    }
-
-    let (prev_lines, prev_width_matches): (Option<&[TextLine]>, bool) =
-      if let Some(prev) = self.synth_cache.get(block_id)
-        && prev.font == eff_font
-        && prev.line_height_bits == lh_bits
-      {
-        (Some(prev.lines.as_slice()), prev.width_bits == width_bits)
-      } else if let Some(info) = self.blocks.get(block_id)
-        && !info.lines.is_empty()
-        && (info.font.is_empty() || info.font == eff_font)
-      {
-        let native_w_match = info.text_frame.size.width.0 > 24.0
-          && (info.text_frame.size.width.0 - eff_w).abs() <= 0.5;
-        (Some(info.lines.as_slice()), native_w_match)
+    let prev_synth: Option<(Rc<[TextLine]>, bool)> = {
+      let sc = self.synth_cache.borrow();
+      if let Some(c) = sc.get(block_id) {
+        if c.text_len == text_len
+          && c.text_hash == text_hash
+          && c.width_bits == width_bits
+          && c.line_height_bits == lh_bits
+          && c.font == eff_font
+        {
+          return ResolvedLines::Cached(Rc::clone(&c.lines));
+        }
+        if c.font == eff_font && c.line_height_bits == lh_bits {
+          Some((Rc::clone(&c.lines), c.width_bits == width_bits))
+        } else {
+          None
+        }
       } else {
-        (None, false)
-      };
+        None
+      }
+    };
 
-    let lines = synthesize_wrapped_lines_reusing(
-      text,
-      eff_w,
-      &eff_font,
-      eff_lh,
-      prev_lines,
-      prev_width_matches,
-      measure,
-    );
-    self.synth_cache.insert(
+    let lines_vec = if let Some((prev_rc, prev_w_match)) = prev_synth {
+      synthesize_wrapped_lines_reusing(
+        text,
+        eff_w,
+        &eff_font,
+        eff_lh,
+        Some(&prev_rc),
+        prev_w_match,
+        measure,
+      )
+    } else if let Some(info) = self.blocks.get(block_id)
+      && !info.lines.is_empty()
+      && (info.font.is_empty() || info.font == eff_font)
+    {
+      let native_w_match = info.text_frame.size.width.0 > 24.0
+        && (info.text_frame.size.width.0 - eff_w).abs() <= 0.5;
+      synthesize_wrapped_lines_reusing(
+        text,
+        eff_w,
+        &eff_font,
+        eff_lh,
+        Some(info.lines.as_slice()),
+        native_w_match,
+        measure,
+      )
+    } else {
+      synthesize_wrapped_lines_reusing(text, eff_w, &eff_font, eff_lh, None, false, measure)
+    };
+
+    let lines_rc: Rc<[TextLine]> = Rc::from(lines_vec);
+    self.synth_cache.borrow_mut().insert(
       block_id.to_owned(),
       SynthesizedLinesCache {
         text_len,
@@ -249,10 +290,10 @@ impl VisibleLayoutCache {
         width_bits,
         font: eff_font,
         line_height_bits: lh_bits,
-        lines,
+        lines: Rc::clone(&lines_rc),
       },
     );
-    &self.synth_cache[block_id].lines
+    ResolvedLines::Cached(lines_rc)
   }
 }
 
@@ -1103,5 +1144,33 @@ mod tests {
       calls_before_second,
       "second same-frame read must hit synth_cache with 0 measure calls"
     );
+  }
+
+  #[test]
+  fn resolve_lines_cached_allows_reentrant_shared_borrows_without_borrow_mut_panic() {
+    let layouts = Rc::new(RefCell::new(VisibleLayoutCache::default()));
+    layouts.borrow_mut().update_lines(
+      "p1",
+      vec![mk_line("中文触摸选区测试段落", 0, 0.0)],
+      "16px sans-serif".into(),
+      24.0,
+    );
+
+    // Simulate a caller holding `layouts.borrow()` while a synchronous reactive
+    // observer calls `layouts.borrow().resolve_lines_cached(...)` on the same
+    // frame (the exact pattern that previously panicked with BorrowMutError during
+    // mobile touch handle dragging).
+    let outer_guard = layouts.borrow();
+    let inner_guard = layouts.borrow();
+    let resolved = inner_guard.resolve_lines_cached(
+      "p1",
+      "中文触摸选区测试段落 OmegaDragTail",
+      340.0,
+      "16px sans-serif",
+      24.0,
+      &fixed_measure,
+    );
+    assert!(!resolved.is_empty());
+    assert!(outer_guard.blocks.contains_key("p1"));
   }
 }
