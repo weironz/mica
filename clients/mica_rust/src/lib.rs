@@ -20,8 +20,11 @@
 pub mod ai_dialog;
 mod app_chrome;
 pub mod app_menu;
+mod app_modals;
 mod app_transfer_io;
 pub mod atomic_blocks;
+mod block_atomic_views;
+mod block_code;
 pub mod block_marquee;
 pub mod block_views;
 pub mod board_view;
@@ -30,6 +33,8 @@ pub mod cloud_sync;
 pub mod comment_panel;
 pub mod doc_sync_session;
 pub mod editor_bridge;
+mod editor_keys;
+mod editor_overlays;
 pub mod editor_positioning;
 pub mod editor_slash;
 pub mod editor_view;
@@ -71,14 +76,9 @@ use std::{
   rc::Rc,
 };
 
-use chrono::{DateTime, Local, Utc};
-use mica_api_types::View;
+use chrono::{Local, Utc};
 use mica_board::BoardSession;
 use mica_client::PageTreeModel;
-#[cfg(not(target_arch = "wasm32"))]
-use nsh_core::desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes};
-#[cfg(not(target_arch = "wasm32"))]
-use nsh_core::element::desktop::current_window;
 use nsh_core::{
   element::{KeyOptions, on_key_with},
   geometry::{Bounds, Points, px},
@@ -87,10 +87,20 @@ use nsh_core::{
 };
 use uuid::Uuid;
 
+pub(crate) use crate::app_modals::{
+  collect_all_views, compute_backlinks_for, configure_hidden_title_bar, format_version_entries,
+  make_view, resolve_parent_folder_name, STARTER_MARKDOWN,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::app_modals::record_startup_probe_once;
 use crate::{
-  ai_dialog::{AiTarget, GlobalAiState, InlineAiPhase, InlineAiState},
+  ai_dialog::{AiTarget, InlineAiPhase},
   app_chrome::{EmbeddedBoardEdit, TopBarProps},
   app_menu::{AccountMenuState, AppMenuCallbacks},
+  app_modals::{
+    AiDialogsCtx, ShareModalCtx, WsSwitcherCtx, build_ai_dialog_states, build_share_dialog_state,
+    build_ws_switcher_callbacks,
+  },
   app_transfer_io::{AppTransferContext, AppTransferHandlers, CrossWorkspaceTransferCtx},
   block_views::{
     CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback,
@@ -101,14 +111,13 @@ use crate::{
   graph_dialog::PageGraphData,
   mica_theme::{install_mica_theme, palette},
   net::{CloudConfig, CloudConnector},
-  right_sidebar::{BacklinkEntry, RightSidebarExtras, RightSidebarProps, SnapshotEntry, ToolsTab},
+  right_sidebar::{BacklinkEntry, RightSidebarExtras, RightSidebarProps, ToolsTab},
   search_view::{SearchRecentItem, SearchViewProps, SearchWorkspaceChip},
   settings_view::{SettingsCallbacks, SettingsViewProps},
-  share_dialog::ShareDialogState,
-  sidebar::{SidebarCallbacks, WorkspaceSwitcherCallbacks, WorkspaceSwitcherItem},
+  sidebar::{SidebarCallbacks, WorkspaceSwitcherItem},
   storage::{DEFAULT_ORIGIN, VaultStore},
   transfer::{ArchiveExportFormat, ImportedPageSpec},
-  version_history::{VersionHistoryItem, VersionHistoryState, format_version_stamp_now},
+  version_history::VersionHistoryState,
   workspace_views::WorkspaceSettingsState,
   world_switcher::{LOCAL_ORIGIN, WorldSwitcherState},
 };
@@ -184,132 +193,6 @@ impl Component for MicaAppInMemory {
     install_mica_theme();
     render_mica_app(VaultStore::in_memory())
   }
-}
-
-fn configure_hidden_title_bar() {
-  #[cfg(not(target_arch = "wasm32"))]
-  {
-    let window = current_window();
-    let mut tb = TitleBarOptions::default();
-    tb.style = TitleBarStyle::Hidden;
-    tb.height = Some(px(34.0));
-    let mut attrs = WindowAttributes::default();
-    attrs.title_bar = Some(tb);
-    window.set(attrs);
-  }
-}
-
-/// Writes a non-empty startup receipt once the root window produces its first
-/// non-zero layout frame when `MICA_STARTUP_PROBE_FILE` is set by installer /
-/// release canary smoke harnesses.
-#[cfg(not(target_arch = "wasm32"))]
-fn record_startup_probe_once() {
-  static PROBE_WRITTEN: std::sync::Once = std::sync::Once::new();
-  PROBE_WRITTEN.call_once(|| {
-    if let Some(path) = std::env::var_os("MICA_STARTUP_PROBE_FILE")
-      && !path.is_empty()
-    {
-      let path = std::path::PathBuf::from(path);
-      if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-      }
-      let _ = std::fs::write(&path, format!("Mica {APP_VERSION}\n"));
-    }
-  });
-}
-
-fn format_version_entries(
-  vault: &VaultStore,
-  origin: &str,
-  doc_id: Uuid,
-) -> (Vec<SnapshotEntry>, Vec<String>, Vec<VersionHistoryItem>) {
-  let raw = vault.list_versions(origin, doc_id);
-  let mut entries = Vec::with_capacity(raw.len());
-  let mut ids = Vec::with_capacity(raw.len());
-  let mut history_items = Vec::with_capacity(raw.len());
-  for (idx, (ver_id, label, ts_ms)) in raw.into_iter().enumerate() {
-    let dt_iso = DateTime::from_timestamp_millis(ts_ms)
-      .map(|d| d.to_rfc3339())
-      .unwrap_or_default();
-    let (group, stamp) = if ts_ms > 0 {
-      format_version_stamp_now(&dt_iso)
-    } else {
-      (version_history::VersionGroup::Today, "刚刚".to_string())
-    };
-    let created_short = if ts_ms > 0 {
-      DateTime::from_timestamp_millis(ts_ms)
-        .map(|dt| dt.with_timezone(&Local).format("%m/%d %H:%M").to_string())
-        .unwrap_or_else(|| "刚刚".to_string())
-    } else {
-      "刚刚".to_string()
-    };
-    let is_named = !label.is_empty() && label != "自动快照";
-    entries.push(SnapshotEntry {
-      id: idx as i64,
-      label: label.clone(),
-      created_at: created_short,
-    });
-    history_items.push(VersionHistoryItem {
-      id: ver_id.clone(),
-      label: if is_named { label } else { stamp.clone() },
-      is_named,
-      created_at: stamp,
-      author: None,
-      is_today: matches!(group, version_history::VersionGroup::Today),
-    });
-    ids.push(ver_id);
-  }
-  (entries, ids, history_items)
-}
-
-pub(crate) fn collect_all_views(tree: &PageTreeModel) -> (Vec<View>, Vec<View>) {
-  let mut live = Vec::new();
-  let mut trashed = Vec::new();
-  for row in tree.all_live_rows() {
-    if let Some(v) = tree.get(row.view_id).cloned() {
-      live.push(v);
-    }
-  }
-  for v in tree.trashed_views() {
-    trashed.push(v.clone());
-  }
-  (live, trashed)
-}
-
-fn compute_backlinks_for(
-  tree: &PageTreeModel,
-  docs: &HashMap<Uuid, String>,
-  target_doc: Option<Uuid>,
-  target_title: &str,
-) -> Vec<BacklinkEntry> {
-  let Some(target_id) = target_doc else {
-    return Vec::new();
-  };
-  let id_needle = format!("mica://page/{target_id}");
-  let wiki_needle = if target_title.trim().is_empty() {
-    None
-  } else {
-    Some(format!("[[{}]]", target_title.trim()))
-  };
-  let mut out = Vec::new();
-  for row in tree.all_live_rows() {
-    if row.is_folder || row.object_id == target_id {
-      continue;
-    }
-    if let Some(body) = docs.get(&row.object_id) {
-      let matches_id = body.contains(&id_needle);
-      let matches_wiki = wiki_needle
-        .as_ref()
-        .is_some_and(|w| body.contains(w.as_str()));
-      if matches_id || matches_wiki {
-        out.push(BacklinkEntry {
-          doc_id: row.object_id,
-          title: row.name,
-        });
-      }
-    }
-  }
-  out
 }
 
 fn render_mica_app(vault: VaultStore) -> impl IntoElement {
@@ -3376,197 +3259,45 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_close: Rc::new(move || version_modal_open.set(false)),
   };
 
-  let share_state = ShareDialogState {
+  let share_state = build_share_dialog_state(ShareModalCtx {
+    app_owner,
+    allow_local,
+    vault: vault.clone(),
+    cloud_connector: cloud_connector.clone(),
+    active_origin,
+    active_workspace_id,
+    active_doc,
+    is_cloud_signed_in,
+    server_url,
+    account_email,
     open: share_modal_open,
     loading: share_loading,
     busy: share_busy,
     shared: share_enabled,
     token: share_token,
-    origin: server_url,
     error: share_error,
-    on_toggle_public: {
-      let cc = cloud_connector.clone();
-      let v = vault.clone();
-      let toggle_gen = signal(0u64);
-      Rc::new(move |enable: bool| {
-        let orig = active_origin.get_untracked();
-        if !cloud_sync::is_cloud_origin(&orig) || !is_cloud_signed_in.get_untracked() {
-          share_error.set(Some("公开分享仅支持云端工作区，请先登录云端账号。".to_string()));
-          return;
-        }
-        let Some(doc_id) = active_doc.get_untracked() else {
-          return;
-        };
-        let ws = active_workspace_id.get_untracked();
-        let srv_req = server_url.get_untracked();
-        let email_req = account_email.get_untracked();
-        let cc_a = cc.clone();
-        let v_a = v.clone();
-        let epoch = toggle_gen.get_untracked().wrapping_add(1);
-        toggle_gen.set(epoch);
-        share_busy.set(true);
-        share_error.set(None);
-        // Spawn under `app_owner` (not the transient `dynamic(...)` button owner),
-        // because setting `share_busy = true` immediately rebuilds the dialog body
-        // and would otherwise cancel this task before the HTTP request completes.
-        app_owner.run(move || {
-          spawn(async move {
-            let mut conn = cc_a.borrow().clone();
-            let res = cloud_sync::with_auto_refresh(&mut conn, move |c| async move {
-              if enable {
-                c.create_share(ws, doc_id).await
-              } else {
-                c.delete_share(ws, doc_id).await.map(|_| net::ShareState {
-                  shared: false,
-                  token: None,
-                  url: None,
-                })
-              }
-            })
-            .await
-            .map(|(st, rot)| (conn, st, rot));
-            if toggle_gen.get_untracked() != epoch {
-              return;
-            }
-            share_busy.set(false);
-            if active_origin.get_untracked() != orig || active_doc.get_untracked() != Some(doc_id)
-            {
-              return;
-            }
-            match res {
-              Ok((conn, st, rot)) => {
-                if rot.is_some() {
-                  *cc_a.borrow_mut() = conn;
-                  if allow_local {
-                    cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
-                  }
-                }
-                share_enabled.set(st.shared);
-                share_token.set(st.token);
-                share_error.set(None);
-              }
-              Err(e) => share_error.set(Some(e)),
-            }
-          });
-        });
-      })
-    },
-    on_close: Rc::new(move || share_modal_open.set(false)),
-  };
+  });
 
-  let global_ai_state = GlobalAiState {
-    open: global_ai_open,
-    can_edit: signal(true),
-    has_workspace: signal(true),
-    has_current_page: signal(true),
-    edit_mode: signal(false),
-    prompt: global_ai_prompt,
-    target: global_ai_target,
-    output: global_ai_output,
-    edit_diffs: signal(Vec::new()),
-    streaming: global_ai_streaming,
-    done: global_ai_done,
-    applying: signal(false),
-    error: global_ai_error,
-    on_generate: {
-      let cc = cloud_connector.clone();
-      let ai_gen = signal(0u64);
-      Rc::new(move |prompt: String, _target: AiTarget| {
-        let epoch = ai_gen.get_untracked().wrapping_add(1);
-        ai_gen.set(epoch);
-        global_ai_streaming.set(true);
-        global_ai_error.set(None);
-        let conn = cc.borrow().clone();
-        app_owner.run(move || {
-          spawn(async move {
-            let res = conn
-              .stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt)
-              .await;
-            if ai_gen.get_untracked() != epoch {
-              return;
-            }
-            match res {
-              Ok(out) => {
-                global_ai_output.set(out);
-                global_ai_done.set(true);
-              }
-              Err(e) => global_ai_error.set(Some(e)),
-            }
-            global_ai_streaming.set(false);
-          });
-        });
-      })
-    },
-    on_apply: {
-      let create_p = create_page_with_content.clone();
-      let br = bridge.clone();
-      Rc::new(move |md: String, target: AiTarget| {
-        match target {
-          AiTarget::NewPage | AiTarget::NewWorkspace => create_p("AI 生成页面".to_string(), md),
-          AiTarget::CurrentPage => {
-            br.append_markdown_preserving_crdt(&md);
-          }
-        }
-        global_ai_open.set(false);
-      })
-    },
-    on_close: Rc::new(move || global_ai_open.set(false)),
-  };
-
-  let inline_ai_state = InlineAiState {
-    open: inline_ai_open,
-    prompt: inline_ai_prompt,
-    context_text: inline_ai_context,
-    allow_replace: inline_ai_allow_replace,
-    output: inline_ai_output,
-    phase: inline_ai_phase,
-    error: inline_ai_error,
-    on_generate: {
-      let cc = cloud_connector.clone();
-      let ai_gen = signal(0u64);
-      Rc::new(move |prompt: String, ctx: String| {
-        let epoch = ai_gen.get_untracked().wrapping_add(1);
-        ai_gen.set(epoch);
-        inline_ai_phase.set(InlineAiPhase::Running);
-        inline_ai_error.set(None);
-        let full = if ctx.is_empty() { prompt } else { format!("{prompt}\n\n原文：\n{ctx}") };
-        let conn = cc.borrow().clone();
-        app_owner.run(move || {
-          spawn(async move {
-            let res = conn.stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full).await;
-            if ai_gen.get_untracked() != epoch {
-              return;
-            }
-            match res {
-              Ok(out) => {
-                inline_ai_output.set(out);
-                inline_ai_phase.set(InlineAiPhase::Succeeded);
-              }
-              Err(e) => {
-                inline_ai_error.set(Some(e));
-                inline_ai_phase.set(InlineAiPhase::Failed);
-              }
-            }
-          });
-        });
-      })
-    },
-    on_insert_below: {
-      let br = bridge.clone();
-      Rc::new(move |md: String| {
-        br.insert_custom_block("paragraph", md.trim(), None);
-        inline_ai_open.set(false);
-      })
-    },
-    on_replace_selection: {
-      let br = bridge.clone();
-      Rc::new(move |md: String| {
-        br.insert_custom_block("paragraph", md.trim(), None);
-        inline_ai_open.set(false);
-      })
-    },
-    on_close: Rc::new(move || inline_ai_open.set(false)),
-  };
+  let (global_ai_state, inline_ai_state) = build_ai_dialog_states(AiDialogsCtx {
+    app_owner,
+    cloud_connector: cloud_connector.clone(),
+    bridge: bridge.clone(),
+    create_page_with_content: create_page_with_content.clone(),
+    global_ai_open,
+    global_ai_prompt,
+    global_ai_target,
+    global_ai_output,
+    global_ai_streaming,
+    global_ai_done,
+    global_ai_error,
+    inline_ai_open,
+    inline_ai_prompt,
+    inline_ai_context,
+    inline_ai_allow_replace,
+    inline_ai_output,
+    inline_ai_phase,
+    inline_ai_error,
+  });
 
   let ws_settings_id_sig = signal(ws_id.to_string());
   let ws_settings_gen = signal(0u64);
@@ -3747,104 +3478,20 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       );
     });
   }
-  let ws_switcher_cb = Rc::new(WorkspaceSwitcherCallbacks {
-    on_select: {
-      let sw = on_switch_workspace.clone();
-      Rc::new(move |id: Uuid| {
-        if let Some(entry) = workspaces.get_untracked().into_iter().find(|w| w.id == id) {
-          sw(entry);
-        }
-      })
-    },
-    on_create: {
-      let sw = on_switch_workspace.clone();
-      let v = vault.clone();
-      let cs = cloud_session.clone();
-      Rc::new(move |name: String| {
-        let cur_orig = active_origin.get_untracked();
-        if cloud_sync::is_cloud_origin(&cur_orig) && is_cloud_signed_in.get_untracked() {
-          workspace_menu_open.set(false);
-          cs.create_cloud_workspace(cur_orig, name);
-          return;
-        }
-        let id = Uuid::new_v4();
-        let origin = DEFAULT_ORIGIN.to_string();
-        let _ = v.save_workspace_name(&origin, id, &name);
-        let entry = WorkspaceEntry { id, name, origin, page_count: None };
-        let mut all = workspaces.get_untracked();
-        all.push(entry.clone());
-        workspaces.set(all);
-        sw(entry);
-      })
-    },
-    on_rename: {
-      let v = vault.clone();
-      let cs = cloud_session.clone();
-      Rc::new(move |id: Uuid, next_name: String| {
-        let mut all = workspaces.get_untracked();
-        for w in &mut all {
-          if w.id == id {
-            let _ = v.save_workspace_name(&w.origin, id, &next_name);
-            w.name = next_name.clone();
-          }
-        }
-        workspaces.set(all);
-        let name_req = next_name.clone();
-        cs.spawn_cloud_op("云端重命名工作区", move |c| {
-          let name_req = name_req.clone();
-          async move { c.update_workspace(id, &name_req).await }
-        });
-        if active_workspace_id.get_untracked() == id {
-          workspace_name.set(next_name);
-        }
-      })
-    },
-    on_export_backup: {
-      let exp = export_workspace_zip.clone();
-      Rc::new(move |ws_id: Uuid| exp(Some(ws_id), ArchiveExportFormat::BackupMicaZip))
-    },
-    on_export_markdown: {
-      let exp = export_workspace_zip.clone();
-      Rc::new(move |ws_id: Uuid| exp(Some(ws_id), ArchiveExportFormat::MarkdownZip))
-    },
-    on_import_files: {
-      let imp = on_import_files_picker.clone();
-      Rc::new(move |_| imp(None))
-    },
-    on_import_folder: {
-      let imp = on_import_folder_picker.clone();
-      Rc::new(move |_| imp(None))
-    },
-    on_delete: {
-      let sw = on_switch_workspace.clone();
-      let v = vault.clone();
-      let cs = cloud_session.clone();
-      Rc::new(move |id: Uuid| {
-        let mut all = workspaces.get_untracked();
-        if all.len() <= 1 {
-          return;
-        }
-        if let Some(target) = all.iter().find(|w| w.id == id) {
-          let _ = v.delete_workspace(&target.origin, id);
-        }
-        cs.spawn_cloud_op("云端删除工作区", move |c| async move { c.delete_workspace(id).await });
-        all.retain(|w| w.id != id);
-        let next = all[0].clone();
-        workspaces.set(all);
-        if active_workspace_id.get_untracked() == id {
-          sw(next);
-        }
-      })
-    },
-    on_import_workspace_zip: {
-      let imp = on_import_zip_picker.clone();
-      Rc::new(move || imp(None, false))
-    },
-    on_import_workspace_notion: {
-      let imp = on_import_zip_picker.clone();
-      Rc::new(move || imp(None, true))
-    },
-    on_close: Rc::new(move || workspace_menu_open.set(false)),
+  let ws_switcher_cb = build_ws_switcher_callbacks(WsSwitcherCtx {
+    vault: vault.clone(),
+    cloud_session: Rc::new(cloud_session.clone()),
+    workspaces,
+    active_origin,
+    active_workspace_id,
+    workspace_name,
+    workspace_menu_open,
+    is_cloud_signed_in,
+    on_switch_workspace: on_switch_workspace.clone(),
+    export_workspace_zip: export_workspace_zip.clone(),
+    on_import_files_picker: on_import_files_picker.clone(),
+    on_import_folder_picker: on_import_folder_picker.clone(),
+    on_import_zip_picker: on_import_zip_picker.clone(),
   });
 
   // Clones for UI tree
@@ -4312,77 +3959,3 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     // 12. Global dark-pill hover tooltip overlay (never clipped by overflow_hidden)
     .child(tooltip::tooltip_overlay(tooltip_host, dark_mode))
 }
-
-fn resolve_parent_folder_name(tree: &PageTreeModel, doc_id: Uuid) -> Option<String> {
-  let rows = tree.all_live_rows();
-  let page = rows.iter().find(|r| !r.is_folder && r.object_id == doc_id)?;
-  let mut ancestors = Vec::new();
-  let mut cursor = page.parent_view_id;
-  let mut seen = std::collections::HashSet::new();
-  while let Some(pid) = cursor {
-    if !seen.insert(pid) {
-      break;
-    }
-    let Some(folder) = tree.get(pid) else {
-      break;
-    };
-    if !folder.name.trim().is_empty() {
-      ancestors.push(folder.name.trim().to_string());
-    }
-    cursor = folder.parent_view_id;
-  }
-  if ancestors.is_empty() {
-    None
-  } else {
-    ancestors.reverse();
-    Some(ancestors.join(" > "))
-  }
-}
-
-fn make_view(
-  ws_id: Uuid,
-  object_id: Uuid,
-  name: &str,
-  object_type: &str,
-  parent_view_id: Option<Uuid>,
-  position: &str,
-) -> View {
-  let now = Utc::now();
-  View {
-    id: if object_type == "folder" {
-      object_id
-    } else {
-      Uuid::new_v4()
-    },
-    workspace_id: ws_id,
-    object_id,
-    name: name.to_string(),
-    object_type: object_type.to_string(),
-    icon: None,
-    parent_view_id,
-    position: position.to_string(),
-    is_deleted: false,
-    created_by: Uuid::nil(),
-    created_at: now,
-    updated_at: now,
-    state_bytes: None,
-  }
-}
-
-const STARTER_MARKDOWN: &str = "\
-# 欢迎使用 Mica
-
-这是一个 100% 全栈纯 Rust 知识库与无限白板工作区，支持本地离线 SQLite 存储与云端 CRDT 同步。
-
-## 核心能力
-
-- 原生富文本块编辑：跨块鼠标拖选、多块框选、回车分块、行首退格合并、`Ctrl+A` 全选与原位中文 IME
-- 真实多行代码编辑器、表格、RaTeX 公式、Mermaid 流程图与内嵌无限白板
-- 无边框融合标题栏、应用菜单、可拖拽调宽正文与侧栏、右键/多选拖拽目录树、关系图谱与版本历史 Diff
-
-```rust
-fn main() {
-    println!(\"Hello from Mica Pure Rust!\");
-}
-```
-";
