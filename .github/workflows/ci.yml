@@ -32,8 +32,8 @@ on:
         description: 'Uploaded deploy/web artifact name when client job ran'
         value: ${{ jobs.client.outputs.web_bundle_artifact }}
       server_bins_artifact:
-        description: 'Uploaded glibc-2.36 mica-api-server + mica-cli artifact name when container job ran'
-        value: ${{ jobs.container.outputs.server_bins_artifact }}
+        description: 'Uploaded glibc-2.36 mica-api-server + mica-cli artifact name when server-bins job ran'
+        value: ${{ jobs.server-bins.outputs.server_bins_artifact }}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ inputs.source_sha || github.ref }}
@@ -239,39 +239,17 @@ jobs:
           print(f"{len(tools)} tools accepted by the official client")
           EOF
 
-  container:
-    name: Container (Dockerfile.api + Dockerfile.web + Dockerfile.cli)
+  server-bins:
+    name: Server Binaries (glibc-2.36 mica-api-server + mica-cli)
     runs-on: ubuntu-latest
-    needs: [paths, client]
-    if: ${{ !failure() && !cancelled() && needs.paths.outputs.container == 'true' }}
+    if: needs.paths.outputs.container == 'true'
+    needs: paths
     outputs:
       server_bins_artifact: ${{ steps.bins-artifact.outputs.name }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_sha || github.sha }}
-      - name: Download prebuilt pure-Rust Web bundle from client job
-        if: ${{ needs.client.result == 'success' && needs.client.outputs.web_bundle_artifact != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.client.outputs.web_bundle_artifact }}
-          path: deploy/web
-      - uses: ./.github/actions/setup-rust
-        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
-      - uses: Swatinem/rust-cache@v2
-        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
-        with:
-          workspaces: clients/mica_rust
-          key: mica-rust-client
-      - name: Build pure-Rust Web bundle fallback (when client job was skipped)
-        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends brotli clang
-          rustup target add wasm32-unknown-unknown
-          bash scripts/install-web-tools.sh
-          bash scripts/test-web-csp-hashes.sh
-          bash scripts/build-web-rust.sh
       - name: Cache bookworm Cargo build for mica-api-server + mica-cli
         uses: actions/cache@v4
         with:
@@ -314,18 +292,63 @@ jobs:
           path: deploy/prebuilt
           retention-days: 1
           if-no-files-found: error
+
+  container:
+    name: Container (Dockerfile.api + Dockerfile.web + Dockerfile.cli)
+    runs-on: ubuntu-latest
+    needs: [paths, client, server-bins]
+    if: ${{ !failure() && !cancelled() && needs.paths.outputs.container == 'true' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+      - name: Download prebuilt pure-Rust Web bundle from client job
+        if: ${{ needs.client.result == 'success' && needs.client.outputs.web_bundle_artifact != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.client.outputs.web_bundle_artifact }}
+          path: deploy/web
+      - uses: ./.github/actions/setup-rust
+        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
+        with:
+          workspaces: clients/mica_rust
+          key: mica-rust-client
+      - name: Build pure-Rust Web bundle fallback (when client job was skipped)
+        if: ${{ needs.client.result != 'success' || needs.client.outputs.web_bundle_artifact == '' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends brotli clang
+          rustup target add wasm32-unknown-unknown
+          bash scripts/install-web-tools.sh
+          bash scripts/test-web-csp-hashes.sh
+          bash scripts/build-web-rust.sh
+      - name: Download prebuilt glibc-2.36 server binaries from server-bins job
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.server-bins.outputs.server_bins_artifact }}
+          path: deploy/prebuilt
       - name: Build Docker images
         run: |
           docker build -f deploy/Dockerfile.web -t mica-web:ci .
           docker build -f deploy/Dockerfile.cli --target runtime-prebuilt -t mica-cli:ci .
           docker build -f deploy/Dockerfile.api --target runtime-prebuilt -t mica-api:ci .
+      - name: Cache pinned Playwright Chromium browser
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package.json', 'e2e/package-lock.json') }}
       - name: Boot CI container stack & run Playwright pure-Rust Web E2E
         run: |
           bash scripts/ci-container-stack.sh up
           bash scripts/web-entry-cache-check.sh http://127.0.0.1
           (cd e2e && npm ci --no-audit --no-fund)
-          if ! command -v google-chrome >/dev/null 2>&1; then
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" != "true" ]; then
             (cd e2e && npx playwright install chromium --with-deps)
+          else
+            (cd e2e && npx playwright install-deps chromium)
           fi
           node e2e/web_e2e.mjs --base http://127.0.0.1 --email e2e@mica.test --password E2ePassword123! --register
       - name: Dump CI stack logs on failure
