@@ -63,7 +63,7 @@ jobs:
       # which is the split that was wanted all along.
       #
       # fetch-depth: 0 because that `git show` needs the tag's tree.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -84,7 +84,7 @@ jobs:
 
       - name: Cache ansible & collections
         id: ansible-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.local/pipx
@@ -138,13 +138,15 @@ jobs:
           # Pinned, not ssh-keyscan'd at runtime: scanning now would trust
           # whatever answers, which is not verification.
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$d/known_hosts"
-          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n  ServerAliveInterval 30\n  ServerAliveCountMax 10\n%b' \
-            "$d" "$d" "${SSH_EXTRA:-}" > "$d/config"
+          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n  ServerAliveInterval 30\n  ServerAliveCountMax 10\n  ControlMaster auto\n  ControlPersist 120s\n  ControlPath %s/cm-%%C\n%b' \
+            "$d" "$d" "$d" "${SSH_EXTRA:-}" > "$d/config"
           real_ssh=$(command -v ssh)
           printf '#!/bin/sh\nexec %s -F %s/config "$@"\n' "$real_ssh" "$d" > "$d/bin/ssh"
           chmod 755 "$d/bin/ssh"
           echo "$d/bin" >> "$GITHUB_PATH"
           echo "ANSIBLE_SSH_COMMON_ARGS=-F $d/config" >> "$GITHUB_ENV"
+          echo "ANSIBLE_CONFIG=ansible/ansible.cfg" >> "$GITHUB_ENV"
+          echo "ANSIBLE_PIPELINING=1" >> "$GITHUB_ENV"
 
       # ALWAYS, not just when `check` is on (2026-08-27).
       #
@@ -200,4 +202,8 @@ jobs:
       # the NEXT job happens to start.
       - name: Remove the deploy key
         if: always()
-        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
+        run: |
+          for s in "$RUNNER_TEMP/deploy-ssh"/cm-*; do
+            [ -S "$s" ] && ssh -S "$s" -O exit _ 2>/dev/null || true
+          done
+          rm -rf "$RUNNER_TEMP/deploy-ssh"

@@ -60,7 +60,7 @@ jobs:
       # Default branch, not the tag — same reasoning as Deploy: "how to recover"
       # follows main while "which version" follows the release. fetch-depth 0
       # because the compose is read with `git show v<version>:…`.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 

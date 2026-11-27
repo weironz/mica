@@ -49,7 +49,7 @@ jobs:
     name: RustSec (both lockfiles)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
@@ -69,7 +69,7 @@ jobs:
       container: ${{ steps.groups.outputs.container }}
       mcp: ${{ steps.groups.outputs.mcp }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
@@ -96,7 +96,7 @@ jobs:
     name: Structure & Hygiene (size, ignored-sources, migrations)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
@@ -129,7 +129,7 @@ jobs:
       DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
       MICA_REQUIRE_DB: '1'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
@@ -166,7 +166,7 @@ jobs:
     outputs:
       web_bundle_artifact: ${{ steps.web-artifact.outputs.name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
@@ -195,7 +195,7 @@ jobs:
       - name: Record web bundle artifact name
         id: web-artifact
         run: echo "name=web-bundle-${{ inputs.source_sha || github.sha }}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.web-artifact.outputs.name }}
           path: deploy/web
@@ -208,12 +208,12 @@ jobs:
     if: needs.paths.outputs.mcp == 'true'
     needs: paths
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - name: Build mica-cli
@@ -247,11 +247,11 @@ jobs:
     outputs:
       server_bins_artifact: ${{ steps.bins-artifact.outputs.name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - name: Cache bookworm Cargo build for mica-api-server + mica-cli
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .ci-bookworm-cache/cargo/registry/index
@@ -286,7 +286,7 @@ jobs:
       - name: Record server binaries artifact name
         id: bins-artifact
         run: echo "name=server-bins-${{ inputs.source_sha || github.sha }}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.bins-artifact.outputs.name }}
           path: deploy/prebuilt
@@ -299,12 +299,12 @@ jobs:
     needs: [paths, client, server-bins]
     if: ${{ !failure() && !cancelled() && needs.paths.outputs.container == 'true' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - name: Download prebuilt pure-Rust Web bundle from client job
         if: ${{ needs.client.result == 'success' && needs.client.outputs.web_bundle_artifact != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ needs.client.outputs.web_bundle_artifact }}
           path: deploy/web
@@ -325,7 +325,7 @@ jobs:
           bash scripts/test-web-csp-hashes.sh
           bash scripts/build-web-rust.sh
       - name: Download prebuilt glibc-2.36 server binaries from server-bins job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ needs.server-bins.outputs.server_bins_artifact }}
           path: deploy/prebuilt
@@ -336,7 +336,7 @@ jobs:
           docker build -f deploy/Dockerfile.api --target runtime-prebuilt -t mica-api:ci .
       - name: Cache pinned Playwright Chromium browser
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package.json', 'e2e/package-lock.json') }}

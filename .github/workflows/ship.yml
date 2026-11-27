@@ -31,7 +31,7 @@ jobs:
       sha: ${{ steps.candidate.outputs.sha }}
       ref: ${{ steps.candidate.outputs.ref }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust
@@ -57,7 +57,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 2
@@ -101,7 +101,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.base }}
       - name: Remove temporary candidate branch

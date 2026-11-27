@@ -68,7 +68,7 @@ jobs:
       tag: ${{ steps.ver.outputs.tag }}
       cli-matrix: ${{ steps.cli-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - name: Resolve CLI runners
@@ -97,7 +97,7 @@ jobs:
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
       - name: Create draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           draft: true
@@ -106,7 +106,7 @@ jobs:
     needs: draft
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.draft.outputs.sha }}
       - name: Test installer completion gate
@@ -137,7 +137,7 @@ jobs:
         shell: bash
         working-directory: clients/mica_rust/installer/Output
         run: sha256sum Mica-Setup-*.exe > sha256-windows-installer.txt && cat sha256-windows-installer.txt
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: Mica-Setup-${{ needs.draft.outputs.version }}
           path: |
@@ -146,7 +146,7 @@ jobs:
           if-no-files-found: error
       - name: Publish installer to draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.draft.outputs.tag }}
           draft: true
@@ -163,7 +163,7 @@ jobs:
       matrix: ${{ fromJson(needs.draft.outputs.cli-matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.draft.outputs.sha }}
       - uses: ./.github/actions/setup-rust
@@ -189,14 +189,14 @@ jobs:
         shell: bash
         working-directory: out
         run: sha256sum mica-cli-* > "sha256-${{ matrix.osname }}.txt"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: mica-cli-${{ matrix.suffix }}
           path: out/*
           if-no-files-found: error
       - name: Attach CLI binary + checksums to draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.draft.outputs.tag }}
           draft: true
@@ -218,12 +218,12 @@ jobs:
           - img: cli
             web: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.draft.outputs.sha }}
       - name: Download prebuilt pure-Rust Web bundle from CI
         if: ${{ matrix.web && inputs.web_bundle_artifact != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.web_bundle_artifact }}
           path: deploy/web
@@ -244,7 +244,7 @@ jobs:
           bash scripts/build-web-rust.sh
       - name: Download prebuilt glibc-2.36 server binaries from CI
         if: ${{ !matrix.web && inputs.server_bins_artifact != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.server_bins_artifact }}
           path: deploy/prebuilt
@@ -280,7 +280,7 @@ jobs:
     if: ${{ inputs.build_linux_deb || vars.MICA_BUILD_LINUX_DEB == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.draft.outputs.sha }}
       - uses: ./.github/actions/setup-rust
@@ -291,7 +291,7 @@ jobs:
       - name: Write checksum manifest
         working-directory: out
         run: sha256sum Mica-*.deb > sha256-linux-desktop.txt
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: mica-linux-deb
           path: |
@@ -300,7 +300,7 @@ jobs:
           if-no-files-found: error
       - name: Attach to draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.draft.outputs.tag }}
           draft: true

@@ -88,6 +88,7 @@ echo "==> compose from $tag ($(wc -l < "$compose") lines)"
 
 # "${@:2}" so extra flags pass through — `just deploy-prod 0.13.27 --check --diff`
 # rehearses the whole thing against the real node without changing it.
+export ANSIBLE_CONFIG="${ANSIBLE_CONFIG:-ansible/ansible.cfg}"
 ansible-playbook -i ansible/inventory.yml ansible/deploy.yml \
   -e "version=$version" -e "compose_src=$compose" "${@:2}"
 

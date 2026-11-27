@@ -11,7 +11,7 @@ jobs:
     name: mica-md SDK check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
@@ -20,7 +20,7 @@ jobs:
       # every other wasm build in this repo) and Node ≥ 20.
       - name: Install pinned wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - name: SDK check (package list, docs, gates, examples, npm)
