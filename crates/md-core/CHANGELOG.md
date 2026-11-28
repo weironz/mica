@@ -18,6 +18,10 @@ counted as part of the public API.
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-28
+
+Initial SDK release to crates.io (`mica-md` and its optional `mica-board` renderer dependency).
+
 ### Added
 
 - `properties::infer_value` — the typed value a raw one-line input infers to.
@@ -30,12 +34,6 @@ counted as part of the public API.
 - `wire::properties_json` — front-matter properties over the wire (`op`:
   `parse` / `upsert` / `remove` / `infer`); the wasm binding exposes it as
   `properties`. Additive: `schema_version` stays 1.
-
-## [0.1.0] — unreleased
-
-Initial SDK readiness cut (single-source project S5). Not published yet;
-`publish = false` stays until the user approves a release.
-
 - `parse` / `parse_body` / `parse_inline` / `parse_inline_math` — Markdown to
   the flat block model and to inline text + marks (UTF-16 offsets).
 - `serialize` / `serialize_body` / `serialize_inline` — back to Markdown, the

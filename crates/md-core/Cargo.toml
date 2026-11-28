@@ -24,7 +24,6 @@ include = [
   "examples/table_cells.rs",
   "examples/inline.rs",
 ]
-publish = false          # flips only at release time (S5 T5.12, user-approved)
 
 [package.metadata.docs.rs]
 features = ["render"]
@@ -42,7 +41,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid = { workspace = true, optional = true }
-mica-board = { path = "../mica-board", optional = true }
+mica-board = { version = "0.1", path = "../mica-board", optional = true }
 merman = { version = "0.7", features = ["render"], optional = true }
 ratex-parser = { version = "0.1", optional = true }
 ratex-layout = { version = "0.1", optional = true }

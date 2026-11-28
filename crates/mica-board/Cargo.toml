@@ -4,8 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-publish = false
 description = "Mica infinite whiteboard, mind map, flowchart, draw.io import, orthogonal routing, and headless SVG engine"
+repository = "https://github.com/weironz/mica"
+keywords = ["whiteboard", "diagram", "flowchart", "mindmap", "svg"]
+categories = ["graphics", "rendering"]
 
 [features]
 default = []

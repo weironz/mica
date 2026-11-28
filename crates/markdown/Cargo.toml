@@ -10,7 +10,7 @@ rust-version.workspace = true
 render = ["mica-md/render"]
 
 [dependencies]
-mica-md = { path = "../md-core" }
+mica-md = { version = "0.1", path = "../md-core" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

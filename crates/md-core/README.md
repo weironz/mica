@@ -1,5 +1,8 @@
 # mica-md
 
+[![crates.io](https://img.shields.io/crates/v/mica-md.svg)](https://crates.io/crates/mica-md)
+[![docs.rs](https://docs.rs/mica-md/badge.svg)](https://docs.rs/mica-md)
+
 A Markdown ⇄ block-document engine. `parse` reads Markdown into a flat block
 table (the model block editors keep); `serialize` writes it back. The round
 trip is the product: **export → re-import loses nothing** — structure,
