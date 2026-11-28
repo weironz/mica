@@ -29,8 +29,8 @@ use nsh_core::{
   PointerType, SubmitBehavior, TouchEvent, TouchPhase,
   color::Rgba,
   element::{
-    KeyOptions, Spawned, element_ref, on_key_with, set_clipboard, set_interval, text_measurer,
-    virtual_list,
+    ElementRef, KeyOptions, Spawned, element_ref, on_key_with, set_clipboard, set_interval,
+    text_measurer, virtual_list,
   },
   geometry::{Bounds, Points, px},
   keymap::When,
@@ -129,6 +129,7 @@ pub fn editor_view(
   provide_context(OpenBoardCallback(header.on_open_board.clone()));
 
   let page_menu_open = signal(false);
+  let page_more_btn_ref: ElementRef = element_ref();
   let has_text_selection = signal(false);
   let copied_path = signal(false);
   let copied_path_gen = signal(0u64);
@@ -1750,9 +1751,10 @@ pub fn editor_view(
                 })),
               move || if is_fav.get_untracked() { "取消收藏" } else { "收藏" },
             ))
-            .child(toolbar_btn(
+            .child(toolbar_btn_with_ref(
               "ed-more",
               "更多操作",
+              &page_more_btn_ref,
               dark_mode,
               page_menu_open,
               move || page_menu_open.set(!page_menu_open.get_untracked()),
@@ -1777,7 +1779,13 @@ pub fn editor_view(
         })),
     )
     .child(when(move || page_menu_open.get(), move || {
-      page_more_menu_view(h_menu.clone(), b_copy_md.clone(), page_menu_open, dark_mode)
+      page_more_menu_view(
+        h_menu.clone(),
+        b_copy_md.clone(),
+        page_menu_open,
+        &page_more_btn_ref,
+        dark_mode,
+      )
     }))
     .child(when(move || link_prompt_open.get(), move || {
       link_editor_popover(b_link_pop.clone(), link_draft, link_prompt_open, dark_mode)
@@ -2564,7 +2572,7 @@ use crate::editor_keys::{
 use crate::editor_overlays::{
   bubble_menu_view, caret_slash_menu_view, find_bar_view, image_icon, link_editor_popover,
   lock_icon, page_more_menu_view, step_find_match, terminal_icon, toolbar_btn,
-  toolbar_btn_active, toolbar_btn_dim, toolbar_sep,
+  toolbar_btn_active, toolbar_btn_dim, toolbar_btn_with_ref, toolbar_sep,
 };
 
 #[cfg(test)]

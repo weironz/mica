@@ -2805,3 +2805,46 @@ fn regression_untitled_placeholder_folder_rename_and_batch_delete() {
     "deleted page and folder must remain deleted so only 知识库 (row 0) and 新文件夹 (row 1) exist"
   );
 }
+
+#[test]
+fn regression_page_more_menu_dismisses_on_outside_click_anchor_and_escape() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Clicking outside inside the editor body closes the open `⋯` page menu.
+  app.press("id:ed-more").unwrap();
+  app.wait_for("id:page-more-menu").unwrap();
+  app.press("id:editor-bottom-append-zone").unwrap();
+  app
+    .wait_for_gone("id:page-more-menu", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 2. Clicking outside in the sidebar also closes the open `⋯` page menu.
+  app.press("id:ed-more").unwrap();
+  app.wait_for("id:page-more-menu").unwrap();
+  app.press("id:sidebar-row-0").unwrap();
+  app
+    .wait_for_gone("id:page-more-menu", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 3. Re-clicking the `ed-more` anchor button toggles the menu closed without
+  //    immediately reopening from an `on_press_outside` + `on_press` race.
+  app.press("id:ed-more").unwrap();
+  app.wait_for("id:page-more-menu").unwrap();
+  app.press("id:ed-more").unwrap();
+  app
+    .wait_for_gone("id:page-more-menu", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 4. Escape dismisses the menu cleanly via overlay `on_cancel`.
+  app.press("id:ed-more").unwrap();
+  app.wait_for("id:page-more-menu").unwrap();
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone("id:page-more-menu", std::time::Duration::from_millis(800))
+    .unwrap();
+}

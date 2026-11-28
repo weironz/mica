@@ -10,8 +10,8 @@ use mica_editor::{EditorCommand, FindMatch};
 use nsh_base::{button, input};
 use nsh_core::{
   SubmitBehavior,
-  element::{ImageSrc, Svg, svg},
-  geometry::px,
+  element::{Align, ElementRef, ImageSrc, Placement, Svg, overlay, svg},
+  geometry::{Point, Points, px},
   prelude::*,
 };
 
@@ -137,12 +137,16 @@ fn slash_item_icon(key: &str, color: &'static str) -> Svg {
 }
 
 /// Full `⋯` page menu matching `main:clients/mica_flutter/lib/ui/page_header_actions.dart`.
+///
+/// Rendered in a top-level [`overlay()`] anchored to the `ed-more` trigger button
+/// so outside clicks and `Escape` dismiss it reliably across the whole window.
 pub(crate) fn page_more_menu_view(
   header: Rc<EditorHeaderProps>,
   bridge: Rc<MicaDocumentBridge>,
   page_menu_open: Signal<bool>,
+  anchor_ref: &ElementRef,
   dark_mode: Signal<bool>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
   let comments_vis = header.comments_visible;
   let props_vis = header.show_properties;
   let on_comments = header.on_toggle_comments.clone();
@@ -155,77 +159,84 @@ pub(crate) fn page_more_menu_view(
   let on_snap = header.on_save_snapshot.clone();
   let on_trash = header.on_trash_page.clone();
 
-  view()
-    .test_id("page-more-menu")
-    .absolute()
-    .top(px(42.0))
-    .right(px(12.0))
-    .w(px(220.0))
-    .p_1()
-    .gap(px(2.0))
-    .rounded(px(8.0))
-    .border_1()
-    .border_color(move || palette(dark_mode.get()).border_normal)
-    .bg(move || palette(dark_mode.get()).surface_overlay)
-    .z_index(35)
-    .child(menu_check_row(
-      "page-menu-comments",
-      "评论",
-      comments_vis,
-      dark_mode,
-      move || {
-        on_comments();
-        page_menu_open.set(false);
-      },
-    ))
-    .child(menu_check_row(
-      "page-menu-properties",
-      "属性",
-      props_vis,
-      dark_mode,
-      move || {
-        on_props();
-        page_menu_open.set(false);
-      },
-    ))
-    .child(menu_sep(dark_mode))
-    .child(menu_row("page-menu-copy-md", "复制页面内容", dark_mode, move || {
-      set_clipboard(bridge.export_markdown());
-      bridge.set_status_flash("已复制页面内容");
-      page_menu_open.set(false);
-    }))
-    .child(menu_sep(dark_mode))
-    .child(menu_row("page-menu-export-zip", "导出(ZIP,含图片)", dark_mode, move || {
-      on_zip();
-      page_menu_open.set(false);
-    }))
-    .child(menu_row("page-menu-export-html", "导出为 HTML", dark_mode, move || {
-      on_html();
-      page_menu_open.set(false);
-    }))
-    .child(menu_row("page-menu-export-pdf", "导出为 PDF", dark_mode, move || {
-      on_pdf();
-      page_menu_open.set(false);
-    }))
-    .child(menu_sep(dark_mode))
-    .child(menu_row("page-menu-import-md", "导入 Markdown…", dark_mode, move || {
-      on_import();
-      page_menu_open.set(false);
-    }))
-    .child(menu_sep(dark_mode))
-    .child(menu_row("page-menu-version-history", "版本历史", dark_mode, move || {
-      on_ver();
-      page_menu_open.set(false);
-    }))
-    .child(menu_row("page-menu-snapshot", "保存检查点", dark_mode, move || {
-      on_snap();
-      page_menu_open.set(false);
-    }))
-    .child(menu_sep(dark_mode))
-    .child(menu_row("page-menu-trash", "移入回收站", dark_mode, move || {
-      on_trash();
-      page_menu_open.set(false);
-    }))
+  overlay()
+    .anchor(anchor_ref)
+    .placement(Placement::Bottom)
+    .align(Align::End)
+    .offset(px(4.0))
+    .margin(px(8.0))
+    .on_press_outside(move |_: &Point<Points>| page_menu_open.set(false))
+    .on_cancel(move || page_menu_open.set(false))
+    .child(
+      view()
+        .test_id("page-more-menu")
+        .w(px(220.0))
+        .p_1()
+        .gap(px(2.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(move || palette(dark_mode.get()).border_normal)
+        .bg(move || palette(dark_mode.get()).surface_overlay)
+        .shadow_md()
+        .child(menu_check_row(
+          "page-menu-comments",
+          "评论",
+          comments_vis,
+          dark_mode,
+          move || {
+            on_comments();
+            page_menu_open.set(false);
+          },
+        ))
+        .child(menu_check_row(
+          "page-menu-properties",
+          "属性",
+          props_vis,
+          dark_mode,
+          move || {
+            on_props();
+            page_menu_open.set(false);
+          },
+        ))
+        .child(menu_sep(dark_mode))
+        .child(menu_row("page-menu-copy-md", "复制页面内容", dark_mode, move || {
+          set_clipboard(bridge.export_markdown());
+          bridge.set_status_flash("已复制页面内容");
+          page_menu_open.set(false);
+        }))
+        .child(menu_sep(dark_mode))
+        .child(menu_row("page-menu-export-zip", "导出(ZIP,含图片)", dark_mode, move || {
+          on_zip();
+          page_menu_open.set(false);
+        }))
+        .child(menu_row("page-menu-export-html", "导出为 HTML", dark_mode, move || {
+          on_html();
+          page_menu_open.set(false);
+        }))
+        .child(menu_row("page-menu-export-pdf", "导出为 PDF", dark_mode, move || {
+          on_pdf();
+          page_menu_open.set(false);
+        }))
+        .child(menu_sep(dark_mode))
+        .child(menu_row("page-menu-import-md", "导入 Markdown…", dark_mode, move || {
+          on_import();
+          page_menu_open.set(false);
+        }))
+        .child(menu_sep(dark_mode))
+        .child(menu_row("page-menu-version-history", "版本历史", dark_mode, move || {
+          on_ver();
+          page_menu_open.set(false);
+        }))
+        .child(menu_row("page-menu-snapshot", "保存检查点", dark_mode, move || {
+          on_snap();
+          page_menu_open.set(false);
+        }))
+        .child(menu_sep(dark_mode))
+        .child(menu_row("page-menu-trash", "移入回收站", dark_mode, move || {
+          on_trash();
+          page_menu_open.set(false);
+        })),
+    )
 }
 
 /// Floating inline link URL editor popover.
@@ -822,38 +833,73 @@ where
   F: Fn(&'static str) -> I + 'static,
   I: IntoElement + 'static,
 {
-  crate::tooltip::with_tooltip(
-    button()
-      .test_id(tid)
-      .accessibility_label(a11y)
-      .w(px(28.0))
-      .h(px(28.0))
-      .items_center()
-      .justify_center()
-      .rounded(px(5.0))
-      .bg(move || {
-        let p = palette(dark_mode.get());
-        if active.get() {
-          p.surface_hover
-        } else {
-          p.surface_base
-        }
+  toolbar_btn_inner(tid, a11y, None, dark_mode, active, on_click, icon_fn)
+}
+
+/// Variant of [`toolbar_btn`] that binds an [`ElementRef`] to the button so a
+/// top-level [`overlay()`] popover can anchor to it.
+pub(crate) fn toolbar_btn_with_ref<F, I>(
+  tid: &'static str,
+  a11y: &'static str,
+  el_ref: &ElementRef,
+  dark_mode: Signal<bool>,
+  active: Signal<bool>,
+  on_click: impl Fn() + 'static,
+  icon_fn: F,
+) -> impl IntoElement + 'static
+where
+  F: Fn(&'static str) -> I + 'static,
+  I: IntoElement + 'static,
+{
+  toolbar_btn_inner(tid, a11y, Some(el_ref), dark_mode, active, on_click, icon_fn)
+}
+
+fn toolbar_btn_inner<F, I>(
+  tid: &'static str,
+  a11y: &'static str,
+  el_ref: Option<&ElementRef>,
+  dark_mode: Signal<bool>,
+  active: Signal<bool>,
+  on_click: impl Fn() + 'static,
+  icon_fn: F,
+) -> impl IntoElement + 'static
+where
+  F: Fn(&'static str) -> I + 'static,
+  I: IntoElement + 'static,
+{
+  let mut btn = button()
+    .test_id(tid)
+    .accessibility_label(a11y)
+    .w(px(28.0))
+    .h(px(28.0))
+    .items_center()
+    .justify_center()
+    .rounded(px(5.0))
+    .bg(move || {
+      let p = palette(dark_mode.get());
+      if active.get() {
+        p.surface_hover
+      } else {
+        p.surface_base
+      }
+    })
+    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+    .on_press(move || {
+      crate::tooltip::hide_tooltip();
+      on_click();
+    })
+    .child(dynamic(move || {
+      let p = palette(dark_mode.get());
+      icon_fn(if active.get() {
+        p.text_primary_hex
+      } else {
+        p.text_muted_hex
       })
-      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-      .on_press(move || {
-        crate::tooltip::hide_tooltip();
-        on_click();
-      })
-      .child(dynamic(move || {
-        let p = palette(dark_mode.get());
-        icon_fn(if active.get() {
-          p.text_primary_hex
-        } else {
-          p.text_muted_hex
-        })
-      })),
-    a11y,
-  )
+    }));
+  if let Some(r) = el_ref {
+    btn = btn.element_ref(r);
+  }
+  crate::tooltip::with_tooltip(btn, a11y)
 }
 
 pub(crate) fn toolbar_btn_active<F, I>(
