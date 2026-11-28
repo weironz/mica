@@ -1268,8 +1268,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   let focus_title_rev = signal(0u64);
   provide_context(editor_view::FocusTitleSignal(focus_title_rev));
-  let sidebar_inline_rename: Signal<Option<Uuid>> = signal(None);
-  provide_context(sidebar::SidebarInlineRenameSignal(sidebar_inline_rename));
+  let sidebar_inline_rename_ctl = sidebar::SidebarInlineRenameSignal::new();
+  let sidebar_inline_rename = sidebar_inline_rename_ctl.active_view;
+  provide_context(sidebar_inline_rename_ctl.clone());
 
   let cloud_session = cloud_sync::CloudSessionHandles {
     app_owner,
@@ -3451,10 +3452,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   cloud_session.restore_startup_session();
 
   let zoom_wheel = zoom_ctrl.clone();
+  let inline_rename_up = sidebar_inline_rename_ctl.clone();
   view()
     .flex_1()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
+    .on_mouse_up(move |_: &nsh_core::MouseEvent| {
+      if inline_rename_up.hit_inside.replace(false) {
+        return;
+      }
+      inline_rename_up.request_commit();
+    })
     .on_wheel(move |ev: &nsh_core::WheelEvent| {
       if active_mode.get_untracked() == MODE_BOARD {
         return;

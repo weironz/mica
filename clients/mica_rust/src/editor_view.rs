@@ -1903,6 +1903,7 @@ pub fn editor_view(
       let rects_down = marquee_row_rects.clone();
       let rects_move = marquee_row_rects.clone();
       let img_ctx_cm = h_bub.image_ctx.clone();
+      let inline_rename_ctx = use_context::<crate::sidebar::SidebarInlineRenameSignal>();
 
       // Hidden native IME proxy sink closures
       let br_sink_focus = b_body.clone();
@@ -1992,6 +1993,9 @@ pub fn editor_view(
           body_ctx_menu.set(Some((e.page_position.x.0, e.page_position.y.0)));
         })
         .on_press_down(move |e: &PressEvent| {
+          if let Some(ref inline_ren) = inline_rename_ctx {
+            inline_ren.request_commit();
+          }
           let lx = e.position.x.0;
           let ly = e.position.y.0;
           let (vw, vh) = paper_bounds.get_untracked();

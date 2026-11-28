@@ -238,14 +238,43 @@ struct TreeRowContext {
   emoji_modal_open: Signal<bool>,
   emoji_modal_view: Signal<Option<Uuid>>,
   emoji_modal_current: Signal<Option<String>>,
-  inline_rename_view: Signal<Option<Uuid>>,
+  inline_rename: SidebarInlineRenameSignal,
   cb: Rc<SidebarCallbacks>,
 }
 
-/// Ambient signal identifying a sidebar tree row currently in inline rename
-/// mode (e.g., immediately after creating a new folder).
-#[derive(Clone, Copy)]
-pub struct SidebarInlineRenameSignal(pub Signal<Option<Uuid>>);
+/// Ambient controller identifying a sidebar tree row currently in inline rename
+/// mode (e.g., immediately after creating a new folder), plus an outside-click
+/// commit trigger so clicking non-input regions on desktop/web releases edit mode.
+#[derive(Clone)]
+pub struct SidebarInlineRenameSignal {
+  pub active_view: Signal<Option<Uuid>>,
+  pub commit_rev: Signal<u64>,
+  pub hit_inside: Rc<std::cell::Cell<bool>>,
+}
+
+impl Default for SidebarInlineRenameSignal {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl SidebarInlineRenameSignal {
+  pub fn new() -> Self {
+    Self {
+      active_view: signal(None),
+      commit_rev: signal(0),
+      hit_inside: Rc::new(std::cell::Cell::new(false)),
+    }
+  }
+
+  /// Commit the current inline folder rename draft (if any) and exit edit mode.
+  pub fn request_commit(&self) {
+    if self.active_view.try_get().flatten().is_some() {
+      let next = self.commit_rev.try_get().unwrap_or(0).wrapping_add(1);
+      let _ = self.commit_rev.try_set(next);
+    }
+  }
+}
 
 // ── Main Sidebar View ─────────────────────────────────────────────────────────
 
@@ -281,9 +310,8 @@ pub fn sidebar_view(
     (signal(false), signal(None::<Uuid>), signal(String::new()));
   let (emoji_modal_open, emoji_modal_view, emoji_modal_current) =
     (signal(false), signal(None::<Uuid>), signal(None::<String>));
-  let inline_rename_view = use_context::<SidebarInlineRenameSignal>()
-    .map(|s| s.0)
-    .unwrap_or_else(|| signal(None));
+  let inline_rename = use_context::<SidebarInlineRenameSignal>().unwrap_or_default();
+  let inline_rename_view = inline_rename.active_view;
 
   {
     let tree_scroll = tree.clone();
@@ -350,7 +378,7 @@ pub fn sidebar_view(
     context_menu, page_to_local, drag_state, drag_pointer, drag_page_pointer,
     drag_autoscroll_speed, tree_list_ref, tree_scroll_y, tree_content_h, tree_viewport_h,
     tree_page_origin, just_dragged, rename_modal_open, rename_modal_view, rename_modal_initial,
-    emoji_modal_open, emoji_modal_view, emoji_modal_current, inline_rename_view, cb: cb.clone(),
+    emoji_modal_open, emoji_modal_view, emoji_modal_current, inline_rename, cb: cb.clone(),
   });
 
   // Smooth 60fps edge auto-scroll while dragging tree rows near/past top or bottom edge.
@@ -768,6 +796,7 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
         empty_click_ctx.just_dragged.set(false);
         return;
       }
+      empty_click_ctx.inline_rename.request_commit();
       empty_click_ctx.context_menu.set(None);
       empty_click_ctx.root_focused.set(true);
       empty_click_ctx.focused_nav_id.set(None);
@@ -831,6 +860,7 @@ fn page_tree_area(ctx: Rc<TreeRowContext>) -> impl IntoElement {
             root_click_ctx.just_dragged.set(false);
             return;
           }
+          root_click_ctx.inline_rename.request_commit();
           root_click_ctx.context_menu.set(None);
           root_click_ctx.root_focused.set(true);
           root_click_ctx.focused_nav_id.set(None);
@@ -926,7 +956,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
       }
     })
   });
-  let inline_rename_view = ctx.inline_rename_view;
+  let inline_rename_view = ctx.inline_rename.active_view;
   let is_inline_renaming = computed(move || {
     row_view_id.get().is_some() && row_view_id.get() == inline_rename_view.get()
   });
@@ -985,6 +1015,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
       if is_inline_renaming.get_untracked() {
         return;
       }
+      ctx_down.inline_rename.request_commit();
       if let Some(row) = row_info.get_untracked() {
         ctx_down.drag_state.set(DragState {
           pending: Some(PendingDrag {
@@ -1197,7 +1228,9 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   let draft_buf = Rc::new(RefCell::new(initial_draft.clone()));
                   let draft_sig = signal(initial_draft);
                   let committed = Rc::new(std::cell::Cell::new(false));
-                  let inline_sig = ctx_inline_title.inline_rename_view;
+                  let inline_sig = ctx_inline_title.inline_rename.active_view;
+                  let commit_rev_sig = ctx_inline_title.inline_rename.commit_rev;
+                  let hit_inside_up = ctx_inline_title.inline_rename.hit_inside.clone();
                   let cb_submit = ctx_inline_title.cb.clone();
                   let cb_blur = ctx_inline_title.cb.clone();
                   let init_submit = initial_name.clone();
@@ -1210,77 +1243,99 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   let input_ref = element_ref();
                   let did_focus = Rc::new(std::cell::Cell::new(false));
                   let inline_focus = inline_sig;
-                  return input()
-                    .element_ref(&input_ref)
-                    .test_id("sidebar-inline-rename-input")
-                    // Avoid `.auto_focus(true)` inside an already-attached `virtual_list` row:
-                    // on Windows (`nsh-platform-windows 0.6.1`), `text_input::config` invokes
-                    // `RichEdit::set_focus` synchronously before `Frame`/`InputContent`/`place()`
-                    // give the control a non-zero client rect, causing `msftedit.dll` to throw
-                    // `CxxThrowException` across WndProc (`0xc0000409`).
-                    .submit_behavior(SubmitBehavior::Submit)
-                    .placeholder(initial_name)
+                  let commit_current: Rc<dyn Fn()> = Rc::new(move || {
+                    if committed_blur.get() || inline_sig.try_get() != Some(Some(vid)) {
+                      return;
+                    }
+                    committed_blur.set(true);
+                    let draft = draft_blur.borrow().clone();
+                    if let Some(next) = renamed_to(&draft, &init_blur) {
+                      (cb_blur.on_rename_view)(vid, next);
+                    }
+                    if inline_sig.try_get() == Some(Some(vid)) {
+                      let _ = inline_sig.try_set(None);
+                    }
+                  });
+                  let mount_commit_rev = commit_rev_sig.get_untracked();
+                  {
+                    let commit_outside = commit_current.clone();
+                    let iref_outside = input_ref;
+                    effect(move || {
+                      if commit_rev_sig.get() != mount_commit_rev {
+                        iref_outside.blur();
+                        commit_outside();
+                      }
+                    });
+                  }
+                  let commit_on_blur = commit_current;
+                  return view()
                     .w_full()
-                    .h(px(24.0))
-                    .px(px(6.0))
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(p.accent)
-                    .bg(p.surface_base)
-                    .text_size(px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
-                    .text_color(p.text_primary)
-                    .value(move || draft_sig.try_get().unwrap_or_default())
-                    .on_layout(move |b: &Bounds<Points>| {
-                      if !did_focus.get() && b.size.width.0 > 0.0 && b.size.height.0 > 0.0 {
-                        did_focus.set(true);
-                        let iref = input_ref;
-                        spawn(async move {
-                          timer(Duration::from_millis(0)).await;
-                          if inline_focus.try_get() == Some(Some(vid)) {
-                            iref.focus();
+                    .on_mouse_up(move |_: &MouseEvent| {
+                      hit_inside_up.set(true);
+                    })
+                    .child(
+                      input()
+                        .element_ref(&input_ref)
+                        .test_id("sidebar-inline-rename-input")
+                        // Avoid `.auto_focus(true)` inside an already-attached `virtual_list` row:
+                        // on Windows (`nsh-platform-windows 0.6.1`), `text_input::config` invokes
+                        // `RichEdit::set_focus` synchronously before `Frame`/`InputContent`/`place()`
+                        // give the control a non-zero client rect, causing `msftedit.dll` to throw
+                        // `CxxThrowException` across WndProc (`0xc0000409`).
+                        .submit_behavior(SubmitBehavior::Submit)
+                        .placeholder(initial_name)
+                        .w_full()
+                        .h(px(24.0))
+                        .px(px(6.0))
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(p.accent)
+                        .bg(p.surface_base)
+                        .text_size(px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
+                        .text_color(p.text_primary)
+                        .value(move || draft_sig.try_get().unwrap_or_default())
+                        .on_layout(move |b: &Bounds<Points>| {
+                          if !did_focus.get() && b.size.width.0 > 0.0 && b.size.height.0 > 0.0 {
+                            did_focus.set(true);
+                            let iref = input_ref;
+                            spawn(async move {
+                              timer(Duration::from_millis(0)).await;
+                              if inline_focus.try_get() == Some(Some(vid)) {
+                                iref.focus();
+                              }
+                            });
                           }
-                        });
-                      }
-                    })
-                    .on_change(move |v: &str| {
-                      *draft_chg.borrow_mut() = v.to_owned();
-                      let _ = draft_sig.try_set(v.to_owned());
-                    })
-                    .on_submit(move |submitted: &str| {
-                      if committed_sub.get() || inline_sig.try_get() != Some(Some(vid)) {
-                        return;
-                      }
-                      committed_sub.set(true);
-                      if let Some(next) = renamed_to(submitted, &init_submit) {
-                        (cb_submit.on_rename_view)(vid, next);
-                      }
-                      if inline_sig.try_get() == Some(Some(vid)) {
-                        let _ = inline_sig.try_set(None);
-                      }
-                    })
-                    .on_blur(move || {
-                      // Unmounting after Enter/Escape on Windows dispatches Blur; skip if already
-                      // handled or dismissed so stale dynamic owner teardown never panics.
-                      if committed_blur.get() || inline_sig.try_get() != Some(Some(vid)) {
-                        return;
-                      }
-                      committed_blur.set(true);
-                      let draft = draft_blur.borrow().clone();
-                      if let Some(next) = renamed_to(&draft, &init_blur) {
-                        (cb_blur.on_rename_view)(vid, next);
-                      }
-                      if inline_sig.try_get() == Some(Some(vid)) {
-                        let _ = inline_sig.try_set(None);
-                      }
-                    })
-                    .on_key_press(move |k: &str| {
-                      if k == "Escape" {
-                        committed_key.set(true);
-                        if inline_sig.try_get() == Some(Some(vid)) {
-                          let _ = inline_sig.try_set(None);
-                        }
-                      }
-                    })
+                        })
+                        .on_change(move |v: &str| {
+                          *draft_chg.borrow_mut() = v.to_owned();
+                          let _ = draft_sig.try_set(v.to_owned());
+                        })
+                        .on_submit(move |submitted: &str| {
+                          if committed_sub.get() || inline_sig.try_get() != Some(Some(vid)) {
+                            return;
+                          }
+                          committed_sub.set(true);
+                          if let Some(next) = renamed_to(submitted, &init_submit) {
+                            (cb_submit.on_rename_view)(vid, next);
+                          }
+                          if inline_sig.try_get() == Some(Some(vid)) {
+                            let _ = inline_sig.try_set(None);
+                          }
+                        })
+                        .on_blur(move || {
+                          // Unmounting after Enter/Escape on Windows dispatches Blur; skip if already
+                          // handled or dismissed so stale dynamic owner teardown never panics.
+                          commit_on_blur();
+                        })
+                        .on_key_press(move |k: &str| {
+                          if k == "Escape" {
+                            committed_key.set(true);
+                            if inline_sig.try_get() == Some(Some(vid)) {
+                              let _ = inline_sig.try_set(None);
+                            }
+                          }
+                        }),
+                    )
                     .into_element();
                 }
                 let active = is_active.get();

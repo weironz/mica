@@ -3694,7 +3694,8 @@ fn regression_new_page_focuses_title_and_new_folder_starts_inline_rename() {
     "cancelling inline folder rename with Escape must not commit typed draft on unmount blur"
   );
 
-  // 4. Creating a folder and clicking outside blurs and commits the inline rename cleanly.
+  // 4. Creating a folder and clicking outside (both editor append zone and blank editor margin
+  //    outside the sidebar) releases inline rename mode and commits the typed name cleanly.
   app.press("id:new-folder-btn").unwrap();
   app.wait_for("id:sidebar-inline-rename-input").unwrap();
   app.press_keys(&["b", "l", "u", "r", "-", "o", "k"]).unwrap();
@@ -3706,4 +3707,40 @@ fn regression_new_page_focuses_title_and_new_folder_starts_inline_rename() {
     )
     .unwrap();
   app.wait_for("blur-ok").unwrap();
+
+  // 5. Clicking the white margin of the editor (outside the sidebar and not focusing any input)
+  //    must also release the folder inline rename state cleanly.
+  app.press("id:new-folder-btn").unwrap();
+  app.wait_for("id:sidebar-inline-rename-input").unwrap();
+  app.press_keys(&["m", "a", "r", "g", "i", "n"]).unwrap();
+  let editor_node = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-rich-editor"))
+    .cloned()
+    .expect("mica-rich-editor missing");
+  let local_pt = nsh_core::geometry::point(px(24.0), px(200.0));
+  let page_pt = nsh_core::geometry::point(
+    editor_node.bounds.origin.x + local_pt.x,
+    editor_node.bounds.origin.y + local_pt.y,
+  );
+  app.engine().control().dispatch_event(
+    editor_node.id,
+    nsh_core::EventKind::PressDown,
+    nsh_core::EventPayload::Press(nsh_core::PressEvent {
+      position: local_pt,
+      page_position: page_pt,
+      modifiers: Default::default(),
+      clicks: 1,
+    }),
+  );
+  app.settle();
+  app
+    .wait_for_gone(
+      "id:sidebar-inline-rename-input",
+      std::time::Duration::from_millis(800),
+    )
+    .unwrap();
+  app.wait_for("margin").unwrap();
 }
