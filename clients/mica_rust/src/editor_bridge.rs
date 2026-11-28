@@ -119,6 +119,7 @@ pub struct MicaDocumentBridge {
   active_level: Signal<u64>,
   active_marks: Signal<Vec<String>>,
   last_edited: Signal<String>,
+  status_flash: Signal<Option<(String, u64)>>,
   front_matter: Signal<String>,
   session_rev: Signal<u64>,
 }
@@ -187,6 +188,7 @@ impl MicaDocumentBridge {
       active_level: signal(al),
       active_marks: signal(am),
       last_edited: signal(String::from(DEFAULT_STATUS_TEXT)),
+      status_flash: signal(None),
       front_matter: signal(fm),
       session_rev: signal(0u64),
     })
@@ -1762,8 +1764,16 @@ impl MicaDocumentBridge {
   pub fn last_edited_signal(&self) -> Signal<String> {
     self.last_edited
   }
+  pub fn status_flash_signal(&self) -> Signal<Option<(String, u64)>> {
+    self.status_flash
+  }
   pub fn set_status_flash(&self, msg: impl Into<String>) {
-    self.last_edited.set(msg.into());
+    let next_gen = self
+      .status_flash
+      .get_untracked()
+      .map(|(_, g)| g.wrapping_add(1))
+      .unwrap_or(1);
+    self.status_flash.set(Some((msg.into(), next_gen)));
   }
   pub fn session_rev_signal(&self) -> Signal<u64> {
     self.session_rev

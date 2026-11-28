@@ -85,6 +85,22 @@ pub fn cloud(color: &str) -> Svg {
   )
 }
 
+pub fn cloud_check(color: &str) -> Svg {
+  stroked(
+    16.0,
+    color,
+    r##"<path d="M5.5 14.5H7.2M14.5 14.5A2.8 2.8 0 0 0 15 9A4.4 4.4 0 0 0 6.4 7.9A3 3 0 0 0 5.5 14.5"/><path d="M8.4 13.4L10.3 15.3L14.2 11.4"/>"##,
+  )
+}
+
+pub fn cloud_off(color: &str) -> Svg {
+  stroked(
+    16.0,
+    color,
+    r##"<path d="M3.5 3.5L16.5 16.5"/><path d="M15.8 13.7A2.9 2.9 0 0 0 15 9A4.4 4.4 0 0 0 8.2 5.9"/><path d="M5.7 7.9A3.1 3.1 0 0 0 6.5 14.5H12.5"/>"##,
+  )
+}
+
 pub fn chevrons_up_down(color: &str) -> Svg {
   stroked(13.0, color, r##"<path d="M7 8L10 5L13 8M7 12L10 15L13 12"/>"##)
 }

@@ -2561,6 +2561,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     is_favorite: active_is_favorite,
     right_panel_open,
     is_cloud_signed_in,
+    sync_phase: doc_sync_phase,
+    sync_badge: doc_sync_badge,
     show_format_bar,
     show_page_title,
     show_properties,

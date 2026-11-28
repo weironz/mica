@@ -827,9 +827,8 @@ impl DocSyncController {
       base.to_string()
     };
     if self.sync_badge.get_untracked() != label {
-      self.sync_badge.set(label.clone());
+      self.sync_badge.set(label);
     }
-    self.bridge.set_status_flash(label);
   }
 }
 

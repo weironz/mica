@@ -95,6 +95,8 @@ pub struct EditorHeaderProps {
   pub on_save_snapshot: Rc<dyn Fn()>,
   // ── 1:1 Parity Props ─────────────────────────────────────────────────────
   pub is_cloud_signed_in: Signal<bool>,
+  pub sync_phase: Signal<mica_sync::SyncPhase>,
+  pub sync_badge: Signal<String>,
   pub show_format_bar: Signal<bool>,
   pub show_page_title: Signal<bool>,
   pub show_properties: Signal<bool>,
@@ -1112,6 +1114,7 @@ pub fn editor_view(
   let can_undo = bridge.can_undo_signal();
   let can_redo = bridge.can_redo_signal();
   let last_edited = bridge.last_edited_signal();
+  let status_flash = bridge.status_flash_signal();
   let word_count = bridge.word_count_signal();
   let structure_rev = bridge.structure_rev_signal();
 
@@ -1121,7 +1124,24 @@ pub fn editor_view(
   let show_page_title = header.show_page_title;
   let show_properties = header.show_properties;
   let is_cloud = header.is_cloud_signed_in;
+  let sync_phase = header.sync_phase;
+  let sync_badge = header.sync_badge;
   let page_width = header.page_width;
+
+  effect(move || {
+    if let Some((_, toast_gen)) = status_flash.get() {
+      spawn(async move {
+        timer(Duration::from_millis(2200)).await;
+        if status_flash
+          .try_get()
+          .flatten()
+          .is_some_and(|(_, g)| g == toast_gen)
+        {
+          let _ = status_flash.try_set(None);
+        }
+      });
+    }
+  });
 
   let inline_math_edit: Signal<Option<crate::editor_positioning::InlineMathEdit>> = signal(None);
   let image_ctx_env = header.image_ctx.clone();
@@ -1697,10 +1717,31 @@ pub fn editor_view(
             .flex_row()
             .items_center()
             .gap(px(2.0))
-            .child(when(move || !header_compact.get() && !right_open.get(), move || {
-              text(move || last_edited.get())
-                .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
-                .text_color(move || palette(dark_mode.get()).text_faint)
+            .child(when(move || !header_compact.get(), move || {
+              crate::tooltip::with_dynamic_tooltip(
+                view()
+                  .test_id("ed-sync-status")
+                  .w(px(28.0))
+                  .h(px(28.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(5.0))
+                  .child(dynamic(move || {
+                    let p = palette(dark_mode.get());
+                    let badge = sync_badge.get();
+                    if !badge.trim().is_empty() {
+                      match sync_phase.get() {
+                        mica_sync::SyncPhase::Syncing => mica_icons::refresh_icon(p.accent_hex),
+                        mica_sync::SyncPhase::Offline => mica_icons::cloud_off(p.warning_hex),
+                        mica_sync::SyncPhase::Synced => mica_icons::cloud_check(p.text_muted_hex),
+                      }
+                    } else {
+                      mica_icons::check_icon(p.text_faint_hex)
+                    }
+                  })),
+                move || format_sync_status_tooltip(&sync_badge.get(), &last_edited.get()),
+              )
             }))
             .child(toolbar_btn(
               "toggle-right-panel-btn",
@@ -2649,7 +2690,53 @@ pub fn editor_view(
       b_lightbox,
       dark_mode,
     ))
+    .child(when(move || status_flash.get().is_some(), move || {
+      view()
+        .absolute()
+        .bottom(px(20.0))
+        .left_0()
+        .right_0()
+        .items_center()
+        .z_index(74)
+        .pointer_events(PointerEvents::None)
+        .child(
+          view()
+            .test_id("editor-status-toast")
+            .px_4()
+            .py_2()
+            .max_w(px(420.0))
+            .rounded(px(8.0))
+            .items_center()
+            .justify_center()
+            .bg(move || palette(dark_mode.get()).surface_overlay)
+            .border_1()
+            .border_color(move || palette(dark_mode.get()).border_normal)
+            .shadow_md()
+            .child(
+              text(move || status_flash.get().map(|(m, _)| m).unwrap_or_default())
+                .text_size(px(12.5))
+                .text_color(move || palette(dark_mode.get()).text_primary),
+            ),
+        )
+    }))
     .child(crate::image_blocks::render_image_toast(image_ctx_toast, dark_mode))
+}
+
+/// Format the dynamic hover tooltip label for the fixed-width top-right sync/save status icon.
+pub(crate) fn format_sync_status_tooltip(sync_badge: &str, last_edited: &str) -> String {
+  let badge = sync_badge.trim();
+  let edited = last_edited.trim();
+  if !badge.is_empty() {
+    if edited.is_empty() {
+      badge.to_string()
+    } else {
+      format!("{badge} · {edited}")
+    }
+  } else if edited.is_empty() {
+    "本地已保存".to_string()
+  } else {
+    format!("本地已保存 · {edited}")
+  }
 }
 
 
@@ -2722,5 +2809,25 @@ mod tests {
     }
     assert!(!is_default_untitled_title("纯Rust架构设计"));
     assert_eq!(page_title_input_value("纯Rust架构设计 "), "纯Rust架构设计 ");
+  }
+
+  #[test]
+  fn sync_status_tooltip_formats_cloud_and_local_states() {
+    use super::format_sync_status_tooltip;
+
+    assert_eq!(
+      format_sync_status_tooltip("已实时同步", "上次编辑 刚刚"),
+      "已实时同步 · 上次编辑 刚刚"
+    );
+    assert_eq!(
+      format_sync_status_tooltip("正在同步… · 2 人在线", "上次编辑 刚刚"),
+      "正在同步… · 2 人在线 · 上次编辑 刚刚"
+    );
+    assert_eq!(format_sync_status_tooltip("离线缓存", ""), "离线缓存");
+    assert_eq!(
+      format_sync_status_tooltip("", "上次编辑 刚刚"),
+      "本地已保存 · 上次编辑 刚刚"
+    );
+    assert_eq!(format_sync_status_tooltip("", "  "), "本地已保存");
   }
 }

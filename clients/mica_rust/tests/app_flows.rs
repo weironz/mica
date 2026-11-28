@@ -3811,3 +3811,61 @@ fn regression_divider_click_selects_without_scroll_jump_and_deletes() {
   app.wait_for("段落上方第 10 行内容").unwrap();
   app.wait_for("段落下方第 1 行内容").unwrap();
 }
+
+#[test]
+fn regression_header_sync_status_fixed_width_and_floating_toast() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  // Wide enough for `header_single_row` (>= 1240px inside the editor panel).
+  config.viewport = size(px(1600.0), px(900.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.wait_for("id:ed-sync-status").unwrap();
+  app.wait_for("id:ed-bold").unwrap();
+  // Let `.on_layout` settle `header_width` into `header_single_row` mode.
+  app.settle();
+
+  let node_rect = |app: &Headless, tid: &str| {
+    let b = app
+      .screen()
+      .layout_nodes()
+      .iter()
+      .find(|n| n.test_id.as_deref() == Some(tid))
+      .unwrap_or_else(|| panic!("missing node id:{tid}"))
+      .bounds;
+    (b.origin.x.0, b.origin.y.0, b.size.width.0)
+  };
+
+  let (status_x_before, status_y_before, status_w_before) = node_rect(&app, "ed-sync-status");
+  assert!(
+    (status_w_before - 28.0).abs() < 1.0,
+    "ed-sync-status must have fixed 28px width, got {status_w_before}"
+  );
+  let (bold_x_before, bold_y_before, _) = node_rect(&app, "ed-bold");
+  assert!(
+    (bold_y_before - status_y_before).abs() < 8.0,
+    "ed-bold must be inlined on the single-row header before testing (bold_y={bold_y_before}, status_y={status_y_before})"
+  );
+
+  // Trigger a transient status flash; it must surface as a floating toast without
+  // shifting the fixed-width sync icon or horizontal format toolbar position.
+  app.press("id:ed-copy-path").unwrap();
+  app.wait_for("id:editor-status-toast").unwrap();
+  app.wait_for("已复制页面路径").unwrap();
+
+  let (status_x_after, _, status_w_after) = node_rect(&app, "ed-sync-status");
+  let (bold_x_after, _, _) = node_rect(&app, "ed-bold");
+  assert!(
+    (status_w_after - 28.0).abs() < 1.0,
+    "ed-sync-status width changed to {status_w_after}"
+  );
+  assert!(
+    (status_x_after - status_x_before).abs() < 0.5,
+    "ed-sync-status drifted horizontally: {status_x_before} -> {status_x_after}"
+  );
+  assert!(
+    (bold_x_after - bold_x_before).abs() < 0.5,
+    "inline format toolbar jumped horizontally: {bold_x_before} -> {bold_x_after}"
+  );
+}

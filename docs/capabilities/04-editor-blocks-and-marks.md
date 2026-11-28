@@ -27,7 +27,7 @@
 - **`CAP-04-05` 贴近被选内容的浮动气泡菜单**：
   - 当产生非折叠文本选区时，在**被选内容正上方**（上方不足时自动翻转到**正下方**，水平居中并夹紧在视口内）弹出浮动菜单，严禁写死固定在窗口顶部；滚动页面时自动跟随选区位置。
   - 包含：加粗、斜体、删除线、高亮、行内代码、链接、H1–H3、正文、无序/有序/待办、减少/增加缩进（`Shift+Tab` / `Tab`）、引用、代码块、以及启用 AI 时的「用 AI 改写所选」。
-- **`CAP-04-06` 响应式顶栏格式条**：受设置「格式工具栏」开关控制；宽屏单行内嵌在页面顶栏中，窄屏自动折落为干净的 `36px` 第二行，不挤压左侧面包屑与复制路径按钮；内含撤销/重做、段落/标题、行内格式、列表与减少/增加缩进按钮、引用、代码块、分割线、表格、图片与快速插入入口。
+- **`CAP-04-06` 响应式顶栏格式条**：受设置「格式工具栏」开关控制；宽屏单行内嵌在页面顶栏中，窄屏自动折落为干净的 `36px` 第二行，不挤压左侧面包屑与复制路径按钮；顶栏右侧同步/保存状态固定为 `28×28px` 图标并由动态悬浮 Tooltip 展示详情，操作瞬态提示走底部居中的浮动 Toast（`editor-status-toast`），确保编辑或同步状态变化时内嵌格式条不发生横向抖动；内含撤销/重做、段落/标题、行内格式、列表与减少/增加缩进按钮、引用、代码块、分割线、表格、图片与快速插入入口。
 - **`CAP-04-07` 页内查找与高亮（`Mod+F`）**：右上角弹出查找条，实时高亮全文匹配项（当前激活项橙色、其余黄色），显示 `当前/总数`（或「无结果」），支持 `Enter` 下一个、`Shift+Enter` 上一个、`Esc` 关闭并清除高亮同时归还正文焦点。
 
 ---
@@ -50,7 +50,7 @@
 | `CAP-04-03` 行内 marks 与链接编辑 | P0 | 全端 | ✅ | `mica-editor::mark_apply_toggle_remove_and_normalize_merge_adjacent` + `mica-markdown::highlight` + `mica-editor::highlight_toggle_paste_and_markdown_roundtrip_work_end_to_end` |
 | `CAP-04-04` 22 项斜杠菜单与过滤 | P0 | 全端 | ✅ | `editor_slash::tests` + `editor_positioning::schedule_slash_anchor_update`（`measure()` 实时锚定光标下方/上方） |
 | `CAP-04-05` 贴近选区的浮动气泡菜单 | P0 | 桌面/Web | ✅ | `editor_view.rs::schedule_bubble_anchor_update` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |
-| `CAP-04-06` 响应式顶栏格式条 | P1 | 桌面/Web | ✅ | `editor_view.rs` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` |
+| `CAP-04-06` 响应式顶栏格式条 | P1 | 桌面/Web | ✅ | `editor_view.rs` + `app_flows::regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons` + `app_flows::regression_header_sync_status_fixed_width_and_floating_toast` |
 | `CAP-04-07` `Mod+F` 页内查找高亮 | P1 | 桌面/Web | ✅ | `mica-editor::find_replace_and_replace_all_in_one_undo_batch` |
 
 ---
@@ -63,5 +63,6 @@
 - **2026-11-26（行内高亮 `==高亮==` 与颜色策略定案）**：经对标 Notion/飞书与 Obsidian/Typora/GitHub，拍板不引入任意字体/背景色调色盘，全栈三层新增单一语义行内高亮（`==高亮==` ↔ `<mark>`，`Mod+Shift+H`，工具栏/浮动气泡/HTML 导出与公开分享 CSS/剪贴板粘贴互操作；`CAP-04-03`、`CAP-04-05`）。
 - **2026-11-27（正文与表格超链接点击跳转修复）**：在 `block_views.rs` 与 `table_view.rs` 接入像素级 `hit_link_in_lines` 命中判定、`Cursor::Pointer` 悬停光标、`open_url` 外链打开与 `OpenMicaPageCallback` 内部 `mica://page/<uuid>` 跳转；单击链接直接打开，拖选/双三击/`Alt+单击`/点击行尾空白区不误触跳转（`CAP-04-03`）。
 - **2026-11-27（缩进/反缩进工具栏与浮动菜单按钮）**：新增 `mica_icons::{indent_decrease, indent_increase}` 图标，在顶栏格式条（`ed-outdent`/`ed-indent`）与浮动选区菜单（`bubble-outdent`/`bubble-indent`）补齐减少/增加缩进按钮及悬浮提示（`CAP-04-02`/`05`/`06`）。
+- **2026-11-28（顶栏状态固定图标与浮动 Toast 解耦防抖动）**：将顶栏右侧变宽状态文本替换为固定 `28×28px` 状态图标（`ed-sync-status`）与动态悬浮 Tooltip（`format_sync_status_tooltip`），并将 `set_status_flash` 瞬态反馈解耦到底部浮动 Toast（`editor-status-toast`，`2.2s` 自动消失）且不再向 toast 发送常规同步脉冲，彻底消除编辑与同步状态切换时的顶栏横向跳动（`CAP-04-06`）。
 - **2026-11-28（分割线整块选中与防跳动修复）**：`block_views.rs::render_divider_block_view` 对齐旧版 `DividerRenderer.selectsWholeBlockOnClick`，由 `focus_block`（触发 `ScrollMode::Jump` 跳页）改为 `set_selection(DocSelection::block_atom(idx))` + `request_focus()`，并补齐整块圆角选区底色与主题色边框高亮及回归测试（`CAP-04-01`）。
 - **2026-11-27（多行列表含首项 Tab 缩进修复）**：解除 `cmd_indent` 对列表首项 `max_indent = 0` 的锁死，选中包含第一行在内的多行列表按 `Tab` 时全部行同步缩进；`md-core` 导出层对孤立前置缩进列表按运行期最小层级归一化，保证 Markdown 导出永不退化为缩进代码块（`CAP-04-02`）。
