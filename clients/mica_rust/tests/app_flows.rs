@@ -3677,10 +3677,11 @@ fn regression_new_page_focuses_title_and_new_folder_starts_inline_rename() {
     .unwrap();
   app.wait_for("docs").unwrap();
 
-  // 3. Creating another new folder and pressing Escape cancels inline rename without losing the folder.
+  // 3. Creating another new folder, typing text, and pressing Escape cancels inline rename cleanly
+  //    without panicking or committing typed draft on blur.
   app.press("id:new-folder-btn").unwrap();
   app.wait_for("id:sidebar-inline-rename-input").unwrap();
-  app.press_key("escape").unwrap();
+  app.press_keys(&["t", "m", "p", "escape"]).unwrap();
   app
     .wait_for_gone(
       "id:sidebar-inline-rename-input",
@@ -3688,4 +3689,21 @@ fn regression_new_page_focuses_title_and_new_folder_starts_inline_rename() {
     )
     .unwrap();
   app.wait_for("新文件夹").unwrap();
+  assert!(
+    !app.shows("tmp"),
+    "cancelling inline folder rename with Escape must not commit typed draft on unmount blur"
+  );
+
+  // 4. Creating a folder and clicking outside blurs and commits the inline rename cleanly.
+  app.press("id:new-folder-btn").unwrap();
+  app.wait_for("id:sidebar-inline-rename-input").unwrap();
+  app.press_keys(&["b", "l", "u", "r", "-", "o", "k"]).unwrap();
+  app.press("id:editor-bottom-append-zone").unwrap();
+  app
+    .wait_for_gone(
+      "id:sidebar-inline-rename-input",
+      std::time::Duration::from_millis(800),
+    )
+    .unwrap();
+  app.wait_for("blur-ok").unwrap();
 }

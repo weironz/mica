@@ -1514,10 +1514,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         }
         root_focused.set(false);
         focused_nav_id.set(Some(folder_view_id));
+        sync_t();
         if is_interactive_folder {
           sidebar_inline_rename.set(Some(folder_view_id));
         }
-        sync_t();
         fid
       },
     )

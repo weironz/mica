@@ -1995,8 +1995,8 @@ impl CloudSessionHandles {
           }
           h.root_focused.set(false);
           h.focused_nav_id.set(Some(fid));
-          h.sidebar_inline_rename.set(Some(fid));
           (h.sync_tree_snapshots)();
+          h.sidebar_inline_rename.set(Some(fid));
 
           if let Some(ordered) = reorder_ids {
             let ord_req = ordered.clone();

@@ -303,9 +303,10 @@ pub fn sidebar_view(
     });
   }
 
-  // Esc closes context menu, cancels active drag, or clears multi-selection.
+  // Esc closes inline rename, context menu, cancels active drag, or clears multi-selection.
   effect(move || {
-    let active_any = context_menu.get().is_some()
+    let active_any = inline_rename_view.get().is_some()
+      || context_menu.get().is_some()
       || drag_state.get().active.is_some()
       || !selection.get().is_empty();
     if !active_any || rename_modal_open.get() || emoji_modal_open.get() { return; }
@@ -313,7 +314,9 @@ pub fn sidebar_view(
       "escape",
       KeyOptions { when: When::Always, repeat: false, pass_through: true, ..KeyOptions::default() },
       move |_| {
-        if context_menu.get_untracked().is_some() {
+        if inline_rename_view.get_untracked().is_some() {
+          inline_rename_view.set(None);
+        } else if context_menu.get_untracked().is_some() {
           context_menu.set(None);
         } else if drag_state.get_untracked().active.is_some() {
           drag_autoscroll_speed.set(0.0);
@@ -1180,7 +1183,6 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
             .child(
               view().flex_1().min_w(px(0.0)).pl(px(6.0)).child(dynamic(move || {
                 let p = palette(dark_mode.get());
-                let active = is_active.get();
                 if is_inline_renaming.get()
                   && let Some(row) = row_info.get_untracked()
                 {
@@ -1191,27 +1193,20 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                     row.name
                   };
                   let is_default = initial_name == "新文件夹";
-                  let draft = signal(if is_default { String::new() } else { initial_name.clone() });
-                  let committed = signal(false);
+                  let initial_draft = if is_default { String::new() } else { initial_name.clone() };
+                  let draft_buf = Rc::new(RefCell::new(initial_draft.clone()));
+                  let draft_sig = signal(initial_draft);
+                  let committed = Rc::new(std::cell::Cell::new(false));
                   let inline_sig = ctx_inline_title.inline_rename_view;
-                  let inline_esc = inline_sig;
-                  on_key_with(
-                    "escape",
-                    KeyOptions {
-                      when: When::Always,
-                      repeat: false,
-                      pass_through: true,
-                      ..KeyOptions::default()
-                    },
-                    move |_| {
-                      committed.set(true);
-                      inline_esc.set(None);
-                    },
-                  );
                   let cb_submit = ctx_inline_title.cb.clone();
                   let cb_blur = ctx_inline_title.cb.clone();
                   let init_submit = initial_name.clone();
                   let init_blur = initial_name.clone();
+                  let draft_chg = draft_buf.clone();
+                  let draft_blur = draft_buf;
+                  let committed_sub = committed.clone();
+                  let committed_blur = committed.clone();
+                  let committed_key = committed;
                   return input()
                     .test_id("sidebar-inline-rename-input")
                     .auto_focus(true)
@@ -1226,42 +1221,49 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                     .bg(p.surface_base)
                     .text_size(px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
                     .text_color(p.text_primary)
-                    .value(move || draft.get())
-                    .on_change(move |v: &str| draft.set(v.to_owned()))
+                    .value(move || draft_sig.try_get().unwrap_or_default())
+                    .on_change(move |v: &str| {
+                      *draft_chg.borrow_mut() = v.to_owned();
+                      let _ = draft_sig.try_set(v.to_owned());
+                    })
                     .on_submit(move |submitted: &str| {
-                      if committed.get_untracked() {
+                      if committed_sub.get() || inline_sig.try_get() != Some(Some(vid)) {
                         return;
                       }
-                      committed.set(true);
+                      committed_sub.set(true);
                       if let Some(next) = renamed_to(submitted, &init_submit) {
                         (cb_submit.on_rename_view)(vid, next);
                       }
-                      if inline_sig.get_untracked() == Some(vid) {
-                        inline_sig.set(None);
+                      if inline_sig.try_get() == Some(Some(vid)) {
+                        let _ = inline_sig.try_set(None);
                       }
                     })
                     .on_blur(move || {
-                      if committed.get_untracked() {
+                      // Unmounting after Enter/Escape on Windows dispatches Blur; skip if already
+                      // handled or dismissed so stale dynamic owner teardown never panics.
+                      if committed_blur.get() || inline_sig.try_get() != Some(Some(vid)) {
                         return;
                       }
-                      committed.set(true);
-                      if let Some(next) = renamed_to(&draft.get_untracked(), &init_blur) {
+                      committed_blur.set(true);
+                      let draft = draft_blur.borrow().clone();
+                      if let Some(next) = renamed_to(&draft, &init_blur) {
                         (cb_blur.on_rename_view)(vid, next);
                       }
-                      if inline_sig.get_untracked() == Some(vid) {
-                        inline_sig.set(None);
+                      if inline_sig.try_get() == Some(Some(vid)) {
+                        let _ = inline_sig.try_set(None);
                       }
                     })
                     .on_key_press(move |k: &str| {
                       if k == "Escape" {
-                        committed.set(true);
-                        if inline_sig.get_untracked() == Some(vid) {
-                          inline_sig.set(None);
+                        committed_key.set(true);
+                        if inline_sig.try_get() == Some(Some(vid)) {
+                          let _ = inline_sig.try_set(None);
                         }
                       }
                     })
                     .into_element();
                 }
+                let active = is_active.get();
                 text(row_label.get())
                   .text_size(px((14.0 * crate::mica_theme::ui_scale_factor()).round()))
                   .font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL })

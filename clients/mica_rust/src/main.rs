@@ -10,11 +10,29 @@ use nsh_platform_macos as platform;
 use nsh_platform_windows as platform;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn install_panic_log_hook() {
+  let prev = std::panic::take_hook();
+  std::panic::set_hook(Box::new(move |info| {
+    let dir = std::env::var_os("LOCALAPPDATA")
+      .map(|base| std::path::PathBuf::from(base).join("Mica"))
+      .unwrap_or_else(std::env::temp_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let log_path = dir.join("last-panic.log");
+    let bt = std::backtrace::Backtrace::force_capture();
+    let msg = format!("{info}\n\nBacktrace:\n{bt}\n");
+    let _ = std::fs::write(&log_path, msg);
+    prev(info);
+  }));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn main() -> impl std::process::Termination {
   if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
     println!("Mica {}", env!("CARGO_PKG_VERSION"));
     std::process::exit(0);
   }
+
+  install_panic_log_hook();
 
   // #179: Enforce single instance per profile directory (matching legacy Flutter's
   // named mutex so old Flutter and new pure-Rust clients never concurrently open
