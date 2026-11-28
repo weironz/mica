@@ -401,11 +401,7 @@ jobs:
               gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
                 -f "tag_name=$RELEASE_TAG" --jq .body > "$notes_file"
             fi
-            cat >> "$notes_file" <<'EOF'
-
----
-> **Supported platforms (100% pure Rust):** Windows installer (`Mica-Setup-*.exe`), Web (`mica-web` image), `mica-cli` (`windows-x64`, `linux-x64`, optional `macos-arm64`), and optional Linux `.deb`. Android APK builds are retired (existing `0.14.x` Android APKs remain usable without new updates).
-EOF
+            printf '\n---\n> **Supported platforms (100%% pure Rust):** Windows installer (`Mica-Setup-*.exe`), Web (`mica-web` image), `mica-cli` (`windows-x64`, `linux-x64`, optional `macos-arm64`), and optional Linux `.deb`. Android APK builds are retired (existing `0.14.x` Android APKs remain usable without new updates).\n' >> "$notes_file"
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" --draft=false --latest --notes-file "$notes_file"
           else
