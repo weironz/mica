@@ -31,14 +31,15 @@ flowchart LR
     DR --> CLI["cli：win / linux-musl / 可选 macOS"]
     DR --> IMG["images：复用预编译产物推 ACR & Docker Hub"]
     DR --> DEB["可选 linux-deb：Ubuntu/Debian .deb"]
-    WIN & CLI & IMG & DEB --> PUB["publish：核对 latest 后公开正式版"]
+    WIN & CLI & IMG & DEB --> PUB["publish：校验 SHA-256 + 自动 Notes 后公开"]
   end
 
-  subgraph S3["阶段三：生产部署与验收（Ship::deploy + deploy.yml）"]
+  subgraph S3["阶段三：生产部署与成品验收（Ship::deploy + canary）"]
     PUB --> CHK["deploy --check --diff：只读彩排"]
-    CHK --> DPL["ansible/deploy.yml：tag compose + 迁移前 pg_dump + 拉镜像重启"]
-    DPL --> VER["verify-prod + release-site-canary：/api/health + Web 入口校验"]
-    VER --> CLN["cleanup：清理临时候选分支"]
+    CHK --> DPL["ansible/deploy.yml：tag compose + 迁移前 pg_dump + 拉镜像重启 + 清理旧镜像"]
+    DPL --> VER["verify-prod + release-site-canary + Step Summary"]
+    PUB -->|"与 deploy 并行"| CAN["canary：Windows 静默升级 + Linux CLI 成品实跑"]
+    VER & CAN --> CLN["cleanup：清理临时候选分支"]
   end
 ```
 
@@ -67,8 +68,8 @@ flowchart LR
 2. **并行门禁与构建（`.github/workflows/ci.yml`，`scope=full`）**：
    - **`rustsec`**：使用钉死版本的 `cargo-audit` 审计根 `Cargo.lock` 与 `clients/mica_rust/Cargo.lock`。
    - **`structure`**：执行 `check-ignored-sources.sh`、`check-migration-tracking.sh`、`test-migration-tracking.sh`、`check-file-size.sh`（单文件行数预算/硬上限检查）。
-   - **`rust`**：启动 `postgres:18.6-alpine`，执行 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、应用迁移、运行带可达 Postgres 的全量测试（`cargo_receipt` 校验实际通过数，禁止静默跳过）、`mica-core --features store` 及 `mica-md` 示例。
-   - **`client`**：安装 Linux GUI 依赖及 `wasm32-unknown-unknown` / `wasm-bindgen-cli` / `wasm-opt` / `brotli`，运行 `clients/mica_rust` 的 `clippy -D warnings`、全部单元与无头端到端测试（`cargo_receipt` 校验）、原生桌面构建、CSP 哈希一致检查（`test-web-csp-hashes.sh`）以及 `build-web-rust.sh`（含 4.0 MiB Brotli-11 预算检查），产出并上传 **`web-bundle-<sha>`**。
+   - **`rust`**：启动 `postgres:18.6-alpine`，执行 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、应用迁移、运行带可达 Postgres 的全量测试（`cargo_receipt` 校验实际通过数，禁止静默跳过）、`mica-core --features store` 及 `mica-md` 示例（去掉了冗余的额外 `cargo build`）。
+   - **`client`**：缓存 `$HOME/.local` 中钉死版本的 `wasm-bindgen-cli` 与 `binaryen`（`wasm-opt`），安装 Linux GUI 依赖及 `wasm32-unknown-unknown` / `brotli`，运行 `clients/mica_rust` 的 `clippy -D warnings`、全部单元与无头端到端测试（`cargo_receipt` 校验）、CSP 哈希一致检查（`test-web-csp-hashes.sh`）以及 `build-web-rust.sh`（含 4.0 MiB Brotli-11 预算检查），产出并上传 **`web-bundle-<sha>`**。
    - **`mcp`**：编译 `mica-cli` 并使用官方 `@modelcontextprotocol/inspector` 验证 `mica-cli mcp tools/list` schema 契约。
    - **`server-bins`**：在 `rust:<pin>-slim-bookworm` 容器内预编译适配运行环境的 glibc-2.36 `mica-api-server` 与 `mica-cli` 二进制，检查迁移文件原始 LF 字节，上传 **`server-bins-<sha>`**。
 3. **容器全栈与浏览器端到端（`ci.yml::container`）**：
@@ -93,9 +94,9 @@ flowchart LR
    - **`cli`**：按 `release-cli-matrix.py` 在 Windows / Ubuntu(`x86_64-unknown-linux-musl` 静态链接) / 可选 macOS 上并行编译 `mica-cli` 与 `sha256-<os>.txt`，上传至草稿 Release。
    - **`images`**：直接复用阶段一传递过来的 `web_bundle_artifact` 与 `server_bins_artifact`（仅当脱离 `Ship` 单独触发 `Release` 时才触发容器/WASM 回退构建），以 `provenance: false`、`sbom: false` 同号构建并同时推送 `mica-api`、`mica-web`、`mica-cli` 到阿里云 ACR 与 Docker Hub。
    - **`linux-deb`（可选）**：勾选 `build_linux_deb` 或启用仓库变量 `MICA_BUILD_LINUX_DEB=true` 时，调用 `scripts/build-linux-deb.sh` 构建并挂载 `.deb` 与 `sha256-linux-desktop.txt`。
-4. **公开版本（`release.yml::publish`）**：
-   - 待 `windows`、`cli`、`images`、`linux-deb` 全部落定并核对 `releases/latest` 未被并发插队后，执行 `gh release edit vX.Y.Z --draft=false --latest` 将 Release 翻为正式公开版。
-   - **独立公开产物验收（`.github/workflows/release-canary.yml`）**：支持手动调度或在需要独立验证已公开资产时运行 `scripts/release-canary.sh X.Y.Z`，在干净 `ubuntu-latest` 与 `windows-latest` 环境中下载公开的 `Mica-Setup-*.exe` / `mica-cli` / 可选 `.deb`，逐一核对 SHA-256、在一次性 runner 中验证前序版本的真实安装/覆盖升级、版本输出与首帧启动存活。
+4. **公开版本与并行成品验收（`release.yml::publish` + `Ship::canary`）**：
+   - 待 `windows`、`cli`、`images`、`linux-deb` 全部落定并核对 `releases/latest` 未被并发插队后，`publish` 对必需资产及已挂载可选资产逐一核对 `sha256-*.txt` 与 GitHub asset digest 一致；若发布正文为空则通过 GitHub `generate-notes` API 自动填充结构化变更日志与支持平台说明，随后将 Release 翻为正式公开版。
+   - **成品实机冒烟（`Ship::canary` → `.github/workflows/release-canary.yml`）**：在 `Ship` 正式发布后**与生产部署并行执行**（不拖慢上线），在干净 `ubuntu-latest`（GTK4 运行时）与 `windows-latest` 中下载刚公开的 `Mica-Setup-*.exe` / `mica-cli` / 可选 `.deb`，核对 SHA-256、验证前序版本的静默安装覆盖升级、版本号输出与首帧存活。
 
 > ⚠️ 若 `publish` 阶段意外中断，草稿 Release 与全部已上传附件均安全保留，直接补跑以下命令即可公开：
 > ```bash
@@ -106,7 +107,7 @@ flowchart LR
 
 ## 阶段三：生产部署与验收（`Ship::deploy` + `deploy.yml`）
 
-阶段二公开 Release 后，`Ship` 自动衔接阶段三部署生产（同样支持通过 [Actions → Deploy](https://github.com/weironz/mica/actions/workflows/deploy.yml) 或本地 `just deploy-prod X.Y.Z` 独立重放/回滚至任意已发布版本）：
+阶段二公开 Release 后，`Ship` 自动衔接阶段三部署生产（与 `canary` 并行；同样支持通过 [Actions → Deploy](https://github.com/weironz/mica/actions/workflows/deploy.yml) 或本地 `just deploy-prod X.Y.Z` 独立重放/回滚至任意已发布版本）：
 
 1. **前置检查与隔离环境（`deploy.yml`）**：
    - `concurrency: deploy-prod`（排队执行、不取消在途部署，防止并发写坏节点 `.env`）。
@@ -114,14 +115,16 @@ flowchart LR
    - 恢复 `ansible-core` + `community.docker` 缓存，并将 `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS` 隔离写入 `$RUNNER_TEMP/deploy-ssh`（配合 `ControlMaster` + `ANSIBLE_PIPELINING=1`，`if: always()` 自动清理临时私钥）。
 2. **强制先彩排、后真上**：
    - 每次部署**必先**执行 `scripts/deploy-prod.sh "$VERSION" --check --diff` 针对真实生产节点完成只读 dry-run（检查节点可达性、Postgres/RustFS 健康状态、还原点目录可写性及 compose/env diff），彩排通过后才正式运行 `scripts/deploy-prod.sh "$VERSION"`（手调 `Deploy` 时传 `-f check=true` 则彩排完即停）。
-3. **幂等编排与防呆保障（`ansible/deploy.yml`）**：
+3. **幂等编排、旧镜像修剪与防呆保障（`ansible/deploy.yml`）**：
    - **配置来源锁定**：`docker-compose.yml` 通过 `git show vX.Y.Z:deploy/docker-compose.yml` 严格从目标 tag 提取；`.env` 由 `ansible/host_vars/mica-prod.yml` 渲染（拒绝凭据键入库、拒绝删减节点已有配置键），节点 `.env.secrets` 仅人工维护、playbook 永不修改。
    - **迁移前内容校验还原点**：比对节点当前 `MICA_VERSION` 与目标 tag 间的 `migrations/` 变更，只要存在新 SQL 迁移（或历史无法确定）即在部署前通过 `set -o pipefail` 落盘 `pg_dump | gzip`，并使用 `awk` 同时校验 dump 结尾标记与核心数据表存在（不只依赖 `gzip -t`），失败立刻中止。
    - **只动应用面、不惊动数据面与共用网关**：数据面（`postgres` / `rustfs`）只检健康、不重建；只从阿里云 VPC 仓库 pull `api` / `web`（及已启用的 `backup` sidecar），`--no-deps` 重建并等待健康检查；普通 Mica 发版绝不改动或重启共享 Traefik（见 [traefik-working-set.md](traefik-working-set.md)）。
+   - **部署后安全旧镜像清理**：应用健康稳定后自动清理悬空层，并对 `mica-api` / `mica-web` / `mica-cli` 保留最近 3 个版本（额外保护目标版本、上一版本及正在运行容器的镜像 ID），防止连续发版累积撑爆节点磁盘。
    - **失败自动回滚**：任一步失败自动复原节点 `.env` 中的旧 `MICA_VERSION` 并拉起上一版本容器。
-4. **线上自动验收与候选清理**：
+4. **线上自动验收、摘要与候选清理**：
    - 部署完毕后 `scripts/deploy-prod.sh` 自动调用 `scripts/verify-prod.sh`（断言线上 `/api/health` 返回精确版本 `X.Y.Z`）与 `scripts/release-site-canary.sh`（拉取目标 tag 的 `web-entry-cache-check.sh`，核验线上 Web 入口缓存策略、WASM `application/wasm` MIME 与入口脚本可用性）。
-   - 全部通过后，`Ship::cleanup` 删除阶段一创建的临时候选分支。
+   - `deploy.yml` 自动向 `$GITHUB_STEP_SUMMARY` 写入版本号、模式与线上状态摘要。
+   - 当 `deploy` 与并行 `canary` 均通过后，`Ship::cleanup` 删除阶段一创建的临时候选分支。
 5. **人工收尾（机器不能替代的两件事）**：
    - **冒烟本版真实业务改动**（`verify-prod` 只验证版本号与静态入口，功能正确性需针对本版变更实测一次）。
    - **同步路线图**：将本版已完成的项从 [roadmap.md](../plans/roadmap.md) 整条移入 [roadmap-done.md](../plans/roadmap-done.md)（非硬门禁，随发版顺手维护）。
@@ -180,7 +183,7 @@ just release-publish X.Y.Z    # 逐项核对资产 digest 与 sha256-*.txt 一�
 | 门禁 | 执行位置 |
 | --- | --- |
 | 双锁文件与版本号一致（根 `Cargo.toml`/`Cargo.lock` + `clients/mica_rust/Cargo.toml`/`Cargo.lock` + `README.md`/`deploy.md`） | `scripts/manifest-version.sh`、`scripts/release-check.sh`、`scripts/release-tree-check.sh` |
-| Rust 工具链与 `rust-toolchain.toml` 一致；`md-wasm` 工具链匹配 | `scripts/release-check.sh`、`scripts/check-md-wasm-toolchain.sh` |
+| `Rust` 工具链与 `rust-toolchain.toml` 一致；`md-wasm` 工具链及 `clients/mica_rust` `wasm32` 编译匹配 | `scripts/release-check.sh`、`scripts/check-md-wasm-toolchain.sh` |
 | Postgres DB 测试真运行（不可达即拒绝，禁静默跳过）；回执下限校验（`cargo_receipt`） | `scripts/release-check.sh`、`scripts/lib-receipt.sh`、`.github/workflows/ci.yml` |
 | 代码结构行数预算、被 `.gitignore` 遮蔽源文件检查、已发布 SQL 迁移原始 LF 字节冻结 | `scripts/check-file-size.sh`、`scripts/check-ignored-sources.sh`、`scripts/test-migration-tracking.sh`、`scripts/check-migration-bytes.sh` |
 | Web CSP 内联脚本 sha256 与双份 Nginx 配置一致；4.0 MiB Brotli-11 打包体积预算 | `scripts/test-web-csp-hashes.sh`、`scripts/build-web-rust.sh`、`scripts/web-entry-cache-check.sh` |

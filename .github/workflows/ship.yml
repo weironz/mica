@@ -73,7 +73,6 @@ jobs:
     if: ${{ !cancelled() && needs.ci.result == 'success' && (needs.promote.result == 'success' || (inputs.dry_run && needs.promote.result == 'skipped')) }}
     permissions:
       contents: write
-      statuses: write
     uses: ./.github/workflows/release.yml
     with:
       source_sha: ${{ needs.prepare.outputs.sha }}
@@ -94,9 +93,18 @@ jobs:
       require_latest: true
     secrets: inherit
 
+  canary:
+    needs: [prepare, release]
+    # Runs in parallel with prod deploy to verify the public installer & CLI binaries.
+    if: ${{ !cancelled() && !inputs.dry_run && needs.release.result == 'success' }}
+    uses: ./.github/workflows/release-canary.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
   cleanup:
-    needs: [prepare, release, deploy]
-    if: ${{ !cancelled() && needs.release.result == 'success' && (inputs.dry_run || needs.deploy.result == 'success') }}
+    needs: [prepare, release, deploy, canary]
+    if: ${{ !cancelled() && needs.release.result == 'success' && (inputs.dry_run || (needs.deploy.result == 'success' && needs.canary.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

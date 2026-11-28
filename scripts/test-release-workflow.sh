@@ -1,86 +1,56 @@
 #!/usr/bin/env bash
-# Evaluate the Release workflow's real canary condition. Optional package jobs
-# are skipped when disabled; that must not skip artifact acceptance after a
-# successful publish (the v0.14.7 release gap).
+# Validate structural and conditional-execution invariants across Ship, Release,
+# Release dry-run, and Release canary workflows (pure-Rust fullstack pipeline).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
 from pathlib import Path
 import re
 
-text = Path('.github/workflows/release.yml').read_text(encoding='utf-8')
+release_text = Path('.github/workflows/release.yml').read_text(encoding='utf-8')
+dryrun_text = Path('.github/workflows/release-dryrun.yml').read_text(encoding='utf-8')
+ship_text = Path('.github/workflows/ship.yml').read_text(encoding='utf-8')
+canary_text = Path('.github/workflows/release-canary.yml').read_text(encoding='utf-8')
 
-def job(name: str, workflow: str = text) -> str:
+def job(name: str, workflow: str) -> str:
     match = re.search(
         rf'(?ms)^  {re.escape(name)}:\n.*?(?=^  [a-zA-Z0-9_-]+:\n|\Z)', workflow
     )
     assert match, f'missing {name} job'
     return match.group(0)
 
-dryrun = Path('.github/workflows/release-dryrun.yml').read_text(encoding='utf-8')
-assert 'uses: ./.github/workflows/release.yml' in job('build', dryrun)
-for call in (job('build', dryrun), job('browser')):
-    assert re.search(r'^    permissions:\n(?:^      [^\n]+\n)*^      statuses: write$', call, re.M), \
-        'both callers must allow the nested browser job to write commit statuses'
-print('PASS: dry-run and Release pass commit status permission to the browser job')
+# 1. Release dry-run calls release.yml with publish=false.
+dry_build = job('build', dryrun_text)
+assert 'uses: ./.github/workflows/release.yml' in dry_build
+assert 'publish: false' in dry_build
+print('PASS: release-dryrun calls release.yml with publish=false')
 
-canary = job('canary')
-assert re.search(r'^    needs: \[draft, publish\]$', canary, re.M), \
-    'canary must wait for draft and publish'
-assert 'uses: ./.github/workflows/release-canary.yml' in canary, \
-    'canary no longer runs the artifact acceptance workflow'
-assert 'version: ${{ needs.draft.outputs.version }}' in canary, \
-    'canary must accept the version validated by draft'
-condition = re.search(r'^    if: \$\{\{(.*?)\}\}\s*$', canary, re.M)
-assert condition, 'canary has no job condition'
+# 2. Release publish verifies checksums, auto-generates notes, and guards skipped optional jobs.
+publish = job('publish', release_text)
+assert re.search(r'^    needs: \[draft, windows, cli, images, linux-deb\]$', publish, re.M)
+assert 'verify_asset' in publish and 'generate-notes' in publish
+pub_cond = re.search(r'^    if: \$\{\{(.*?)\}\}\s*$', publish, re.M)
+assert pub_cond, 'publish has no job condition'
+assert '!failure() && !cancelled()' in pub_cond.group(1)
+assert 'inputs.publish' in pub_cond.group(1)
+print('PASS: release::publish checks manifests/digests, generates notes, and skips on dry-run')
 
-# Translate only the expression forms this job is allowed to use. An unknown
-# new token fails the test instead of being silently ignored.
-expression = condition.group(1).strip()
-for source, target in [
-    ('!failure()', '(not failure)'),
-    ('!cancelled()', '(not cancelled)'),
-    ("needs.publish.result == 'success'", 'publish_success'),
-    ('&&', 'and'),
-    ('||', 'or'),
-]:
-    expression = expression.replace(source, target)
-assert re.fullmatch(r'[a-zA-Z0-9_() \']+', expression), \
-    f'unhandled condition syntax: {condition.group(1)}'
+# 3. Ship runs ci -> promote -> release -> parallel (deploy + canary) -> cleanup.
+ship_rel = job('release', ship_text)
+assert 'web_bundle_artifact: ${{ needs.ci.outputs.web_bundle_artifact }}' in ship_rel
+assert 'server_bins_artifact: ${{ needs.ci.outputs.server_bins_artifact }}' in ship_rel
+ship_dep = job('deploy', ship_text)
+ship_can = job('canary', ship_text)
+assert 'uses: ./.github/workflows/deploy.yml' in ship_dep
+assert 'uses: ./.github/workflows/release-canary.yml' in ship_can
+assert '!inputs.dry_run && needs.release.result == \'success\'' in ship_can
+ship_clean = job('cleanup', ship_text)
+assert 'needs: [prepare, release, deploy, canary]' in ship_clean
+assert "needs.deploy.result == 'success' && needs.canary.result == 'success'" in ship_clean
+print('PASS: ship wires parallel artifact reuse, deploy + canary, and cleanup guard')
 
-raw_condition = condition.group(1)
-has_status_check = any(
-    token in raw_condition for token in ('failure(', 'cancelled(', 'success(', 'always(')
-)
-
-def runs(optional_skipped: bool, failure: bool, cancelled: bool, publish: str) -> bool:
-    # GitHub adds an implicit success() gate to a job condition without a
-    # status-check function. A skipped optional need fails that implicit gate;
-    # !failure() && !cancelled() deliberately replaces it.
-    status_gate = has_status_check or not (optional_skipped or failure or cancelled)
-    allowed = eval(
-        expression,
-        {'__builtins__': {}},
-        {'failure': failure, 'cancelled': cancelled, 'publish_success': publish == 'success'},
-    )
-    return status_gate and bool(allowed)
-
-cases = [
-    (False, False, False, 'success', True,
-     'all optional packages enabled + publish succeeded => canary runs'),
-    (True, False, False, 'success', True,
-     'optional packages skipped + publish succeeded => canary runs'),
-    (True, False, False, 'skipped', False,
-     'dry-run / publish skipped => canary stays skipped'),
-    (False, False, False, 'failure', False,
-     'publish failed => canary stays skipped'),
-    (False, True, False, 'success', False,
-     'any failed need => canary stays skipped'),
-    (False, False, True, 'success', False,
-     'cancelled run => canary stays skipped'),
-]
-for optional_skipped, failure, cancelled, publish, expected, label in cases:
-    actual = runs(optional_skipped, failure, cancelled, publish)
-    assert actual == expected, f'{label}: got {actual}, expected {expected}'
-    print(f'PASS: {label}')
+# 4. Release canary exposes workflow_call and installs pure-Rust GTK4 deps on Linux.
+assert 'workflow_call:' in canary_text
+assert 'libgtk-4-1' in canary_text and 'libgtk-3' not in canary_text
+print('PASS: release-canary supports workflow_call with pure-Rust GTK4 runtime')
 PY

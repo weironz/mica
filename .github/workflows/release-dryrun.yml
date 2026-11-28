@@ -83,10 +83,6 @@ jobs:
     # release.yml declares `contents: write` at its top level (it attaches
     # release assets on the real path). Leaving this off failed the whole run at
     # startup — no jobs, no log, just "likely a workflow file issue".
-    #
-    # On main, release writes are skipped. Keep statuses: write available to
-    # the nested browser job so it can report mica/browser-tests on this SHA.
     permissions:
       contents: write
-      statuses: write
     secrets: inherit

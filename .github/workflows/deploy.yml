@@ -197,6 +197,21 @@ jobs:
         if: ${{ inputs.check }}
         run: echo "::notice::rehearsal only — prod was not changed"
 
+      - name: Write deploy summary
+        if: always()
+        env:
+          VERSION: ${{ inputs.version }}
+          CHECK_ONLY: ${{ inputs.check }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Mica Production Deploy (${{ inputs.check && 'Rehearsal' || 'Live' }})"
+            echo "- **Version**: \`v${VERSION}\`"
+            echo "- **Mode**: \`$([ "$CHECK_ONLY" = "true" ] && echo "rehearsal (--check --diff)" || echo "live deploy + verify-prod + release-site-canary")\`"
+            echo "- **Target URL**: https://mica.cloudcele.com"
+            echo "- **Result**: \`${JOB_STATUS}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # The runner empties $RUNNER_TEMP between jobs, but a cancelled or crashed
       # job should not leave a root key to production on someone's disk until
       # the NEXT job happens to start.

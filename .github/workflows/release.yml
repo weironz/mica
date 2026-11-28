@@ -318,12 +318,14 @@ jobs:
       group: mica-release-publish
       cancel-in-progress: false
     steps:
-      - name: Publish release
+      - name: Verify assets, generate release notes, and publish
         env:
           GH_TOKEN: ${{ github.token }}
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
           RELEASE_TAG: ${{ needs.draft.outputs.tag }}
+          VERSION: ${{ needs.draft.outputs.version }}
         run: |
+          set -euo pipefail
           if [ -n "$PREVIOUS_TAG" ]; then
             latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
             if [[ "$latest" != "$PREVIOUS_TAG" && "$latest" != "$RELEASE_TAG" ]]; then
@@ -331,5 +333,86 @@ jobs:
               exit 1
             fi
           fi
-          gh release edit "${{ needs.draft.outputs.tag }}" \
-            --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+          assets_tsv=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | [.name, (.digest // "")] | @tsv')
+          assets=$(cut -f1 <<<"$assets_tsv")
+
+          dl=$(mktemp -d)
+          trap 'rm -rf -- "$dl"' EXIT
+
+          manifest_for_asset() {
+            case "$1" in
+              Mica-*-linux-*.deb) echo sha256-linux-desktop.txt ;;
+              *-linux-*) echo sha256-linux.txt ;;
+              *-macos-*) echo sha256-macos.txt ;;
+              Mica-Setup-*) echo sha256-windows-installer.txt ;;
+              *-windows-*) echo sha256-windows.txt ;;
+              *) return 1 ;;
+            esac
+          }
+
+          verify_asset() {
+            local asset=$1 manifest mf listed want actual
+            manifest=$(manifest_for_asset "$asset")
+            grep -qxF "$manifest" <<<"$assets" \
+              || { echo "::error::Missing checksum manifest $manifest for $asset"; exit 1; }
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$manifest" --dir "$dl" --clobber >/dev/null
+            mf="$dl/$manifest"
+            listed=$(awk -v n="$asset" '$2 == n || $2 == "*"n { print $1 }' "$mf")
+            [ -n "$listed" ] \
+              || { echo "::error::$manifest does not list $asset"; exit 1; }
+            want=$(awk -F'\t' -v n="$asset" '$1 == n { print $2 }' <<<"$assets_tsv" | sed 's/^sha256://')
+            if [ -n "$want" ]; then
+              [ "${listed,,}" = "${want,,}" ] \
+                || { echo "::error::$asset in $manifest hashes to $listed, GitHub digest is $want"; exit 1; }
+            else
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir "$dl" --clobber >/dev/null
+              actual=$(sha256sum "$dl/$asset" | cut -d' ' -f1)
+              [ "${listed,,}" = "$actual" ] \
+                || { echo "::error::$asset in $manifest hashes to $listed, downloaded asset is $actual"; exit 1; }
+            fi
+            echo "Verified $asset against $manifest ($listed)"
+          }
+
+          for asset in \
+            "Mica-Setup-${VERSION}.exe" \
+            "mica-cli-${VERSION}-windows-x64.exe" \
+            "mica-cli-${VERSION}-linux-x64"; do
+            grep -qxF "$asset" <<<"$assets" \
+              || { echo "::error::Required asset missing from draft release: $asset"; exit 1; }
+            verify_asset "$asset"
+          done
+          for opt in \
+            "mica-cli-${VERSION}-macos-arm64" \
+            "Mica-${VERSION}-linux-amd64.deb"; do
+            if grep -qxF "$opt" <<<"$assets"; then
+              verify_asset "$opt"
+            fi
+          done
+
+          existing_body=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')
+          if [ -z "${existing_body//[$' \t\r\n']/}" ]; then
+            notes_file="$dl/release-notes.md"
+            if [ -n "$PREVIOUS_TAG" ]; then
+              gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+                -f "tag_name=$RELEASE_TAG" -f "previous_tag_name=$PREVIOUS_TAG" --jq .body > "$notes_file"
+            else
+              gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+                -f "tag_name=$RELEASE_TAG" --jq .body > "$notes_file"
+            fi
+            cat >> "$notes_file" <<'EOF'
+
+---
+> **Supported platforms (100% pure Rust):** Windows installer (`Mica-Setup-*.exe`), Web (`mica-web` image), `mica-cli` (`windows-x64`, `linux-x64`, optional `macos-arm64`), and optional Linux `.deb`. Android APK builds are retired (existing `0.14.x` Android APKs remain usable without new updates).
+EOF
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" --draft=false --latest --notes-file "$notes_file"
+          else
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+
+          published_latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          [ "$published_latest" = "$RELEASE_TAG" ] \
+            || { echo "::error::/releases/latest is $published_latest, expected $RELEASE_TAG"; exit 1; }

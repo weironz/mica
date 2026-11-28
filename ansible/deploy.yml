@@ -678,6 +678,36 @@
             pull: always
             dependencies: false
           loop: "{{ sidecars_present | default([]) }}"
+
+        # Safe post-deploy cleanup: prune dangling layers and older mica-{api,web,cli}
+        # tags beyond the newest 3 while protecting target, previous, and running IDs.
+        - name: Prune dangling and old Mica app images (keep latest 3)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              docker image prune -f >/dev/null || true
+              cids=$(docker ps -q)
+              in_use=""
+              if [ -n "$cids" ]; then
+                in_use=$(printf '%s\n' "$cids" | xargs docker inspect --format '{% raw %}{{.Image}}{% endraw %}' | sort -u)
+              fi
+              keep_tags=$(printf '%s\n' "v{{ version }}" "{{ previous_version | default('') }}" | awk 'NF' | sort -u)
+              reg="{{ mica_env.MICA_REGISTRY | default('registry.cn-shenzhen.aliyuncs.com/willspace', true) }}"
+              for repo in "$reg/mica-api" "$reg/mica-web" "$reg/mica-cli"; do
+                docker images --format '{% raw %}{{.Tag}}{% endraw %}\t{% raw %}{{.ID}}{% endraw %}' "$repo" 2>/dev/null \
+                  | awk '$1 != "<none>"' \
+                  | awk '!seen[$1]++' \
+                  | tail -n +4 \
+                  | while IFS=$'\t' read -r old_tag old_id; do
+                      printf '%s\n' "$keep_tags" | grep -Fxq "$old_tag" && continue
+                      printf '%s\n' "$in_use" | grep -Fxq "$old_id" && continue
+                      docker rmi "$repo:$old_tag" >/dev/null 2>&1 || true
+                    done
+              done
+          when: not ansible_check_mode
+          changed_when: false
+          failed_when: false
       rescue:
         - name: Preserve failed application diagnostics before rollback
           block:
@@ -727,7 +757,9 @@
     - name: Report what landed
       ansible.builtin.debug:
         msg: >-
-          {{ version }} — compose {{ 'UPDATED' if compose_copy.changed else 'unchanged' }};
+          {{ previous_version | default('(fresh)', true) }} -> v{{ version }} —
+          compose {{ 'UPDATED' if compose_copy.changed else 'unchanged' }};
+          restore_point={{ needs_restore_point | bool }};
           data: {{ data_services | join(', ') }};
           app: {{ app_services | join(', ') }};
           profile-gated: {{ profile_services | join(', ') | default('none', true) }}

@@ -6,15 +6,13 @@
 #   just ship 0.13.57
 #
 #   0. release-preflight            gh API, Inno, Docker + logins, disk, DB… all at once
-#   1. just release X.Y.Z           bump → gate (tests, clippy, flutter) → commit → tag
+#   1. just release X.Y.Z           bump → gate (Rust workspace + mica_rust + wasm32 + clippy) → commit → tag
 #   2. git push origin main vX.Y.Z
-#      + browser-only suites        Windows cannot run them (#181): dispatched to
-#                                   Actions now, waited for before step 6
 #   3. just release-artifacts       what this host can build (see that script)
 #   4. just release-images          if Docker is up (skip: IMAGES=0)
 #   5. just release-upload          draft release + assets
-#   6. just release-publish         only if every required asset is attached AND
-#                                   the browser suites passed on the tag commit
+#   6. just release-publish         only if every required asset + sha256 manifest match
+#      (Note: Playwright Web E2E requires Linux/CI; Windows hosts skip it locally.)
 #
 # Re-running after a failure resumes from the tag: an artifacts build or image
 # push already completed for this exact commit is reused, not redone

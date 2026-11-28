@@ -33,9 +33,15 @@ cargo_receipt 500 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo_receipt 1 cargo test -p mica-core --features store
 
-echo "==> pure-Rust client (clients/mica_rust): tests, clippy, native build"
+echo "==> pure-Rust client (clients/mica_rust): tests, clippy, wasm32 check, native build"
+bash scripts/test-web-csp-hashes.sh
 cargo_receipt 15 cargo test --manifest-path clients/mica_rust/Cargo.toml
 cargo clippy --manifest-path clients/mica_rust/Cargo.toml --all-targets -- -D warnings
+command -v clang >/dev/null 2>&1 \
+  || fail "clang is required to compile clients/mica_rust for wasm32-unknown-unknown (zstd-sys)"
+rustup target list --installed | grep -qx 'wasm32-unknown-unknown' \
+  || fail "rustup target add wasm32-unknown-unknown is required before release"
+cargo check --manifest-path clients/mica_rust/Cargo.toml --lib --target wasm32-unknown-unknown --locked
 cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --release
 
 printf '\n  release-check passed for %s\n' "$version"

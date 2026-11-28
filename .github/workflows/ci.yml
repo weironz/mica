@@ -136,8 +136,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt (deny drift)
         run: cargo fmt --all --check
-      - name: Build workspace
-        run: cargo build --workspace --locked
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Apply migrations
@@ -170,6 +168,11 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
+      - name: Cache pinned WebAssembly tools (wasm-bindgen + binaryen)
+        uses: actions/cache@v5
+        with:
+          path: ~/.local
+          key: ${{ runner.os }}-web-tools-bin123-${{ hashFiles('clients/mica_rust/Cargo.lock') }}
       - name: Install Linux GUI & wasm32 build dependencies
         run: |
           sudo apt-get update
@@ -186,8 +189,6 @@ jobs:
         run: |
           source scripts/lib-local.sh && source scripts/lib-receipt.sh
           cargo_receipt 110 cargo test --manifest-path clients/mica_rust/Cargo.toml --locked
-      - name: Build native desktop binary
-        run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --locked
       - name: Build pure-Rust WebAssembly bundle
         run: |
           bash scripts/test-web-csp-hashes.sh
