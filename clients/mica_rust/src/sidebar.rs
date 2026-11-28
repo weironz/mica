@@ -1295,16 +1295,12 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                         .text_color(p.text_primary)
                         .value(move || draft_sig.try_get().unwrap_or_default())
                         .on_layout(move |b: &Bounds<Points>| {
-                          if !did_focus.get() && b.size.width.0 > 0.0 && b.size.height.0 > 0.0 {
-                            did_focus.set(true);
-                            let iref = input_ref;
-                            spawn(async move {
-                              timer(Duration::from_millis(0)).await;
-                              if inline_focus.try_get() == Some(Some(vid)) {
-                                iref.focus();
-                              }
-                            });
-                          }
+                          crate::focus_utils::focus_once_after_layout(
+                            b,
+                            &did_focus,
+                            input_ref,
+                            move || inline_focus.try_get() == Some(Some(vid)),
+                          );
                         })
                         .on_change(move |v: &str| {
                           *draft_chg.borrow_mut() = v.to_owned();

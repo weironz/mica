@@ -39,6 +39,7 @@ pub mod editor_positioning;
 pub mod editor_slash;
 pub mod editor_view;
 pub mod emoji_picker;
+mod focus_utils;
 pub mod graph_dialog;
 pub mod image_blocks;
 pub mod mica_icons;
@@ -56,6 +57,7 @@ pub mod sidebar;
 pub mod single_instance;
 pub mod table_view;
 pub mod text_geometry;
+pub mod toast;
 pub mod tooltip;
 pub mod touch_selection;
 pub mod transfer;
@@ -358,6 +360,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let right_panel_tab = signal(ToolsTab::Outline);
   let viewport_width = signal(1280.0_f32);
   let tooltip_host = tooltip::install_tooltip_host(viewport_width);
+  let toast_host = toast::install_toast_host();
   let is_narrow = computed(move || viewport_width.get() < responsive_shell::NARROW_BREAKPOINT);
   let narrow_tabs_open = signal(false);
   {
@@ -3910,5 +3913,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     }))
     // 12. Global dark-pill hover tooltip overlay (never clipped by overflow_hidden)
     .child(tooltip::tooltip_overlay(tooltip_host, dark_mode))
+    .child(toast::toast_overlay(toast_host, dark_mode))
     .child(zoom_controller::zoom_badge_overlay(&zoom_ctrl, dark_mode))
 }

@@ -3851,7 +3851,7 @@ fn regression_header_sync_status_fixed_width_and_floating_toast() {
   // Trigger a transient status flash; it must surface as a floating toast without
   // shifting the fixed-width sync icon or horizontal format toolbar position.
   app.press("id:ed-copy-path").unwrap();
-  app.wait_for("id:editor-status-toast").unwrap();
+  app.wait_for("id:app-toast").unwrap();
   app.wait_for("已复制页面路径").unwrap();
 
   let (status_x_after, _, status_w_after) = node_rect(&app, "ed-sync-status");

@@ -204,7 +204,7 @@ pub fn board_view_with_rev_and_close(
     md_import_draft: signal(DEFAULT_MD_OUTLINE.to_string()),
     active_shape_kind: signal("rounded".to_string()),
     active_icon_id: signal("server".to_string()),
-    toast_msg: signal(None),
+    toast_host: use_context::<crate::toast::ToastHost>(),
     last_svg_bytes: signal(0),
     viewport_size: signal((1040.0, 680.0)),
     did_initial_fit: signal(false),
@@ -218,7 +218,7 @@ pub fn board_view_with_rev_and_close(
 
   register_board_shortcuts(&ctx);
 
-  let (space_down, space_up, toast_sig) = (ctx.space_held, ctx.space_held, ctx.toast_msg);
+  let (space_down, space_up) = (ctx.space_held, ctx.space_held);
   let (c_paint, c_layout, c_pdown) = (ctx.clone(), ctx.clone(), ctx.clone());
   let (c_pmove, c_pup, c_root_up, c_wheel) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone());
   let (c_inline_cond, c_inline_body, c_insp) = (ctx.clone(), ctx.clone(), ctx.clone());
@@ -367,13 +367,7 @@ pub fn board_view_with_rev_and_close(
           build_world_inline_editor(&c_inline_body)
         }))
         .child(build_zoom_pill(&ctx))
-        .child(build_shortcut_hint_pill(dark_mode))
-        .child(when(move || toast_sig.get().is_some(), move || {
-          view()
-            .test_id("board-toast").absolute().bottom(px(58.0)).right(px(16.0)).z_index(40)
-            .px_3().py_2().rounded(px(8.0)).bg(rgb_const(0x1F2329)).shadow_md()
-            .child(text(move || toast_sig.get().unwrap_or_default()).text_size(px(12.0)).text_color(rgb_const(0xFFFFFF)))
-        })),
+        .child(build_shortcut_hint_pill(dark_mode)),
     )
     .child(when(move || c_imp_cond.show_import_menu.get(), move || build_import_menu(&c_imp_body)))
     .child(when(move || c_exp_cond.show_export_menu.get(), move || build_export_menu(&c_exp_body)))
@@ -465,7 +459,7 @@ struct BoardCtx {
   md_import_draft: Signal<String>,
   active_shape_kind: Signal<String>,
   active_icon_id: Signal<String>,
-  toast_msg: Signal<Option<String>>,
+  toast_host: Option<crate::toast::ToastHost>,
   last_svg_bytes: Signal<usize>,
   viewport_size: Signal<(f32, f32)>,
   did_initial_fit: Signal<bool>,
@@ -526,12 +520,9 @@ impl BoardCtx {
   }
 
   fn show_toast(&self, msg: impl Into<String>) {
-    let text_msg = msg.into();
-    self.toast_msg.set(Some(text_msg.clone()));
-    let toast = self.toast_msg;
-    drop(set_timeout(std::time::Duration::from_secs(2), move || {
-      if toast.get_untracked().as_deref() == Some(text_msg.as_str()) { toast.set(None); }
-    }));
+    if let Some(host) = self.toast_host {
+      host.show(msg);
+    }
   }
 
   /// Single unified entry point for all `BoardCommand` dispatches and `UiEffect`s.

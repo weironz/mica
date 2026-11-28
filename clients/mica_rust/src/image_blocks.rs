@@ -71,8 +71,8 @@ pub struct ImageContext {
   pub context_menu: Signal<Option<ImageContextMenuState>>,
   /// Active caption edit dialog state.
   pub caption_edit: Signal<Option<ImageCaptionEditState>>,
-  /// Transient bottom-center feedback toast `(message, generation)`.
-  pub toast_state: Signal<Option<(String, u64)>>,
+  /// Root unified toast host (`None` only in headless unit tests without shell).
+  pub toast_host: Option<crate::toast::ToastHost>,
   /// Currently hovered image block ID (preserved across `block_rev` rebuilds such as align cycling).
   pub hovered_block: Signal<Option<String>>,
 }
@@ -97,7 +97,7 @@ impl ImageContext {
       natural_sizes: Rc::new(RefCell::new(HashMap::new())),
       context_menu: signal(None),
       caption_edit: signal(None),
-      toast_state: signal(None),
+      toast_host: use_context::<crate::toast::ToastHost>(),
       hovered_block: signal(None),
     }
   }
@@ -133,22 +133,11 @@ impl ImageContext {
     mica_client::web_runtime::web_origin()
   }
 
-  /// Show a short transient toast message inside the editor viewport.
+  /// Show a short transient toast message via the unified root `ToastHost`.
   pub fn show_toast(&self, msg: impl Into<String>) {
-    let text_msg = msg.into();
-    let next_gen = self
-      .toast_state
-      .get_untracked()
-      .map(|(_, g)| g.wrapping_add(1))
-      .unwrap_or(1);
-    self.toast_state.set(Some((text_msg, next_gen)));
-    let toast_sig = self.toast_state;
-    self.spawn(async move {
-      timer(Duration::from_millis(2200)).await;
-      if toast_sig.get_untracked().is_some_and(|(_, g)| g == next_gen) {
-        toast_sig.set(None);
-      }
-    });
+    if let Some(host) = self.toast_host {
+      host.show(msg);
+    }
   }
 }
 
@@ -2173,39 +2162,6 @@ pub fn render_image_caption_modal(
         )
         .into_element()
     }
-  })
-}
-
-pub fn render_image_toast(ctx: ImageContext, dark_mode: Signal<bool>) -> impl IntoElement {
-  let toast_sig = ctx.toast_state;
-  when(move || toast_sig.get().is_some(), move || {
-    view()
-      .absolute()
-      .bottom(px(20.0))
-      .left_0()
-      .right_0()
-      .items_center()
-      .z_index(75)
-      .pointer_events(PointerEvents::None)
-      .child(
-        view()
-          .test_id("image-action-toast")
-          .px_4()
-          .py_2()
-          .max_w(px(420.0))
-          .rounded(px(8.0))
-          .items_center()
-          .justify_center()
-          .bg(move || palette(dark_mode.get()).surface_overlay)
-          .border_1()
-          .border_color(move || palette(dark_mode.get()).border_normal)
-          .shadow_md()
-          .child(
-            text(move || toast_sig.get().map(|(m, _)| m).unwrap_or_default())
-              .text_size(px(12.5))
-              .text_color(move || palette(dark_mode.get()).text_primary),
-          ),
-      )
   })
 }
 

@@ -569,10 +569,7 @@ pub fn editor_view(
         editor_focused.set(false);
         if show_title.get_untracked() {
           tref.focus();
-          spawn(async move {
-            timer(Duration::from_millis(0)).await;
-            tref.focus();
-          });
+          crate::focus_utils::focus_on_next_tick(tref, || true);
         } else {
           br_fallback.request_focus();
         }
@@ -1128,18 +1125,13 @@ pub fn editor_view(
   let sync_badge = header.sync_badge;
   let page_width = header.page_width;
 
+  let last_flash_gen = Cell::new(0u64);
   effect(move || {
-    if let Some((_, toast_gen)) = status_flash.get() {
-      spawn(async move {
-        timer(Duration::from_millis(2200)).await;
-        if status_flash
-          .try_get()
-          .flatten()
-          .is_some_and(|(_, g)| g == toast_gen)
-        {
-          let _ = status_flash.try_set(None);
-        }
-      });
+    if let Some((msg, toast_gen)) = status_flash.get()
+      && toast_gen != last_flash_gen.get()
+    {
+      last_flash_gen.set(toast_gen);
+      crate::toast::show_toast(msg);
     }
   });
 
@@ -1148,7 +1140,6 @@ pub fn editor_view(
   let image_ctx_paste = header.image_ctx.clone();
   let image_ctx_menu = header.image_ctx.clone();
   let image_ctx_cap = header.image_ctx.clone();
-  let image_ctx_toast = header.image_ctx.clone();
   let block_env = BlockRenderEnv {
     bridge: bridge.clone(),
     dark_mode,
@@ -2690,36 +2681,6 @@ pub fn editor_view(
       b_lightbox,
       dark_mode,
     ))
-    .child(when(move || status_flash.get().is_some(), move || {
-      view()
-        .absolute()
-        .bottom(px(20.0))
-        .left_0()
-        .right_0()
-        .items_center()
-        .z_index(74)
-        .pointer_events(PointerEvents::None)
-        .child(
-          view()
-            .test_id("editor-status-toast")
-            .px_4()
-            .py_2()
-            .max_w(px(420.0))
-            .rounded(px(8.0))
-            .items_center()
-            .justify_center()
-            .bg(move || palette(dark_mode.get()).surface_overlay)
-            .border_1()
-            .border_color(move || palette(dark_mode.get()).border_normal)
-            .shadow_md()
-            .child(
-              text(move || status_flash.get().map(|(m, _)| m).unwrap_or_default())
-                .text_size(px(12.5))
-                .text_color(move || palette(dark_mode.get()).text_primary),
-            ),
-        )
-    }))
-    .child(crate::image_blocks::render_image_toast(image_ctx_toast, dark_mode))
 }
 
 /// Format the dynamic hover tooltip label for the fixed-width top-right sync/save status icon.
