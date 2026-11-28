@@ -1,6 +1,6 @@
 # 单一实现专项：Markdown 引擎只留一份（S0–S5）
 
-> 状态：**全部完成，G4 通过，S0–S5 已并回 main**（2026-10-29；2026-10-26 立项）。已随 App **v0.14.0**（2026-10-29）上线，0.14.1 / 0.14.2 跟进；crate / npm 首次发布仍等用户批准（见 [S5 发布手册](stages/S5-sdk-release.md)）。
+> 状态：**全部完成，G4 通过，S0–S5 已并回 main**（2026-10-29；2026-10-26 立项）。已随 App **v0.14.0**（2026-10-29）上线，0.14.1 / 0.14.2 跟进；`mica-board` / `mica-md` 0.1.0 已于 2026-11-28 公开发布到 crates.io 与 npm（发布手册见 [docs/ops/sdk-release.md](../ops/sdk-release.md)）。
 > 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
 
@@ -23,7 +23,7 @@
   HTML 分词，转换在 `md-core/src/html/paste.rs`，`html_to_markdown_json`）。同时加了按语法特征扫描的 CI 守卫
   `scripts/check-dart-markdown.sh`（含自测），取代按函数名的检查；SDK 加了 `HtmlProfile::Strict`。
   wasm 体积因此到 249,589 B（预算 262,144 B）。
-- **未做 / 待用户决定**：crate / npm 首次发布（手册见 [S5](stages/S5-sdk-release.md) 文末，用户本人执行）；
+- **已收尾 / 后续参考**：`0.1.0` crate（`mica-board`、`mica-md`）与 npm（`mica-md`）已于 2026-11-28 完成首次公开发布，后续发版统一按 [docs/ops/sdk-release.md](../ops/sdk-release.md) 执行；
   Mica 内部粘贴优先读 Markdown（可选改进，见 G3 记录）。
 - 审核方没有 Windows，Windows 集成测试与「旧版客户端读新表格」以执行方回执为准。
 - 每个停点的核对过程、裁决与审核方修复都在 [reviews.md](reviews.md)；各阶段执行过程在 `stages/` 的执行记录里。

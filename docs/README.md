@@ -5,7 +5,7 @@
 - 想知道还要做什么 → [`plans/roadmap.md`](plans/roadmap.md)(权威待办,只放还要做的)
 - 查产品功能与交互验收基线（跨技术栈）→ [`capabilities/README.md`](capabilities/README.md)（16 份独立产品能力规格，含编辑器核心编辑验收清单）
 - 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 [`AGENTS.md`](../AGENTS.md)
-- 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/deploy.md`](ops/deploy.md)
+- 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/sdk-release.md`](ops/sdk-release.md)、[`ops/deploy.md`](ops/deploy.md)
 - 代码评审与修复记录 → [`reviews/`](#reviews--代码评审与修复)
 - Markdown 引擎的结构与 SDK 契约 → [`single-source/`](single-source/README.md)(单一实现专项,S0–S5 已完成并随 v0.14.0 上线)
 
@@ -113,6 +113,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [release.md](ops/release.md) | **发版与构建**(含 Actions 不可用时的本地发布链) |
+| [sdk-release.md](ops/sdk-release.md) | **对外 SDK 发布手册**(`mica-board` / `mica-md` crates.io 与 `mica-md` npm 发版、避坑与验收) |
 | [release-0.14.3-validation.md](ops/release-0.14.3-validation.md) | 0.14.3 发行物、生产与隔离栈验收;入口 404 缺口及修复边界 |
 | [traefik-working-set.md](ops/traefik-working-set.md) | 共享入口最终配置、缺页 I/O 根因、部署保留方式与空闲 TLS / 目录验收 |
 | [deploy.md](ops/deploy.md) | 部署、凭据、管理员、删账号 |

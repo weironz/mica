@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # SDK readiness, one command: packaging, docs, examples, npm. Everything the
-# release checklist needs EXCEPT the publish actions themselves (T5.12, and
-# only after user approval).
+# release checklist needs EXCEPT the publish actions themselves (see
+# docs/ops/sdk-release.md for the full crates.io + npm publish flow).
 #
 #   bash scripts/sdk-check.sh
 #
-# `cargo publish --dry-run` is intentionally NOT here: it refuses while
-# `publish = false` is set, and un-setting it just to dry-run risks shipping a
-# half-decided state. The package list check below covers the same surface
-# (what would be packed) without touching the publish flag.
+# `cargo publish --dry-run` is intentionally left to the release step rather
+# than running here: when `mica-md` and its optional dependency `mica-board`
+# bump together, `mica-md --dry-run` fails until the new `mica-board` version
+# is visible on crates.io, and keeping sdk-check offline-friendly avoids network
+# coupling during routine CI. The package list check below still covers what
+# gets packed into `mica-md`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh

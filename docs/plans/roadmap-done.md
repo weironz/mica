@@ -11,7 +11,7 @@
 
 ## 0.15.x（发布交付与质量加固）
 
-- ✅ **`mica-md`（crates.io + npm）与 `mica-board`（crates.io）公开发布**（2026-11-28 实测闭环）：按 [S5 发布手册](../single-source/stages/S5-sdk-release.md) 完成 `bash scripts/sdk-check.sh`、`cargo package`、tag `mica-md-v0.1.0` 与全双端公开发布：`crates.io` 已上线 [`mica-board 0.1.0`](https://crates.io/crates/mica-board) 与 [`mica-md 0.1.0`](https://crates.io/crates/mica-md)，`npm` 已上线 [`mica-md@0.1.0`](https://www.npmjs.com/package/mica-md)（`dist-tags.latest: 0.1.0`，含 `web` + `node` wasm 产物，554.1 kB）。
+- ✅ **`mica-md`（crates.io + npm）与 `mica-board`（crates.io）公开发布**（2026-11-28 实测闭环）：按 [SDK 发布手册](../ops/sdk-release.md) 完成 `bash scripts/sdk-check.sh`、`cargo package`、tag `mica-md-v0.1.0` 与全双端公开发布：`crates.io` 已上线 [`mica-board 0.1.0`](https://crates.io/crates/mica-board) 与 [`mica-md 0.1.0`](https://crates.io/crates/mica-md)，`npm` 已上线 [`mica-md@0.1.0`](https://www.npmjs.com/package/mica-md)（`dist-tags.latest: 0.1.0`，含 `web` + `node` wasm 产物，554.1 kB）。
 - ✅ **发布产物 canary 补齐上一版覆盖升级自动验证**（2026-11-25 实机闭环）：扩展 `scripts/smoke-installer.ps1` 支持 `-UpgradeFrom` / `-UpgradeFromVersion` 并在 `scripts/release-canary.sh` 自动查找校验紧邻上一版 Windows 安装包；通过 Inno Setup 6 真机实跑 `v0.15.0 -> 当前 main` 隔离纯净安装与覆盖升级，期间捕获并同步根治了纯 Rust 客户端遗漏的 Win32 `VS_VERSION_INFO`（`build.rs` + `windows_app_icon.rs` PE 回归测试）、`MICA_STARTUP_PROBE_FILE` 首帧探针、`--version` 输出以及 Windows `VaultStore` 忽略 `%APPDATA%` 环境变量导致 `#179` 隔离绕过问题；全套 PowerShell/Python 契约与真机覆盖升级（含 `store.db` 与哨兵文件保留）均已实测通过。
 
 ## 0.15.0

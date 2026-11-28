@@ -158,8 +158,8 @@ docs.rs 会自动生成 Rust 文档；不另建站点。README 里给出 docs.rs
 
 ## 执行记录
 
-> **最终状态**：S5 完成，G4 通过（2026-10-29），并回 main（`6cc2e526`）。`publish = false` 未动，发布等用户批准（见文末发布手册）。
-> 下文按时间保留执行过程，其中的「⏸ 待审核」「未 merge」等都是当时的状态；结论以 [reviews.md](../reviews.md) 为准。
+> **最终状态**：S5 于 2026-10-29 完成并回 main（`6cc2e526`），当时按 D3 暂留 `publish = false`；**2026-11-28 已获批完成 `0.1.0` 公开发布**（crates.io `mica-board 0.1.0` + `mica-md 0.1.0`、npm `mica-md@0.1.0`、tag `mica-md-v0.1.0`）。后续发布流程已整合迁移至 [docs/ops/sdk-release.md](../../ops/sdk-release.md)。
+> 下文按时间保留 S5 实施与 G4 审核记录；发布操作不再以本文为准，请以 [sdk-release.md](../../ops/sdk-release.md) 为准。
 
 执行方：Agent D（S5 实际由 D 代 R/W 执行；R/W 的原计划任务在 S2 后已大部分由协调者完成，剩余项见下）。分支 `ss/r/t5-sdk`（自 `single-source` @ `81adf6df`）。
 提交全部 `--no-verify`（code-review-graph 钩子本机持续 `database is locked`，S3/S4 已有先例）。
@@ -229,13 +229,6 @@ docs.rs 会自动生成 Rust 文档；不另建站点。README 里给出 docs.rs
 6. compat 入口迁移零下游破坏：workspace 与 FFI `cargo check` 绿、`facade_surface` 测试绿；`crates/markdown` 门面 re-export 已改走 `mica_md::compat`。
 7. Windows 执行环境小坑（不阻塞审核）：`node --test <目录>` 在 Windows 静默失败须指向具体文件；sdk-check 包清单检查需 `tr '\\' '/'` 归一反斜杠；新文件过 `cargo fmt` 后建议再跑一遍 clippy（fmt 合并链会冒 useless_conversion）。
 
-## 发布手册（T5.12；用户批准后执行，不自动）
+## 发布手册（T5.12，已归档迁移）
 
-> 状态：**未获批，`publish = false` 保持不变**。以下是获批后的一串步骤，一次做完。
-
-1. **确认**：Q1–Q6 的答案已体现在 `crates/md-core/Cargo.toml`（已做）；`just sdk-check` 全绿（已验证）；CHANGELOG 把 `0.1.0` 从 Unreleased 移出并写日期。
-2. **翻开关**：删除 `crates/md-core/Cargo.toml` 的 `publish = false` 行。
-3. **打 tag**：`mica-md-v0.1.0`（与 App 的 `vX.Y.Z` 区分；发布文档已记录此命名）。
-4. **cargo publish**：`cargo publish -p mica-md`。**由用户本人在自己机器上执行**——crates.io token 不进仓库、不进 CI 日志。
-5. **npm publish**：先 `bash scripts/build-md-npm.sh`（dist 是生成物），然后 `npm publish --access public`（在 `packages/mica-md-js/`；需要 npm 登录，同样用户执行）。
-6. **收尾**：README 加 crates.io / npm 徽章；`crates/markdown` 门面依赖改 `mica-md = { version = "0.1", path = "../md-core" }`（发布后本地仍用 path 开发，版本号开始有约束力）；npm 包 `package.json` 的 `version` 此后随 crate 手工同步（两处，发版时一起改）。
+> **已归档迁移**：`0.1.0` 已于 2026-11-28 完成首次公开发布（`publish = false` 已移除）。为避免与运维文档双份维护并补齐 `mica-board` 前置依赖顺序、版本同步清单及 npm/crates.io 实操避坑，权威发布步骤已统一整合至 [**docs/ops/sdk-release.md**](../../ops/sdk-release.md)。

@@ -3,6 +3,8 @@
 GitHub Actions 使用官方 runner。发版由人手动启动一次，后续任务由工作流接续。推送 main、tag 或 PR 不会启动发布。
 发版仍须用户明确要求。
 
+> **对外 SDK 发布走独立流程**：发布 `mica-board` / `mica-md`（crates.io）与 `mica-md`（npm，tag `mica-md-vX.Y.Z`）请见 [sdk-release.md](sdk-release.md)，不经过本页的 `Ship` / `Release` / `Deploy` 流水线。
+
 **默认走托管路径**。在 [Actions → Ship](https://github.com/weironz/mica/actions/workflows/ship.yml) 选择
 `main`，正式发布时取消勾选 `dry_run`，然后点 **Run workflow**。版本留空时自动递增补丁号，明确决定升
 minor 时填写目标版本。命令行入口等效：
