@@ -11,7 +11,7 @@ use nsh_base::{button, input};
 use nsh_core::{
   SubmitBehavior,
   element::{Align, ElementRef, ImageSrc, Placement, Svg, clipboard_string, overlay, svg},
-  geometry::{Point, Points, px},
+  geometry::{Point, Points, point, px},
   prelude::*,
 };
 
@@ -1106,18 +1106,13 @@ pub(crate) fn editor_context_menu_overlay(
   header: Rc<EditorHeaderProps>,
   has_selection: Signal<bool>,
   is_cloud: Signal<bool>,
-  viewport_bounds: Signal<(f32, f32)>,
+  _viewport_bounds: Signal<(f32, f32)>,
   dark_mode: Signal<bool>,
 ) -> impl IntoElement {
   when(move || menu_pos.get().is_some(), move || {
     let Some((raw_x, raw_y)) = menu_pos.get() else {
       return view().into_element();
     };
-    let (vw, vh) = viewport_bounds.get_untracked();
-    let max_x = if vw > 210.0 { vw - 208.0 } else { 8.0 };
-    let max_y = if vh > 260.0 { vh - 248.0 } else { 8.0 };
-    let left_x = raw_x.clamp(8.0, max_x.max(8.0));
-    let top_y = raw_y.clamp(8.0, max_y.max(8.0));
     let has_sel = has_selection.get();
     let show_comment = has_sel && is_cloud.get();
     let (b_cp, b_ct, b_ps, b_pp, b_sa) = (
@@ -1161,9 +1156,6 @@ pub(crate) fn editor_context_menu_overlay(
 
     let mut card = view()
       .test_id("editor-context-menu")
-      .absolute()
-      .left(px(left_x))
-      .top(px(top_y))
       .w(px(196.0))
       .p_1()
       .gap(px(2.0))
@@ -1256,22 +1248,14 @@ pub(crate) fn editor_context_menu_overlay(
       ));
 
     overlay()
+      .anchor_point(move || point(px(raw_x.max(8.0)), px(raw_y.max(8.0))))
+      .placement(Placement::Bottom)
+      .align(Align::Start)
+      .offset(px(2.0))
+      .margin(px(8.0))
+      .on_press_outside(move |_: &Point<Points>| menu_pos.set(None))
       .on_cancel(move || menu_pos.set(None))
-      .child(
-        view()
-          .absolute()
-          .inset_0()
-          .z_index(78)
-          .child(
-            button()
-              .test_id("editor-context-menu-dismiss")
-              .accessibility_label("关闭编辑器右键菜单")
-              .absolute()
-              .inset_0()
-              .on_press(move || menu_pos.set(None)),
-          )
-          .child(card),
-      )
+      .child(card)
       .into_element()
   })
 }

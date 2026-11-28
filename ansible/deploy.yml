@@ -133,14 +133,67 @@
     # MICA_VERSION, so 21 config values lived exclusively on the node with no
     # source of truth and no way to detect a hand-edit — exactly the disease
     # compose was cured of.
-    - name: The credentials file must already exist
-      ansible.builtin.stat:
-        path: "{{ secrets_file }}"
-      register: secrets_stat
+    # ── Inspect node state in a single read-only SSH pass ────────────────────
+    # Consolidates secrets existence check, declared key names (never values),
+    # .env existence, and live MICA_VERSION into one remote execution to avoid
+    # redundant cross-Pacific SSH roundtrips on rehearsal + live runs.
+    - name: Inspect node environment and credential keys
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          python3 - <<'PY'
+          import json, os, re
+
+          secrets_path = os.environ['SECRETS_FILE']
+          env_path = os.environ['ENV_FILE']
+          key_re = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)=')
+
+          def read_keys(path):
+              keys = set()
+              if os.path.isfile(path):
+                  with open(path, 'r', encoding='utf-8', errors='replace') as fh:
+                      for line in fh:
+                          m = key_re.match(line)
+                          if m:
+                              keys.add(m.group(1))
+              return sorted(keys)
+
+          secrets_exists = os.path.isfile(secrets_path)
+          env_exists = os.path.isfile(env_path)
+          secrets_keys = read_keys(secrets_path)
+          keys_before = sorted(set(secrets_keys) | set(read_keys(env_path)))
+          prev_ver = ''
+          if env_exists:
+              with open(env_path, 'r', encoding='utf-8', errors='replace') as fh:
+                  for line in fh:
+                      if line.startswith('MICA_VERSION='):
+                          prev_ver = line.split('=', 1)[1].strip()
+                          break
+
+          print(json.dumps({
+              'secrets_exists': secrets_exists,
+              'env_exists': env_exists,
+              'secrets_keys': secrets_keys,
+              'keys_before': keys_before,
+              'previous_version': prev_ver,
+          }))
+          PY
+      environment:
+        SECRETS_FILE: "{{ secrets_file }}"
+        ENV_FILE: "{{ env_file }}"
+      register: node_preflight_raw
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Decode node inspection metadata
+      ansible.builtin.set_fact:
+        node_preflight: "{{ node_preflight_raw.stdout | from_json }}"
+      no_log: true
 
     - name: Refuse to invent one
       ansible.builtin.assert:
-        that: secrets_stat.stat.exists
+        that: node_preflight.secrets_exists | bool
         fail_msg: >-
           {{ secrets_file }} is missing. It holds this instance's credentials and
           is created ONCE by a human during provisioning — a deploy that wrote a
@@ -227,69 +280,24 @@
           service alias. No deployment files or database settings were changed.
       when: (mica_env.MICA_DATABASE_HOST | default('')) == 'postgres'
 
-    # Which keys the node has today, by NAME only — the values are never read.
-    # Guards the one way this change can quietly break production: a key that
-    # exists on the node but is missing from host_vars simply disappears, and
-    # compose then falls back to its own default without saying anything. For a
-    # quota or a feature flag that is a silent behaviour change, not an outage,
-    # so nothing would catch it.
-    - name: Which keys does the credentials file provide?
-      ansible.builtin.shell:
-        cmd: "grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' {{ secrets_file }} | tr -d '=' | sort -u"
-      register: secrets_keys
-      changed_when: false
-      check_mode: false
-
-    - name: Which keys does the node have today?
-      ansible.builtin.shell:
-        cmd: >-
-          cat {{ env_file }} {{ secrets_file }}
-          | grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' | tr -d '=' | sort -u
-      register: keys_before
-      changed_when: false
-      check_mode: false
-
     - name: Nothing the node has may be dropped
       ansible.builtin.assert:
-        that: keys_before.stdout_lines | reject('in', rendered_keys) | list | length == 0
+        that: node_preflight.keys_before | reject('in', rendered_keys) | list | length == 0
         fail_msg: >-
           these keys exist on the node but nothing would render them —
-          {{ keys_before.stdout_lines | reject('in', rendered_keys) | list }}.
+          {{ node_preflight.keys_before | reject('in', rendered_keys) | list }}.
           Add them to host_vars (config) or {{ secrets_file }} (credentials).
           Deploying now would delete them and let compose silently substitute
           its own defaults.
       vars:
         rendered_keys: >-
           {{ (mica_env.keys() | list) + ['MICA_VERSION']
-             + (secrets_keys.stdout_lines | default([])) }}
+             + (node_preflight.secrets_keys | default([])) }}
 
-    # ── What is live right now ───────────────────────────────────────────────
-    # Remember what it was FIRST. A deploy that fails half way leaves .env naming
-    # a version whose containers never came up, and the next restart — a reboot,
-    # an OOM kill — brings the node back on that. The node script this replaces
-    # restored it on ANY non-zero exit, and that is worth keeping.
-    #
-    # Read here, ahead of the first write, for two reasons. The header of this
-    # file promises every assertion runs before the compose or .env is touched,
-    # and for "there must be a version to fall back to" that was not true: it sat
-    # after the compose copy, so it could refuse a deploy having already replaced
-    # the node's compose. And the restore point below needs to know which version
-    # is live in order to ask whether this release adds migrations.
-    # A node with NO .env at all is a different thing from a node whose .env
-    # lost its MICA_VERSION line, and only the second one is a problem. The
-    # first is a machine that has never been deployed to — the case the whole
-    # DR plan turns on, and the case this playbook refused outright until
-    # 2026-08-29, when the drill actually pointed it at a fresh machine and it
-    # died on `slurp` before any assertion could explain why.
-    - name: Is there anything deployed here yet?
-      ansible.builtin.stat:
-        path: "{{ env_file }}"
-      register: env_stat
-      check_mode: false
-
-    - name: Name that case
+    - name: Derive live version state
       ansible.builtin.set_fact:
-        fresh_node: "{{ not env_stat.stat.exists }}"
+        fresh_node: "{{ not (node_preflight.env_exists | bool) }}"
+        previous_version: "{{ node_preflight.previous_version | default('') | trim }}"
 
     - name: Say so
       ansible.builtin.debug:
@@ -298,28 +306,6 @@
           no version to fall back to and no restore point to take, because
           there is nothing here yet to lose.
       when: fresh_node | bool
-
-    - name: Read the version currently deployed
-      ansible.builtin.slurp:
-        src: "{{ env_file }}"
-      register: env_before
-      no_log: true
-      check_mode: false
-      when: not fresh_node | bool
-
-    - name: Remember it
-      ansible.builtin.set_fact:
-        # splitlines(), not split('\n'): the escape has to survive a YAML folded
-        # scalar before Jinja ever sees it, and it did not — the first rehearsal
-        # of the rescue path announced `.env restored to ''`, which would have
-        # been a rollback that wrote an EMPTY MICA_VERSION and left compose
-        # unable to resolve any image tag at all. A rollback that cannot be
-        # rehearsed is a rollback nobody knows the state of.
-        previous_version: >-
-          {{ '' if fresh_node | bool else
-             ((env_before.content | b64decode).splitlines()
-              | select('match', '^MICA_VERSION=') | first | default('')
-              | regex_replace('^MICA_VERSION=', '') | trim) }}
 
     # Still refused on an EXISTING node — that is the case the rule was written
     # for. Relaxing it for a fresh one does not weaken it: there is no rollback

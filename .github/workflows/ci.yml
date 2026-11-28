@@ -100,6 +100,8 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
+      - name: Validate GitHub workflow YAMLs
+        run: bash scripts/test-release-workflow.sh
       - name: Check ignored source files
         run: bash scripts/check-ignored-sources.sh
       - name: Check SQL migrations
@@ -108,12 +110,15 @@ jobs:
           bash scripts/test-migration-tracking.sh
       - name: Check Rust file-size gate
         run: bash scripts/check-file-size.sh
+      - uses: ./.github/actions/setup-rust
+      - name: rustfmt (deny drift)
+        run: cargo fmt --all --check
 
   rust:
     name: Rust Workspace (build + clippy + Postgres tests + SQLite store)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.rust == 'true'
-    needs: paths
+    needs: [paths, structure]
     services:
       postgres:
         image: postgres:18.6-alpine
@@ -134,8 +139,6 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
-      - name: rustfmt (deny drift)
-        run: cargo fmt --all --check
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Apply migrations
@@ -160,7 +163,7 @@ jobs:
     name: Pure-Rust Client (clients/mica_rust desktop + Web WASM + E2E)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.client == 'true'
-    needs: paths
+    needs: [paths, structure]
     outputs:
       web_bundle_artifact: ${{ steps.web-artifact.outputs.name }}
     steps:
@@ -207,7 +210,7 @@ jobs:
     name: MCP (official inspector against mica-cli mcp)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.mcp == 'true'
-    needs: paths
+    needs: [paths, structure]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -244,7 +247,7 @@ jobs:
     name: Server Binaries (glibc-2.36 mica-api-server + mica-cli)
     runs-on: ubuntu-latest
     if: needs.paths.outputs.container == 'true'
-    needs: paths
+    needs: [paths, structure]
     outputs:
       server_bins_artifact: ${{ steps.bins-artifact.outputs.name }}
     steps:

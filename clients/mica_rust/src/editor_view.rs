@@ -63,6 +63,11 @@ pub(crate) const SLASH_MENU_MAX_H: f32 = 288.0;
 pub(crate) const SINK_LIMIT: usize = 64;
 const TRANSPARENT_RGBA: Rgba = Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
 
+/// Ambient trigger incremented whenever a brand-new blank page is created so
+/// `editor_view` immediately focuses the page title input (`page-title-input`).
+#[derive(Clone, Copy)]
+pub struct FocusTitleSignal(pub Signal<u64>);
+
 /// Hidden native IME sink buffer tracker (mirrors NSH's battle-tested sink state).
 #[derive(Default)]
 pub(crate) struct ImeSinkState {
@@ -541,6 +546,34 @@ pub fn editor_view(
         focused_table_cell.set(None);
         empty_ime_sink(&st_focus, sink_value);
         sref.focus();
+      }
+    });
+  }
+
+  // Focus the page title input directly when creating a brand-new blank page.
+  if let Some(FocusTitleSignal(title_focus_rev)) = use_context::<FocusTitleSignal>() {
+    let tref = title_ref;
+    let sref = sink_ref;
+    let st_blur = sink_state.clone();
+    let show_title = header.show_page_title;
+    let br_fallback = bridge.clone();
+    effect(move || {
+      let rev = title_focus_rev.get();
+      if rev > 0 {
+        focused_code_block.set(None);
+        focused_table_cell.set(None);
+        empty_ime_sink(&st_blur, sink_value);
+        sref.blur();
+        editor_focused.set(false);
+        if show_title.get_untracked() {
+          tref.focus();
+          spawn(async move {
+            timer(Duration::from_millis(0)).await;
+            tref.focus();
+          });
+        } else {
+          br_fallback.request_focus();
+        }
       }
     });
   }
@@ -1872,6 +1905,7 @@ pub fn editor_view(
       let img_ctx_cm = h_bub.image_ctx.clone();
 
       // Hidden native IME proxy sink closures
+      let br_sink_focus = b_body.clone();
       let br_chg = b_body.clone();
       let st_chg = sink_state.clone();
       let br_comp = b_body.clone();
@@ -2181,6 +2215,9 @@ pub fn editor_view(
             .value(move || sink_value.get())
             .on_focus(move || {
               editor_focused.set(true);
+              if br_sink_focus.selection().is_none() && br_sink_focus.block_len() > 0 {
+                crate::editor_keys::ensure_active_caret(&br_sink_focus);
+              }
             })
             .on_blur(move || {
               editor_focused.set(false);

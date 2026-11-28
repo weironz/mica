@@ -238,8 +238,14 @@ struct TreeRowContext {
   emoji_modal_open: Signal<bool>,
   emoji_modal_view: Signal<Option<Uuid>>,
   emoji_modal_current: Signal<Option<String>>,
+  inline_rename_view: Signal<Option<Uuid>>,
   cb: Rc<SidebarCallbacks>,
 }
+
+/// Ambient signal identifying a sidebar tree row currently in inline rename
+/// mode (e.g., immediately after creating a new folder).
+#[derive(Clone, Copy)]
+pub struct SidebarInlineRenameSignal(pub Signal<Option<Uuid>>);
 
 // ── Main Sidebar View ─────────────────────────────────────────────────────────
 
@@ -275,6 +281,27 @@ pub fn sidebar_view(
     (signal(false), signal(None::<Uuid>), signal(String::new()));
   let (emoji_modal_open, emoji_modal_view, emoji_modal_current) =
     (signal(false), signal(None::<Uuid>), signal(None::<String>));
+  let inline_rename_view = use_context::<SidebarInlineRenameSignal>()
+    .map(|s| s.0)
+    .unwrap_or_else(|| signal(None));
+
+  {
+    let tree_scroll = tree.clone();
+    let list_ref_scroll = tree_list_ref;
+    effect(move || {
+      let Some(vid) = inline_rename_view.get() else {
+        return;
+      };
+      if let Some(idx) = tree_scroll
+        .borrow()
+        .visible_rows()
+        .iter()
+        .position(|r| r.view_id == vid)
+      {
+        list_ref_scroll.scroll_to_index(idx as u32, Percentage(0.5), px(0.0), false);
+      }
+    });
+  }
 
   // Esc closes context menu, cancels active drag, or clears multi-selection.
   effect(move || {
@@ -320,7 +347,7 @@ pub fn sidebar_view(
     context_menu, page_to_local, drag_state, drag_pointer, drag_page_pointer,
     drag_autoscroll_speed, tree_list_ref, tree_scroll_y, tree_content_h, tree_viewport_h,
     tree_page_origin, just_dragged, rename_modal_open, rename_modal_view, rename_modal_initial,
-    emoji_modal_open, emoji_modal_view, emoji_modal_current, cb: cb.clone(),
+    emoji_modal_open, emoji_modal_view, emoji_modal_current, inline_rename_view, cb: cb.clone(),
   });
 
   // Smooth 60fps edge auto-scroll while dragging tree rows near/past top or bottom edge.
@@ -896,6 +923,10 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
       }
     })
   });
+  let inline_rename_view = ctx.inline_rename_view;
+  let is_inline_renaming = computed(move || {
+    row_view_id.get().is_some() && row_view_id.get() == inline_rename_view.get()
+  });
   let is_multi_selected = computed(move || row_view_id.get().is_some_and(|vid| selection.get().contains(vid)));
   let is_menu_open = computed(move || {
     row_view_id.get().is_some_and(|vid| {
@@ -938,6 +969,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
   let ctx_more = ctx.clone();
   let ctx_add_page = ctx.clone();
   let ctx_add_folder = ctx.clone();
+  let ctx_inline_title = ctx.clone();
 
   view()
     .test_id(&row_test_id)
@@ -947,6 +979,9 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     .on_mouse_leave(move |_: &MouseEvent| row_hovered.set(false))
     .on_press_down(move |e: &PressEvent| {
       ctx_down.just_dragged.set(false);
+      if is_inline_renaming.get_untracked() {
+        return;
+      }
       if let Some(row) = row_info.get_untracked() {
         ctx_down.drag_state.set(DragState {
           pending: Some(PendingDrag {
@@ -1063,6 +1098,9 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
             // `cancel_press` -> `on_press_up` as soon as pointer movement exceeds `PRESS_SLOP`.
             .on_press_down(move |e: &PressEvent| {
               ctx_row_down.just_dragged.set(false);
+              if is_inline_renaming.get_untracked() {
+                return;
+              }
               if let Some(row) = row_info.get_untracked() {
                 ctx_row_down.drag_state.set(DragState {
                   pending: Some(PendingDrag {
@@ -1077,6 +1115,9 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
             .on_press(move |e: &PressEvent| {
               if ctx_press.just_dragged.get_untracked() {
                 ctx_press.just_dragged.set(false);
+                return;
+              }
+              if is_inline_renaming.get_untracked() {
                 return;
               }
               ctx_press.context_menu.set(None);
@@ -1135,16 +1176,98 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   }
                 })),
             )
-            // 6px gap + 14px title
+            // 6px gap + 14px title (or inline rename input immediately after folder creation)
             .child(
               view().flex_1().min_w(px(0.0)).pl(px(6.0)).child(dynamic(move || {
                 let p = palette(dark_mode.get());
                 let active = is_active.get();
+                if is_inline_renaming.get()
+                  && let Some(row) = row_info.get_untracked()
+                {
+                  let vid = row.view_id;
+                  let initial_name = if row.name.trim().is_empty() {
+                    "新文件夹".to_string()
+                  } else {
+                    row.name
+                  };
+                  let is_default = initial_name == "新文件夹";
+                  let draft = signal(if is_default { String::new() } else { initial_name.clone() });
+                  let committed = signal(false);
+                  let inline_sig = ctx_inline_title.inline_rename_view;
+                  let inline_esc = inline_sig;
+                  on_key_with(
+                    "escape",
+                    KeyOptions {
+                      when: When::Always,
+                      repeat: false,
+                      pass_through: true,
+                      ..KeyOptions::default()
+                    },
+                    move |_| {
+                      committed.set(true);
+                      inline_esc.set(None);
+                    },
+                  );
+                  let cb_submit = ctx_inline_title.cb.clone();
+                  let cb_blur = ctx_inline_title.cb.clone();
+                  let init_submit = initial_name.clone();
+                  let init_blur = initial_name.clone();
+                  return input()
+                    .test_id("sidebar-inline-rename-input")
+                    .auto_focus(true)
+                    .submit_behavior(SubmitBehavior::Submit)
+                    .placeholder(initial_name)
+                    .w_full()
+                    .h(px(24.0))
+                    .px(px(6.0))
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(p.accent)
+                    .bg(p.surface_base)
+                    .text_size(px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
+                    .text_color(p.text_primary)
+                    .value(move || draft.get())
+                    .on_change(move |v: &str| draft.set(v.to_owned()))
+                    .on_submit(move |submitted: &str| {
+                      if committed.get_untracked() {
+                        return;
+                      }
+                      committed.set(true);
+                      if let Some(next) = renamed_to(submitted, &init_submit) {
+                        (cb_submit.on_rename_view)(vid, next);
+                      }
+                      if inline_sig.get_untracked() == Some(vid) {
+                        inline_sig.set(None);
+                      }
+                    })
+                    .on_blur(move || {
+                      if committed.get_untracked() {
+                        return;
+                      }
+                      committed.set(true);
+                      if let Some(next) = renamed_to(&draft.get_untracked(), &init_blur) {
+                        (cb_blur.on_rename_view)(vid, next);
+                      }
+                      if inline_sig.get_untracked() == Some(vid) {
+                        inline_sig.set(None);
+                      }
+                    })
+                    .on_key_press(move |k: &str| {
+                      if k == "Escape" {
+                        committed.set(true);
+                        if inline_sig.get_untracked() == Some(vid) {
+                          inline_sig.set(None);
+                        }
+                      }
+                    })
+                    .into_element();
+                }
                 text(row_label.get())
                   .text_size(px((14.0 * crate::mica_theme::ui_scale_factor()).round()))
                   .font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
                   .text_color(if active { p.text_primary } else { p.text_muted })
                   .truncate()
+                  .into_element()
               })),
             ),
         )

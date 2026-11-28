@@ -215,14 +215,18 @@ pub fn share_dialog_modal(state: ShareDialogState, dark_mode: Signal<bool>) -> i
                           .items_center()
                           .gap_2()
                           .child(
-                            text(url)
-                              .test_id("share-url-text")
+                            scroll()
+                              .horizontal()
+                              .scrollbar(false)
                               .flex_1()
                               .min_w(px(0.0))
-                              .selectable(true)
-                              .text_size(px(12.5))
-                              .text_color(p.text_primary)
-                              .truncate(),
+                              .child(
+                                text(url)
+                                  .test_id("share-url-text")
+                                  .selectable(true)
+                                  .text_size(px(12.5))
+                                  .text_color(p.text_primary),
+                              ),
                           )
                           .child(
                             button()

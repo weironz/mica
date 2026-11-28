@@ -116,7 +116,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/mica_rust
-          key: mica-rust-win-release
+          shared-key: mica-rust-win-release
+          cache-on-failure: true
       - name: Build pure-Rust Windows desktop binary
         run: cargo build --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust --release --locked
       - name: Install Inno Setup (skip if preinstalled)
@@ -397,6 +398,17 @@ jobs:
             if [ -n "$PREVIOUS_TAG" ]; then
               gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
                 -f "tag_name=$RELEASE_TAG" -f "previous_tag_name=$PREVIOUS_TAG" --jq .body > "$notes_file"
+              if ! grep -q '^## ' "$notes_file"; then
+                commits_md=$(gh api "repos/$GITHUB_REPOSITORY/compare/${PREVIOUS_TAG}...${RELEASE_TAG}" \
+                  --jq '.commits[] | select((.commit.message | startswith("chore(release):")) | not) | "- " + (.commit.message | split("\n")[0]) + " (`" + (.sha[0:7]) + "`)"' \
+                  2>/dev/null || true)
+                if [ -n "$commits_md" ]; then
+                  prev_notes=$(cat "$notes_file")
+                  {
+                    printf '## Changes\n\n%s\n\n%s\n' "$commits_md" "$prev_notes"
+                  } > "$notes_file"
+                fi
+              fi
             else
               gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
                 -f "tag_name=$RELEASE_TAG" --jq .body > "$notes_file"

@@ -3274,6 +3274,26 @@ fn regression_editor_body_context_menu_opens_and_selects_all() {
   app.wait_for("id:ed-ctx-paste").unwrap();
   app.wait_for("id:ed-ctx-select-all").unwrap();
 
+  // Clicking outside the body context menu must dismiss it automatically.
+  app.press("id:editor-bottom-append-zone").unwrap();
+  app
+    .wait_for_gone("id:editor-context-menu", std::time::Duration::from_millis(600))
+    .unwrap();
+
+  // Re-open the context menu and invoke `全选`.
+  app.engine().control().dispatch_event(
+    editor_node.id,
+    EventKind::ContextMenu,
+    EventPayload::ContextMenu(nsh_core::ContextMenuEvent::new(
+      pos,
+      page,
+      Modifiers::default(),
+      Some(PointerType::Mouse),
+    )),
+  );
+  app.settle();
+  app.wait_for("id:editor-context-menu").unwrap();
+
   app.press("id:ed-ctx-select-all").unwrap();
   app
     .wait_for_gone("id:editor-context-menu", std::time::Duration::from_millis(600))
@@ -3617,4 +3637,55 @@ fn regression_sidebar_update_button_shows_when_update_available_and_triggers_act
   app
     .wait_for_gone("id:sidebar-update-btn", std::time::Duration::from_millis(800))
     .unwrap();
+}
+
+#[test]
+fn regression_new_page_focuses_title_and_new_folder_starts_inline_rename() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Creating a new page focuses `page-title-input` directly so typing immediately sets the title.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("id:page-title-input").unwrap();
+  app.press_keys(&["n", "e", "w"]).unwrap();
+  app.wait_for("new").unwrap();
+  assert!(
+    app
+      .screen()
+      .layout_nodes()
+      .iter()
+      .any(|n| {
+        n.text.as_ref().is_some_and(|t| t.text.text == "new")
+          && n.bounds.origin.x < px(280.0)
+      }),
+    "typing after creating a new page must update the page title (reflected in sidebar), not body"
+  );
+
+  // 2. Creating a new folder enters inline rename state with `sidebar-inline-rename-input` focused.
+  app.press("id:new-folder-btn").unwrap();
+  app.wait_for("id:sidebar-inline-rename-input").unwrap();
+  app.press_keys(&["d", "o", "c", "s", "enter"]).unwrap();
+  app
+    .wait_for_gone(
+      "id:sidebar-inline-rename-input",
+      std::time::Duration::from_millis(800),
+    )
+    .unwrap();
+  app.wait_for("docs").unwrap();
+
+  // 3. Creating another new folder and pressing Escape cancels inline rename without losing the folder.
+  app.press("id:new-folder-btn").unwrap();
+  app.wait_for("id:sidebar-inline-rename-input").unwrap();
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone(
+      "id:sidebar-inline-rename-input",
+      std::time::Duration::from_millis(800),
+    )
+    .unwrap();
+  app.wait_for("新文件夹").unwrap();
 }

@@ -714,6 +714,8 @@ pub(crate) struct CloudSessionHandles {
   pub active_doc: Signal<Option<Uuid>>,
   pub focused_nav_id: Signal<Option<Uuid>>,
   pub root_focused: Signal<bool>,
+  pub focus_title_rev: Signal<u64>,
+  pub sidebar_inline_rename: Signal<Option<Uuid>>,
   pub active_doc_id_str: Signal<String>,
   pub active_title: Signal<String>,
   pub title_input_focused: Signal<bool>,
@@ -1820,6 +1822,7 @@ impl CloudSessionHandles {
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
+    let is_blank = markdown.is_empty();
     let name_req = name.clone();
     let md_req = markdown.clone();
     let guard = ViewOpGuard::enter(self.clone());
@@ -1884,6 +1887,9 @@ impl CloudSessionHandles {
           h.docs_store.borrow_mut().insert(doc_id, markdown);
           (h.sync_tree_snapshots)();
           (h.open_doc_internal)(doc_id, title, true, in_new_tab);
+          if is_blank {
+            h.focus_title_rev.set(h.focus_title_rev.get_untracked().wrapping_add(1));
+          }
 
           if let Some(ordered) = reorder_ids {
             let ord_req = ordered.clone();
@@ -1989,6 +1995,7 @@ impl CloudSessionHandles {
           }
           h.root_focused.set(false);
           h.focused_nav_id.set(Some(fid));
+          h.sidebar_inline_rename.set(Some(fid));
           (h.sync_tree_snapshots)();
 
           if let Some(ordered) = reorder_ids {

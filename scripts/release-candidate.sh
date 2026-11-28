@@ -10,8 +10,28 @@ remote_sha() {
   printf '%s' "${result%%$'\t'*}"
 }
 
+prune_stale_candidates() {
+  [ -n "${GITHUB_REPOSITORY:-}" ] || return 0
+  local current_prefix="refs/heads/ship-candidates/${GITHUB_RUN_ID:-none}-"
+  local sha ref run_part cand_run_id status
+  while read -r sha ref; do
+    [ -n "$ref" ] || continue
+    case "$ref" in
+      "${current_prefix}"*) continue ;;
+    esac
+    run_part=${ref#refs/heads/ship-candidates/}
+    cand_run_id=${run_part%%-*}
+    [[ "$cand_run_id" =~ ^[0-9]+$ ]] || continue
+    status=$(gh run view "$cand_run_id" --repo "$GITHUB_REPOSITORY" --json status --jq .status 2>/dev/null || true)
+    if [ -z "$status" ] || [ "$status" = "completed" ]; then
+      git push --force-with-lease="$ref:$sha" origin ":$ref" >/dev/null 2>&1 || true
+    fi
+  done < <(git ls-remote --heads origin 'refs/heads/ship-candidates/*')
+}
+
 prepare() {
   local current version base candidate latest
+  prune_stale_candidates
   [[ "$GITHUB_REF" == refs/heads/* ]] || fail "Ship must be dispatched on a branch"
   base=$(git rev-parse HEAD)
   current=$(bash scripts/manifest-version.sh)

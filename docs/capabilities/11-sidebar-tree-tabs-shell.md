@@ -17,7 +17,7 @@
 - **`CAP-11-02` 浏览器式多标签页**：支持单标签上限 50 步前进/后退历史、标签最大宽 `200px` 横向滚动、关闭 `×` 仅悬停或激活显示且单标签时隐藏、关闭后聚焦右邻、`+` 弹出「新建页面 / 打开已有页面…」、重启持久恢复 `openTabs`、快捷键 `Mod+N`/`Mod+T`/`Mod+W`/`Mod+Tab`/`Mod+Shift+Tab`。
 
 ### 侧边栏目录树与多选
-- **`CAP-11-03` 可调宽侧边栏与定位创建**：默认宽 `280px`、支持 `220..480px` 拖拽并持久化；行高 `30px`、层级缩进 `depth * 16px`、固定展开箭头列、Emoji/类型图标、悬停操作条；支持定位创建（选中文件夹时创建在其内部末尾并自动展开、选中/激活页面时作为同级直接插入该页面下一行、点击树下方空白区进入根目录定位后在工作区根目录末尾创建，新建页与新建文件夹统一遵循此规则；点击具体文件夹行内 `+`/`folder+` 或右键「新建子页/子文件夹」时创建在该文件夹内，若当前定位页直属于该文件夹则直接插在该页下一行，否则追加到该文件夹末尾）与重命名（含 `F2`）。
+- **`CAP-11-03` 可调宽侧边栏与定位创建**：默认宽 `280px`、支持 `220..480px` 拖拽并持久化；行高 `30px`、层级缩进 `depth * 16px`、固定展开箭头列、Emoji/类型图标、悬停操作条；支持定位创建（选中文件夹时创建在其内部末尾并自动展开、选中/激活页面时作为同级直接插入该页面下一行、点击树下方空白区进入根目录定位后在工作区根目录末尾创建，新建页与新建文件夹统一遵循此规则；点击具体文件夹行内 `+`/`folder+` 或右键「新建子页/子文件夹」时创建在该文件夹内，若当前定位页直属于该文件夹则直接插在该页下一行，否则追加到该文件夹末尾）与重命名（含 `F2`）；**新建空白页面后光标直接聚焦至新页面标题输入框（`page-title-input`）以便直接键入标题，新建文件夹后侧栏目录行立即进入内联重命名编辑态并自动滚动到可视区（Enter/失焦提交、Esc 取消）**。
 - **`CAP-11-04` 完整上下文右键菜单**：
   - 单页：新标签打开、重命名、设置图标、创建副本、移动/复制到工作区、删除。
   - 文件夹：新建子页/子文件夹、重命名、设置图标、创建副本、展开/收起子项、Mica 备份、导出 Markdown、导入文件/文件夹、移动/复制到工作区、删除。
@@ -47,7 +47,7 @@
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
 | `CAP-11-01` / `02` 无边框顶栏、桌面图标、应用菜单与多标签 | P0 | 桌面/Web | ✅ | `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips` + `windows_app_icon` |
-| `CAP-11-03` / `04` 侧边栏几何、右键菜单与定位创建 | P0 | 全端 | ✅ | `tree_dnd::tests::placement_*` / `ordered_siblings_placing_after_*` + `storage::tests::views_enforce_folder_parent_and_purge` + `app_flows::regression_sidebar_located_creation_placement` |
+| `CAP-11-03` / `04` 侧边栏几何、右键菜单与定位创建 | P0 | 全端 | ✅ | `tree_dnd::tests::placement_*` / `ordered_siblings_placing_after_*` + `storage::tests::views_enforce_folder_parent_and_purge` + `app_flows::regression_sidebar_located_creation_placement` + `app_flows::regression_new_page_focuses_title_and_new_folder_starts_inline_rename` |
 | `CAP-11-05` / `06` 30/40/30 拖拽排序与树多选 | P0 | 桌面/Web | ✅ | `tree_dnd::tests`（8 项全绿） + `sidebar::tests::tree_row_bg_preserves_blue_selection_tint_on_hover` + `cloud_sync::tests` + `app_flows::regression_sidebar_multi_select_preserves_blue_bg_on_hover` + `app_flows::regression_untitled_placeholder_folder_rename_and_batch_delete` + `storage::tests::reorder_views_renumbers_reparents_and_enforces_tree_rules` |
 | `CAP-11-07` / `08` 收藏区与 Emoji 选择器 | P1 | 全端 | ✅ | `emoji_picker::tests` |
 | `CAP-11-09` 子树聚合回收站 | P1 | 全端 | ✅ | `settings_view::tests::trash_root_entries_collapse_subtrees_and_resolve_live_path` + `storage::tests::trash_restore_promote_purge_and_build_trash_entries` |
@@ -66,3 +66,4 @@
 - **2026-11-28**：彻底修复瞬间作用域（`when(...)` 弹窗/右键菜单/浮层）关闭取消云端视图变更任务的根因——`CloudSessionHandles` 持有长生命周期 `app_owner` 并新增 `spawn_on_app`，使文件夹重命名 `PATCH /views/{id}`、单个删除 `DELETE /views/{id}` 与 Shift 多选批量删除 `POST /views/batch-trash` 在弹窗或右键菜单关闭后不再被取消，杜绝后续新建文件夹/页面触发 `views_changed` 时还原文件夹名称或复活已删除页面/文件夹；`on_rename_view` 同步接入 `pending_title_renames` 防并发回声覆盖，`on_batch_trash` 对所选 `view_ids` 幂等去重并清理失效的 `focused_nav_id`。
 - **2026-11-28（拖拽定位线弯钩修复 `c98b3449`）**：移除 `drop_indicator` 左端跨界 `8×8` 空心圆环并将 `DropMode::Before`/`After` 对齐至 `0px` 行边界内，消除 `virtual_list` 单元格裁剪造成的“线条开头弯钩”视觉缺陷（`CAP-11-05`）。
 - **2026-11-28（左下角可用更新按钮 #193）**：在桌面端（`allow_local`）左下角侧栏页脚增加条件式圆形上箭头更新按钮 `sidebar-update-btn`（`SidebarUpdateState`），仅在发现可用更新或更新任务进行中显示，悬浮显示目标版本号，无更新及 Web 端保持隐藏（`CAP-11-10`）。
+- **2026-11-28（新建页面聚焦标题 / 新建文件夹内联改名 #194）**：新建空白页面后通过 `FocusTitleSignal` 直接聚焦 `page-title-input`（同时覆盖桌面/Web 与云端/本地路径，切页面后直接键入标题即可）；新建文件夹后通过 `SidebarInlineRenameSignal` 将目录树该行直接切入内联编辑框 `sidebar-inline-rename-input` 并滚动定位，支持 Enter/失焦保存与 `Esc` 取消（`CAP-11-03`）；同步修复 `share-url-text` 截断选区问题。

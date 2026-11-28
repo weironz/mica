@@ -1266,6 +1266,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     });
   }
 
+  let focus_title_rev = signal(0u64);
+  provide_context(editor_view::FocusTitleSignal(focus_title_rev));
+  let sidebar_inline_rename: Signal<Option<Uuid>> = signal(None);
+  provide_context(sidebar::SidebarInlineRenameSignal(sidebar_inline_rename));
+
   let cloud_session = cloud_sync::CloudSessionHandles {
     app_owner,
     vault: vault.clone(),
@@ -1283,6 +1288,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     active_doc,
     focused_nav_id,
     root_focused,
+    focus_title_rev,
+    sidebar_inline_rename,
     active_doc_id_str,
     active_title,
     title_input_focused: signal(false),
@@ -1413,11 +1420,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             false,
           );
         }
+        let is_blank = markdown.is_empty();
         root_focused.set(false);
         focused_nav_id.set(Some(new_view_id));
         docs.borrow_mut().insert(new_doc_id, markdown);
         sync_t();
         inner(new_doc_id, name, true, in_new_tab);
+        if is_blank {
+          focus_title_rev.set(focus_title_rev.get_untracked().wrapping_add(1));
+        }
       },
     )
   };
@@ -1453,6 +1464,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       move |placement: tree_dnd::CreatePlacement, custom_name: Option<String>| {
         let orig = active_origin.get_untracked();
         let cur_ws = active_workspace_id.get_untracked();
+        let is_interactive_folder = custom_name.is_none();
         let name = custom_name.unwrap_or_else(|| "新文件夹".to_string());
         let valid_parent = placement.parent_id.filter(|&pid| {
           tree_ref
@@ -1502,6 +1514,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         }
         root_focused.set(false);
         focused_nav_id.set(Some(folder_view_id));
+        if is_interactive_folder {
+          sidebar_inline_rename.set(Some(folder_view_id));
+        }
         sync_t();
         fid
       },

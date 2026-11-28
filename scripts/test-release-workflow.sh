@@ -7,10 +7,26 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 
+ci_text = Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
 release_text = Path('.github/workflows/release.yml').read_text(encoding='utf-8')
 dryrun_text = Path('.github/workflows/release-dryrun.yml').read_text(encoding='utf-8')
 ship_text = Path('.github/workflows/ship.yml').read_text(encoding='utf-8')
 canary_text = Path('.github/workflows/release-canary.yml').read_text(encoding='utf-8')
+
+# 0. Validate every workflow YAML file (forbid column-0 heredoc `---`/`...` markers inside block scalars; full PyYAML parse when installed).
+for wf in sorted(Path('.github/workflows').glob('*.yml')):
+    raw = wf.read_text(encoding='utf-8')
+    for idx, line in enumerate(raw.splitlines(), 1):
+        if idx > 1 and line in ('---', '...'):
+            raise AssertionError(f'{wf}:{idx}: unexpected column-0 YAML document marker `{line}`')
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        yaml = None
+    if yaml is not None:
+        docs = list(yaml.safe_load_all(raw))
+        assert len(docs) == 1 and isinstance(docs[0], dict), f'{wf}: expected exactly 1 YAML mapping document, got {len(docs)}'
+print('PASS: all workflow YAMLs pass structural and multi-doc validation')
 
 def job(name: str, workflow: str) -> str:
     match = re.search(
@@ -18,6 +34,15 @@ def job(name: str, workflow: str) -> str:
     )
     assert match, f'missing {name} job'
     return match.group(0)
+
+# 0b. CI gates heavy jobs behind `structure` (which runs workflow YAML lint + rustfmt fail-fast).
+ci_structure = job('structure', ci_text)
+assert 'cargo fmt --all --check' in ci_structure
+assert 'test-release-workflow.sh' in ci_structure
+for gated_job in ('rust', 'client', 'mcp', 'server-bins'):
+    jtxt = job(gated_job, ci_text)
+    assert re.search(r'^    needs: \[paths, structure\]$', jtxt, re.M), f'ci::{gated_job} must depend on [paths, structure]'
+print('PASS: ci gates heavy jobs behind structure preflight (YAML lint + rustfmt)')
 
 # 1. Release dry-run calls release.yml with publish=false.
 dry_build = job('build', dryrun_text)

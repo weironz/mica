@@ -63,6 +63,17 @@ pub(crate) fn empty_ime_sink(sink_state: &Rc<RefCell<ImeSinkState>>, sink_value:
   sink_value.set(String::new());
 }
 
+pub(crate) fn ensure_active_caret(bridge: &MicaDocumentBridge) {
+  if bridge.selection().is_none() {
+    let last = bridge.block_len().saturating_sub(1);
+    let end_off = bridge
+      .block_at(last)
+      .map(|b| utf16_len(&b.text))
+      .unwrap_or(0);
+    bridge.set_selection(DocSelection::caret(last, end_off));
+  }
+}
+
 pub(crate) fn apply_sink_text_diff(
   text: &str,
   sink_state: &Rc<RefCell<ImeSinkState>>,
@@ -87,13 +98,8 @@ pub(crate) fn apply_sink_text_diff(
   sink_value.set(text.to_owned());
 
   // Never drop keystrokes if the bridge somehow had no active selection yet.
-  if (deleted > 0 || !inserted.is_empty()) && bridge.selection().is_none() {
-    let last = bridge.block_len().saturating_sub(1);
-    let end_off = bridge
-      .block_at(last)
-      .map(|b| utf16_len(&b.text))
-      .unwrap_or(0);
-    bridge.set_selection(DocSelection::caret(last, end_off));
+  if deleted > 0 || !inserted.is_empty() {
+    ensure_active_caret(bridge);
   }
 
   for _ in 0..deleted {
@@ -201,6 +207,7 @@ pub(crate) fn handle_clipboard_paste(
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
 ) {
+  ensure_active_caret(bridge);
   let html = if p.html.is_empty() {
     crate::clipboard_platform::read_windows_cf_html(&p.text).unwrap_or_default()
   } else {
