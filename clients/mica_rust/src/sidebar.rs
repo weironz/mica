@@ -1207,9 +1207,17 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   let committed_sub = committed.clone();
                   let committed_blur = committed.clone();
                   let committed_key = committed;
+                  let input_ref = element_ref();
+                  let did_focus = Rc::new(std::cell::Cell::new(false));
+                  let inline_focus = inline_sig;
                   return input()
+                    .element_ref(&input_ref)
                     .test_id("sidebar-inline-rename-input")
-                    .auto_focus(true)
+                    // Avoid `.auto_focus(true)` inside an already-attached `virtual_list` row:
+                    // on Windows (`nsh-platform-windows 0.6.1`), `text_input::config` invokes
+                    // `RichEdit::set_focus` synchronously before `Frame`/`InputContent`/`place()`
+                    // give the control a non-zero client rect, causing `msftedit.dll` to throw
+                    // `CxxThrowException` across WndProc (`0xc0000409`).
                     .submit_behavior(SubmitBehavior::Submit)
                     .placeholder(initial_name)
                     .w_full()
@@ -1222,6 +1230,18 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                     .text_size(px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
                     .text_color(p.text_primary)
                     .value(move || draft_sig.try_get().unwrap_or_default())
+                    .on_layout(move |b: &Bounds<Points>| {
+                      if !did_focus.get() && b.size.width.0 > 0.0 && b.size.height.0 > 0.0 {
+                        did_focus.set(true);
+                        let iref = input_ref;
+                        spawn(async move {
+                          timer(Duration::from_millis(0)).await;
+                          if inline_focus.try_get() == Some(Some(vid)) {
+                            iref.focus();
+                          }
+                        });
+                      }
+                    })
                     .on_change(move |v: &str| {
                       *draft_chg.borrow_mut() = v.to_owned();
                       let _ = draft_sig.try_set(v.to_owned());
