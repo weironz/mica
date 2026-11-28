@@ -28,12 +28,13 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.wait_for("反向链接").unwrap();
   app.press("id:right-sidebar-close").unwrap();
 
-  // 3. Bottom Account Menu opens stacked-card popover (with Desktop quick-switch + `切换服务器 / 本地库…`) and closes cleanly
+  // 3. Bottom Account Menu opens stacked-card popover (with Desktop bounded quick-switch + `管理服务器…`) and closes cleanly
   app.press("id:account-menu-btn").unwrap();
   app.wait_for("这台设备").unwrap();
   app.wait_for("id:account-quick-switch-card").unwrap();
+  app.wait_for("id:account-quick-switch-scroll").unwrap();
   app.wait_for("id:account-quick-local-btn").unwrap();
-  app.wait_for("切换服务器 / 本地库…").unwrap();
+  app.wait_for("管理服务器…").unwrap();
   app.press("id:account-menu-btn").unwrap();
 
   // 4. 320px Workspace Switcher popover opens with collapsed import toggle; expanding reveals compact format tags
@@ -225,7 +226,7 @@ fn flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips() {
   app.wait_for("帮助").unwrap();
   app.press_key("escape").unwrap();
 
-  // 2. Bottom Account Menu -> `切换服务器 / 本地库…` -> Centered 440px Environment Switcher Modal
+  // 2. Bottom Account Menu -> `管理服务器…` -> Centered 440px Environment Switcher Modal
   app.press("id:account-menu-btn").unwrap();
   app.wait_for("id:account-switch-world-btn").unwrap();
   app.press("id:account-switch-world-btn").unwrap();
@@ -1095,7 +1096,7 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
   );
   assert!(
     !menu_app.shows("id:account-switch-world-btn"),
-    "Web account menu must hide '切换服务器 / 本地库…'"
+    "Web account menu must hide '管理服务器…'"
   );
   assert!(!menu_app.shows("本地工作区"));
 }

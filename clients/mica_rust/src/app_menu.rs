@@ -24,6 +24,29 @@ const GROUP_FILE: u8 = 0;
 const GROUP_VIEW: u8 = 1;
 const GROUP_HISTORY: u8 = 2;
 const GROUP_HELP: u8 = 3;
+/// Max viewport height of the quick-switch environment list (~4 × 34px rows).
+pub const ACCOUNT_QUICK_SWITCH_MAX_H: f32 = 140.0;
+
+/// Place the currently active cloud origin first while preserving relative
+/// order of the remaining signed-in origins so the checked item stays visible
+/// at the top of the bounded quick-switch list without scrolling.
+pub fn order_quick_switch_origins(
+  creds: &[(String, String)],
+  active_origin: &str,
+) -> Vec<(String, String)> {
+  let mut ordered = Vec::with_capacity(creds.len());
+  for item in creds {
+    if item.0 == active_origin {
+      ordered.push(item.clone());
+    }
+  }
+  for item in creds {
+    if item.0 != active_origin {
+      ordered.push(item.clone());
+    }
+  }
+  ordered
+}
 
 #[cfg(target_os = "macos")]
 const SHORTCUT_NEW_PAGE: &str = "⌘N";
@@ -963,129 +986,151 @@ pub fn account_menu_popover(
                         ),
                     )
                     .child(
-                      button()
-                        .test_id("account-quick-local-btn")
-                        .accessibility_label("切换到本地离线库")
+                      scroll()
+                        .test_id("account-quick-switch-scroll")
                         .w_full()
-                        .h(px(34.0))
-                        .px(px(10.0))
-                        .rounded(px(7.0))
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(8.0))
-                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                        .on_press({
-                          let on_enter_local = on_enter_local.clone();
-                          move || {
-                            open.set(false);
-                            if active_origin.get_untracked() != crate::world_switcher::LOCAL_ORIGIN {
-                              on_enter_local();
-                            }
-                          }
-                        })
+                        .max_h(px(ACCOUNT_QUICK_SWITCH_MAX_H))
                         .child(
                           view()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex_row()
-                            .items_center()
-                            .gap(px(9.0))
-                            .child(dynamic(move || {
-                              let p = palette(dark_mode.get());
-                              let c = if active_origin.get() == crate::world_switcher::LOCAL_ORIGIN {
-                                p.accent_hex
-                              } else {
-                                p.text_muted_hex
-                              };
-                              computer_small_icon(c)
-                            }))
+                            .w_full()
+                            .gap(px(1.0))
                             .child(
-                              text("本地离线库")
-                                .truncate()
-                                .text_size(px(13.0))
-                                .text_color(move || palette(dark_mode.get()).text_primary),
-                            ),
-                        )
-                        .child(when(
-                          move || active_origin.get() == crate::world_switcher::LOCAL_ORIGIN,
-                          move || {
-                            text("✓")
-                              .text_size(px(12.5))
-                              .font_weight(FontWeight::SEMIBOLD)
-                              .text_color(move || palette(dark_mode.get()).accent)
-                          },
-                        )),
-                    )
-                    .child(dynamic({
-                      let on_enter_signed_in = on_enter_signed_in.clone();
-                      move || {
-                        let creds = signed_in_origins.get();
-                        let cur = active_origin.get();
-                        let mut list = view().w_full().gap(px(1.0));
-                        for (idx, (origin, _email)) in creds.into_iter().enumerate() {
-                          let host = crate::world_switcher::server_label(&origin);
-                          let is_cur = cur == origin;
-                          let on_enter = on_enter_signed_in.clone();
-                          let origin_click = origin.clone();
-                          list = list.child(
-                            button()
-                              .test_id(&format!("account-quick-server-{idx}"))
-                              .accessibility_label(format!("切换到服务器 {host}"))
-                              .w_full()
-                              .h(px(34.0))
-                              .px(px(10.0))
-                              .rounded(px(7.0))
-                              .flex_row()
-                              .items_center()
-                              .justify_between()
-                              .gap(px(8.0))
-                              .hover(move |s| {
-                                s.bg(palette(dark_mode.get_untracked()).surface_hover)
-                              })
-                              .on_press(move || {
-                                open.set(false);
-                                if active_origin.get_untracked() != origin_click {
-                                  on_enter(origin_click.clone());
+                              button()
+                                .test_id("account-quick-local-btn")
+                                .accessibility_label("切换到本地离线库")
+                                .w_full()
+                                .h(px(34.0))
+                                .px(px(10.0))
+                                .rounded(px(7.0))
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(8.0))
+                                .hover(move |s| {
+                                  s.bg(palette(dark_mode.get_untracked()).surface_hover)
+                                })
+                                .on_press({
+                                  let on_enter_local = on_enter_local.clone();
+                                  move || {
+                                    open.set(false);
+                                    if active_origin.get_untracked()
+                                      != crate::world_switcher::LOCAL_ORIGIN
+                                    {
+                                      on_enter_local();
+                                    }
+                                  }
+                                })
+                                .child(
+                                  view()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(9.0))
+                                    .child(dynamic(move || {
+                                      let p = palette(dark_mode.get());
+                                      let c = if active_origin.get()
+                                        == crate::world_switcher::LOCAL_ORIGIN
+                                      {
+                                        p.accent_hex
+                                      } else {
+                                        p.text_muted_hex
+                                      };
+                                      computer_small_icon(c)
+                                    }))
+                                    .child(
+                                      text("本地离线库")
+                                        .truncate()
+                                        .text_size(px(13.0))
+                                        .text_color(move || palette(dark_mode.get()).text_primary),
+                                    ),
+                                )
+                                .child(when(
+                                  move || {
+                                    active_origin.get() == crate::world_switcher::LOCAL_ORIGIN
+                                  },
+                                  move || {
+                                    text("✓")
+                                      .text_size(px(12.5))
+                                      .font_weight(FontWeight::SEMIBOLD)
+                                      .text_color(move || palette(dark_mode.get()).accent)
+                                  },
+                                )),
+                            )
+                            .child(dynamic({
+                              let on_enter_signed_in = on_enter_signed_in.clone();
+                              move || {
+                                let creds = signed_in_origins.get();
+                                let cur = active_origin.get();
+                                let ordered = order_quick_switch_origins(&creds, &cur);
+                                let mut list = view().w_full().gap(px(1.0));
+                                for (idx, (origin, _email)) in ordered.into_iter().enumerate() {
+                                  let host = crate::world_switcher::server_label(&origin);
+                                  let is_cur = cur == origin;
+                                  let on_enter = on_enter_signed_in.clone();
+                                  let origin_click = origin.clone();
+                                  list = list.child(
+                                    button()
+                                      .test_id(&format!("account-quick-server-{idx}"))
+                                      .accessibility_label(format!("切换到服务器 {host}"))
+                                      .w_full()
+                                      .h(px(34.0))
+                                      .px(px(10.0))
+                                      .rounded(px(7.0))
+                                      .flex_row()
+                                      .items_center()
+                                      .justify_between()
+                                      .gap(px(8.0))
+                                      .hover(move |s| {
+                                        s.bg(palette(dark_mode.get_untracked()).surface_hover)
+                                      })
+                                      .on_press(move || {
+                                        open.set(false);
+                                        if active_origin.get_untracked() != origin_click {
+                                          on_enter(origin_click.clone());
+                                        }
+                                      })
+                                      .child(
+                                        view()
+                                          .flex_1()
+                                          .min_w(px(0.0))
+                                          .flex_row()
+                                          .items_center()
+                                          .gap(px(9.0))
+                                          .child(dynamic(move || {
+                                            let p = palette(dark_mode.get());
+                                            let c = if is_cur {
+                                              p.accent_hex
+                                            } else {
+                                              p.text_muted_hex
+                                            };
+                                            mica_icons::cloud(c)
+                                          }))
+                                          .child(
+                                            text(host)
+                                              .truncate()
+                                              .text_size(px(13.0))
+                                              .text_color(move || {
+                                                palette(dark_mode.get()).text_primary
+                                              }),
+                                          ),
+                                      )
+                                      .child(when(
+                                        move || is_cur,
+                                        move || {
+                                          text("✓")
+                                            .text_size(px(12.5))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(move || palette(dark_mode.get()).accent)
+                                        },
+                                      )),
+                                  );
                                 }
-                              })
-                              .child(
-                                view()
-                                  .flex_1()
-                                  .min_w(px(0.0))
-                                  .flex_row()
-                                  .items_center()
-                                  .gap(px(9.0))
-                                  .child(dynamic(move || {
-                                    let p = palette(dark_mode.get());
-                                    let c = if is_cur {
-                                      p.accent_hex
-                                    } else {
-                                      p.text_muted_hex
-                                    };
-                                    mica_icons::cloud(c)
-                                  }))
-                                  .child(
-                                    text(host)
-                                      .truncate()
-                                      .text_size(px(13.0))
-                                      .text_color(move || palette(dark_mode.get()).text_primary),
-                                  ),
-                              )
-                              .child(when(
-                                move || is_cur,
-                                move || {
-                                  text("✓")
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(move || palette(dark_mode.get()).accent)
-                                },
-                              )),
-                          );
-                        }
-                        list
-                      }
-                    }))
+                                list
+                              }
+                            })),
+                        ),
+                    )
                 }
               },
             ))
@@ -1132,7 +1177,7 @@ pub fn account_menu_popover(
                     move || {
                       account_action_row(
                         "account-switch-world-btn",
-                        "切换服务器 / 本地库…",
+                        "管理服务器…",
                         String::new,
                         swap_horiz_icon,
                         open,
@@ -1393,5 +1438,27 @@ mod tests {
       account_session_action(true, false, true),
       Some(SessionAction::SignInCloud)
     );
+  }
+
+  #[test]
+  fn quick_switch_origins_prioritize_active_server_and_preserve_relative_order() {
+    let creds = vec![
+      ("https://dev.example".to_string(), "a@x".to_string()),
+      ("https://staging.example".to_string(), "b@x".to_string()),
+      ("https://mica.cloudcele.com".to_string(), "c@x".to_string()),
+      ("https://eu.example".to_string(), "d@x".to_string()),
+    ];
+    let ordered = order_quick_switch_origins(&creds, "https://mica.cloudcele.com");
+    let hosts: Vec<&str> = ordered.iter().map(|(o, _)| o.as_str()).collect();
+    assert_eq!(
+      hosts,
+      vec![
+        "https://mica.cloudcele.com",
+        "https://dev.example",
+        "https://staging.example",
+        "https://eu.example",
+      ]
+    );
+    assert_eq!(order_quick_switch_origins(&creds, "local"), creds);
   }
 }
