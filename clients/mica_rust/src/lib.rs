@@ -3038,6 +3038,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_go_back: on_nav_back.clone(),
     on_go_forward: on_nav_forward.clone(),
     on_open_about: Rc::new(move || about_modal_open.set(true)),
+    show_check_update: allow_local,
     on_check_update: {
       let chk = run_check_update.clone();
       Rc::new(move || chk(true))
@@ -3775,6 +3776,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       open: about_modal_open,
       dark_mode,
       app_version: APP_VERSION,
+      show_check_update: allow_local,
       update_status,
       available_update,
       update_busy,

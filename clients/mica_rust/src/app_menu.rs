@@ -85,6 +85,7 @@ pub struct AppMenuCallbacks {
   pub on_go_back: Rc<dyn Fn()>,
   pub on_go_forward: Rc<dyn Fn()>,
   pub on_open_about: Rc<dyn Fn()>,
+  pub show_check_update: bool,
   pub on_check_update: Rc<dyn Fn()>,
 }
 
@@ -366,6 +367,8 @@ fn help_submenu(
   dark_mode: Signal<bool>,
   cb: AppMenuCallbacks,
 ) -> impl IntoElement {
+  let show_check_update = cb.show_check_update;
+  let on_check_update = cb.on_check_update.clone();
   view()
     .w_full()
     .child(menu_action_row(
@@ -377,15 +380,17 @@ fn help_submenu(
       dark_mode,
       cb.on_open_about,
     ))
-    .child(menu_action_row(
-      "app-menu-check-update",
-      "检查更新",
-      None,
-      None,
-      open,
-      dark_mode,
-      cb.on_check_update,
-    ))
+    .child(when(move || show_check_update, move || {
+      menu_action_row(
+        "app-menu-check-update",
+        "检查更新",
+        None,
+        None,
+        open,
+        dark_mode,
+        on_check_update.clone(),
+      )
+    }))
 }
 
 fn menu_action_row(
@@ -507,6 +512,7 @@ pub struct AboutModalProps {
   pub open: Signal<bool>,
   pub dark_mode: Signal<bool>,
   pub app_version: &'static str,
+  pub show_check_update: bool,
   pub update_status: Signal<String>,
   pub available_update: Signal<Option<crate::updater::UpdateInfo>>,
   pub update_busy: Signal<bool>,
@@ -520,6 +526,7 @@ pub fn about_modal_view(props: AboutModalProps) -> impl IntoElement {
     open,
     dark_mode,
     app_version,
+    show_check_update,
     update_status,
     available_update,
     update_busy,
@@ -645,66 +652,72 @@ pub fn about_modal_view(props: AboutModalProps) -> impl IntoElement {
                       .text_color(move || palette(dark_mode.get()).text_muted),
                     ),
                 )
-                .child(
-                  view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(when(
-                      move || available_update.get().is_some() && crate::updater::update_supported(),
-                      {
-                        let install_cb = install_cb.clone();
-                        move || {
+                .child(when(move || show_check_update, {
+                  let check_cb = check_cb.clone();
+                  let install_cb = install_cb.clone();
+                  move || {
+                    let check_cb = check_cb.clone();
+                    let install_cb = install_cb.clone();
+                    view()
+                      .flex_row()
+                      .items_center()
+                      .gap(px(8.0))
+                      .child(when(
+                        move || available_update.get().is_some() && crate::updater::update_supported(),
+                        {
                           let install_cb = install_cb.clone();
-                          button()
-                            .test_id("about-install-update-btn")
-                            .accessibility_label("下载并安装更新")
-                            .h(px(30.0))
-                            .px(px(12.0))
-                            .rounded(px(6.0))
-                            .bg(move || palette(dark_mode.get()).accent)
-                            .disabled(move || update_busy.get())
-                            .on_press(move || install_cb())
-                            .child(
-                              text(move || {
-                                if update_busy.get() {
-                                  "安装中…".to_string()
-                                } else if let Some(info) = available_update.get() {
-                                  format!("安装 v{}", info.version)
-                                } else {
-                                  "立即安装".to_string()
-                                }
-                              })
-                              .text_size(px(12.5))
-                              .font_weight(FontWeight::MEDIUM)
-                              .text_color(nsh_core::color::white()),
-                            )
-                        }
-                      },
-                    ))
-                    .child(
-                      button()
-                        .test_id("about-check-update-btn")
-                        .accessibility_label("检查更新")
-                        .h(px(30.0))
-                        .px(px(12.0))
-                        .rounded(px(6.0))
-                        .border_1()
-                        .border_color(move || palette(dark_mode.get()).border_normal)
-                        .bg(move || palette(dark_mode.get()).surface_overlay)
-                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                        .disabled(move || update_busy.get())
-                        .on_press(move || check_cb())
-                        .child(
-                          text(move || {
-                            if update_busy.get() { "检查中…" } else { "检查更新" }
-                          })
-                          .text_size(px(12.5))
-                          .font_weight(FontWeight::MEDIUM)
-                          .text_color(move || palette(dark_mode.get()).text_primary),
-                        ),
-                    ),
-                ),
+                          move || {
+                            let install_cb = install_cb.clone();
+                            button()
+                              .test_id("about-install-update-btn")
+                              .accessibility_label("下载并安装更新")
+                              .h(px(30.0))
+                              .px(px(12.0))
+                              .rounded(px(6.0))
+                              .bg(move || palette(dark_mode.get()).accent)
+                              .disabled(move || update_busy.get())
+                              .on_press(move || install_cb())
+                              .child(
+                                text(move || {
+                                  if update_busy.get() {
+                                    "安装中…".to_string()
+                                  } else if let Some(info) = available_update.get() {
+                                    format!("安装 v{}", info.version)
+                                  } else {
+                                    "立即安装".to_string()
+                                  }
+                                })
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(nsh_core::color::white()),
+                              )
+                          }
+                        },
+                      ))
+                      .child(
+                        button()
+                          .test_id("about-check-update-btn")
+                          .accessibility_label("检查更新")
+                          .h(px(30.0))
+                          .px(px(12.0))
+                          .rounded(px(6.0))
+                          .border_1()
+                          .border_color(move || palette(dark_mode.get()).border_normal)
+                          .bg(move || palette(dark_mode.get()).surface_overlay)
+                          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                          .disabled(move || update_busy.get())
+                          .on_press(move || check_cb())
+                          .child(
+                            text(move || {
+                              if update_busy.get() { "检查中…" } else { "检查更新" }
+                            })
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(move || palette(dark_mode.get()).text_primary),
+                          ),
+                      )
+                  }
+                })),
             )
             .child(
               // Footer close button
@@ -1187,21 +1200,32 @@ pub fn account_menu_popover(
                     }
                   },
                 ))
-                .child(account_action_row(
-                  "account-menu-update-btn",
-                  "检查更新",
-                  move || {
-                    let st = update_status.get();
-                    if st.trim().is_empty() {
-                      format!("v{app_version}")
-                    } else {
-                      st
+                .child(when(
+                  {
+                    let allow_local = st.allow_local;
+                    move || allow_local
+                  },
+                  {
+                    let on_check_update = on_check_update.clone();
+                    move || {
+                      account_action_row(
+                        "account-menu-update-btn",
+                        "检查更新",
+                        move || {
+                          let st = update_status.get();
+                          if st.trim().is_empty() {
+                            format!("v{app_version}")
+                          } else {
+                            st
+                          }
+                        },
+                        update_up_icon,
+                        open,
+                        dark_mode,
+                        on_check_update.clone(),
+                      )
                     }
                   },
-                  update_up_icon,
-                  open,
-                  dark_mode,
-                  on_check_update,
                 )),
             )
             .child(when(

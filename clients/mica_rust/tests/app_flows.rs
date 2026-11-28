@@ -1098,7 +1098,88 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
     !menu_app.shows("id:account-switch-world-btn"),
     "Web account menu must hide '管理服务器…'"
   );
+  assert!(
+    !menu_app.shows("id:account-menu-update-btn"),
+    "Web account menu must hide '检查更新'"
+  );
+  assert!(
+    !menu_app.shows("检查更新"),
+    "Web account menu must not show update text"
+  );
   assert!(!menu_app.shows("本地工作区"));
+
+  struct WebOnlyAppMenuAndAboutRoot;
+  impl Component for WebOnlyAppMenuAndAboutRoot {
+    type Props = ();
+    type Event = NoEvent;
+
+    fn view(_props: Self::Props, _scope: Scope<Self::Event>) -> impl IntoElement {
+      let app_cb = mica_rust::app_menu::AppMenuCallbacks {
+        on_new_page: Rc::new(|| {}),
+        on_new_tab: Rc::new(|| {}),
+        on_close_tab: Rc::new(|| {}),
+        can_close_tab: signal(false),
+        on_open_settings: Rc::new(|| {}),
+        sidebar_open: signal(true),
+        on_toggle_sidebar: Rc::new(|| {}),
+        right_panel_open: signal(false),
+        on_toggle_right_panel: Rc::new(|| {}),
+        can_go_back: signal(false),
+        can_go_forward: signal(false),
+        on_go_back: Rc::new(|| {}),
+        on_go_forward: Rc::new(|| {}),
+        on_open_about: Rc::new(|| {}),
+        show_check_update: false,
+        on_check_update: Rc::new(|| {}),
+      };
+      let about_props = mica_rust::app_menu::AboutModalProps {
+        open: signal(true),
+        dark_mode: signal(false),
+        app_version: "0.14.11",
+        show_check_update: false,
+        update_status: signal(String::new()),
+        available_update: signal(None),
+        update_busy: signal(false),
+        on_check_update: Rc::new(|| {}),
+        on_install_update: Rc::new(|| {}),
+      };
+      view()
+        .w_full()
+        .h_full()
+        .relative()
+        .child(mica_rust::app_menu::app_menu_popover(
+          signal(true),
+          signal(false),
+          app_cb,
+        ))
+        .child(mica_rust::app_menu::about_modal_view(about_props))
+    }
+  }
+
+  let mut web_menu_cfg = EngineConfig::new(Root::of::<WebOnlyAppMenuAndAboutRoot>());
+  web_menu_cfg.viewport = size(px(1280.0), px(820.0));
+  let mut web_menu_app = Headless::start(web_menu_cfg).unwrap();
+  web_menu_app.wait_for("id:app-menu-popover").unwrap();
+  web_menu_app.press("id:app-menu-group-help").unwrap();
+  web_menu_app.wait_for("id:app-menu-about").unwrap();
+  assert!(
+    !web_menu_app.shows("id:app-menu-check-update"),
+    "Web help menu must hide '检查更新'"
+  );
+  web_menu_app.wait_for("当前版本 v0.14.11").unwrap();
+  web_menu_app.wait_for("id:about-close-btn").unwrap();
+  assert!(
+    !web_menu_app.shows("id:about-check-update-btn"),
+    "Web About modal must hide '检查更新'"
+  );
+  assert!(
+    !web_menu_app.shows("id:about-install-update-btn"),
+    "Web About modal must hide install-update button"
+  );
+  assert!(
+    !web_menu_app.shows("检查更新"),
+    "Web app menu and About modal must not show '检查更新' anywhere"
+  );
 }
 
 #[test]
