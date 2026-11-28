@@ -11,11 +11,15 @@ use mica_client::PageTreeModel;
 use nsh_core::desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes};
 #[cfg(not(target_arch = "wasm32"))]
 use nsh_core::element::desktop::current_window;
-use nsh_core::{geometry::px, prelude::*};
+#[cfg(not(target_arch = "wasm32"))]
+use nsh_core::geometry::px;
+use nsh_core::prelude::*;
 use uuid::Uuid;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::APP_VERSION;
 use crate::{
-  APP_VERSION, WorkspaceEntry,
+  WorkspaceEntry,
   ai_dialog::{self, AiTarget, GlobalAiState, InlineAiPhase, InlineAiState},
   cloud_sync::{self, CloudSessionHandles},
   editor_bridge::MicaDocumentBridge,

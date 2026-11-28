@@ -3121,7 +3121,6 @@ fn switch_row(
     )
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn radio_row(
   tid: &'static str,
   title: &'static str,
