@@ -67,6 +67,7 @@ pub mod user_avatar;
 pub mod version_history;
 pub mod workspace_views;
 pub mod world_switcher;
+pub mod zoom_controller;
 // Re-export pure L2 client modules (zero `nsh-*` dependencies, owned by `crates/mica-client`).
 pub use mica_client::{net, storage, web_idb, web_runtime, ws_transport};
 #[cfg(target_arch = "wasm32")]
@@ -431,8 +432,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     settings_view::EditorFontFamily::Serif => "Georgia, serif",
     settings_view::EditorFontFamily::Mono => "monospace",
   });
+  let zoom_ctrl = zoom_controller::ZoomController::new(vault.clone());
   provide_context(mica_theme::UiAppearance {
     ui_scale: ui_scale_f32_sig,
+    zoom_factor: zoom_ctrl.factor,
     editor_font_px: editor_font_px_sig,
     editor_font_family: editor_font_css_sig,
     locale_zh,
@@ -2266,6 +2269,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
     });
   }
+  for (stroke, delta) in [("mod+=", 1), ("shift+mod+=", 1), ("mod+-", -1), ("mod+0", 0)] {
+    let zc = zoom_ctrl.clone();
+    on_key_with(stroke, KeyOptions { when: When::Always, ..KeyOptions::default() }, move |_| {
+      if delta == 0 {
+        zc.reset();
+      } else {
+        zc.step_by(delta);
+      }
+    });
+  }
   {
     let close_p = close_all_popovers.clone();
     on_key_with(
@@ -3373,10 +3386,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   cloud_session.restore_startup_session();
 
+  let zoom_wheel = zoom_ctrl.clone();
   view()
     .flex_1()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
+    .on_wheel(move |ev: &nsh_core::WheelEvent| {
+      if active_mode.get_untracked() == MODE_BOARD {
+        return;
+      }
+      zoom_wheel.handle_wheel(ev);
+    })
+    .on_pinch_start(|_: &GestureEvent| {})
     .on_layout(move |b: &Bounds<Points>| {
       let w = b.size.width.0;
       #[cfg(not(target_arch = "wasm32"))]
@@ -3815,4 +3836,5 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     }))
     // 12. Global dark-pill hover tooltip overlay (never clipped by overflow_hidden)
     .child(tooltip::tooltip_overlay(tooltip_host, dark_mode))
+    .child(zoom_controller::zoom_badge_overlay(&zoom_ctrl, dark_mode))
 }

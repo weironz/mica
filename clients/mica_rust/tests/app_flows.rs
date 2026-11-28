@@ -3189,3 +3189,124 @@ fn regression_workspace_row_menu_floats_in_overlay_without_pushing_rows() {
     "ws-row-action-menu shifted sibling workspace row instead of floating: before={y_before}, after={y_after}"
   );
 }
+
+#[test]
+fn regression_ime_sink_single_line_width_and_title_enter_no_extra_blank_line() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // #4: Hidden IME sink uses adequate single-line width (`>= 200px`) instead of `1px` wrapping box.
+  let sink_w = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-editor-ime-sink"))
+    .expect("mica-editor-ime-sink missing")
+    .bounds
+    .size
+    .width
+    .0;
+  assert!(
+    sink_w >= 200.0,
+    "IME sink width too narrow (causes MS Pinyin vertical wrapping): {sink_w}"
+  );
+
+  // #6: Create a fresh blank page, submit title with Enter, and immediately press Enter;
+  // body must remain a single paragraph (`block-row-0`), NEVER gaining a spurious `block-row-1`.
+  app.press("id:sidebar-root-drop-zone").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("id:page-title-input").unwrap();
+  app.type_text("id:page-title-input", "标题回车测试").unwrap();
+  app.press_key("enter").unwrap();
+  app.settle();
+
+  let nodes = app.screen().layout_nodes();
+  assert!(
+    nodes.iter().any(|n| n.test_id.as_deref() == Some("block-row-0")),
+    "expected initial paragraph block-row-0"
+  );
+  assert!(
+    !nodes.iter().any(|n| n.test_id.as_deref() == Some("block-row-1")),
+    "submitting page title must not leave an extra blank line (block-row-1)"
+  );
+}
+
+#[test]
+fn regression_editor_body_context_menu_opens_and_selects_all() {
+  use nsh_core::{
+    EventKind, EventPayload, PointerType, geometry::point, keymap::Modifiers,
+  };
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  let editor_node = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-rich-editor"))
+    .cloned()
+    .expect("mica-rich-editor missing");
+  let pos = point(px(120.0), px(120.0));
+  let page = point(editor_node.bounds.origin.x + pos.x, editor_node.bounds.origin.y + pos.y);
+  app.engine().control().dispatch_event(
+    editor_node.id,
+    EventKind::ContextMenu,
+    EventPayload::ContextMenu(nsh_core::ContextMenuEvent::new(
+      pos,
+      page,
+      Modifiers::default(),
+      Some(PointerType::Mouse),
+    )),
+  );
+  app.settle();
+
+  app.wait_for("id:editor-context-menu").unwrap();
+  app.wait_for("id:ed-ctx-copy").unwrap();
+  app.wait_for("id:ed-ctx-paste").unwrap();
+  app.wait_for("id:ed-ctx-select-all").unwrap();
+
+  app.press("id:ed-ctx-select-all").unwrap();
+  app
+    .wait_for_gone("id:editor-context-menu", std::time::Duration::from_millis(600))
+    .unwrap();
+}
+
+#[test]
+fn regression_ctrl_wheel_and_shortcuts_zoom_within_bounds() {
+  use nsh_core::geometry::point;
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // Ctrl + `=` zooms to 105%
+  app.press_key("mod+=").unwrap();
+  app.wait_for("id:zoom-level-badge").unwrap();
+  app.wait_for("105%").unwrap();
+
+  // Ctrl + Wheel up over editor zooms further to 110%
+  app.hold_keys("ctrl", true).unwrap();
+  app
+    .wheel("id:mica-rich-editor", point(px(0.0), px(-24.0)))
+    .unwrap();
+  app.hold_keys("ctrl", false).unwrap();
+  app.wait_for("110%").unwrap();
+
+  // Ctrl + `-` steps back down to 105%, and Ctrl + `0` resets to 100%
+  app.press_key("mod+-").unwrap();
+  app.wait_for("105%").unwrap();
+  app.press_key("mod+0").unwrap();
+  app.wait_for("100%").unwrap();
+}

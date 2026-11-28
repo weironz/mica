@@ -179,6 +179,8 @@ pub fn editor_view(
   let paper_ref = element_ref();
   let title_ref = element_ref();
   let editor_focused = signal(false);
+  let suppress_next_enter = signal(false);
+  let body_ctx_menu: Signal<Option<(f32, f32)>> = signal(None);
   let caret_blink_on = signal(true);
   let blink_task: Rc<RefCell<Option<Spawned<()>>>> = Rc::new(RefCell::new(None));
   let sink_value = signal(String::new());
@@ -774,6 +776,10 @@ pub fn editor_view(
           },
           move |_| {
             if st.borrow().composing {
+              return;
+            }
+            if matches!(action, EditorKeyAction::Enter) && suppress_next_enter.get_untracked() {
+              suppress_next_enter.set(false);
               return;
             }
             // Empty IME sink before structural/navigation commands so the next
@@ -1863,6 +1869,7 @@ pub fn editor_view(
       let layouts_marquee = layouts.clone();
       let rects_down = marquee_row_rects.clone();
       let rects_move = marquee_row_rects.clone();
+      let img_ctx_cm = h_bub.image_ctx.clone();
 
       // Hidden native IME proxy sink closures
       let br_chg = b_body.clone();
@@ -1943,6 +1950,12 @@ pub fn editor_view(
           if has_text_selection.get_untracked() {
             bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
           }
+        })
+        .on_context_menu(move |e: &nsh_core::ContextMenuEvent| {
+          if img_ctx_cm.context_menu.get_untracked().is_some() {
+            return;
+          }
+          body_ctx_menu.set(Some((e.page_position.x.0, e.page_position.y.0)));
         })
         .on_press_down(move |e: &PressEvent| {
           let lx = e.position.x.0;
@@ -2151,15 +2164,16 @@ pub fn editor_view(
             .absolute()
             .left(move || px(ime_sink_pos.get().0))
             .top(move || px(ime_sink_pos.get().1))
-            .w(px(1.0))
-            .h(px(18.0))
+            .w(px(240.0))
+            .h(px(22.0))
             .pointer_events(PointerEvents::None)
             .p_0()
             .border(px(0.0))
             .bg(TRANSPARENT_RGBA)
             .text_color(TRANSPARENT_RGBA)
             .caret(false)
-            .multiline(true)
+            .multiline(false)
+            .submit_behavior(SubmitBehavior::Submit)
             .scrollbar(false)
             .auto_correct(false)
             .auto_capitalize(AutoCapitalize::None)
@@ -2366,7 +2380,12 @@ pub fn editor_view(
                         if let Some(cb) = &h_sub {
                           cb(false);
                         }
+                        suppress_next_enter.set(true);
                         b_enter.prepend_empty_paragraph_and_focus();
+                        spawn(async move {
+                          timer(Duration::from_millis(0)).await;
+                          suppress_next_enter.set(false);
+                        });
                       })
                   }))
                   .child(when(move || show_properties.get(), {
@@ -2569,6 +2588,15 @@ pub fn editor_view(
         ))
     })
     .child(render_lightbox_modal(lightbox, b_lightbox.clone(), dark_mode))
+    .child(editor_context_menu_overlay(
+      body_ctx_menu,
+      b_lightbox.clone(),
+      header.clone(),
+      has_text_selection,
+      is_cloud,
+      paper_bounds,
+      dark_mode,
+    ))
     .child(crate::image_blocks::render_image_context_menu_overlay(
       image_ctx_menu,
       b_lightbox.clone(),
@@ -2611,9 +2639,9 @@ use crate::editor_keys::{
   update_slash_anchor, write_rich_clipboard,
 };
 use crate::editor_overlays::{
-  bubble_menu_view, caret_slash_menu_view, find_bar_view, image_icon, link_editor_popover,
-  lock_icon, page_more_menu_view, step_find_match, terminal_icon, toolbar_btn,
-  toolbar_btn_active, toolbar_btn_dim, toolbar_btn_with_ref, toolbar_sep,
+  bubble_menu_view, caret_slash_menu_view, editor_context_menu_overlay, find_bar_view, image_icon,
+  link_editor_popover, lock_icon, page_more_menu_view, step_find_match, terminal_icon,
+  toolbar_btn, toolbar_btn_active, toolbar_btn_dim, toolbar_btn_with_ref, toolbar_sep,
 };
 
 #[cfg(test)]

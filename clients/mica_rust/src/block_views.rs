@@ -658,7 +658,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
   let todo_checked = block.data.get("checked").and_then(Value::as_bool).unwrap_or(false);
 
   let (base_px, font_family) = use_context::<crate::mica_theme::UiAppearance>()
-    .map(|a| (a.editor_font_px.get() as f32, a.editor_font_family.get()))
+    .map(|a| (a.editor_font_px.get() as f32 * a.editor_zoom_factor(), a.editor_font_family.get()))
     .unwrap_or((16.0, ""));
   let (font_px, line_h, weight_num, css_font) = block_typography(&kind, heading_level, base_px, font_family);
   let font_weight = match weight_num {

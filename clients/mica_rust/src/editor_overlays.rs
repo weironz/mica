@@ -10,14 +10,14 @@ use mica_editor::{EditorCommand, FindMatch};
 use nsh_base::{button, input};
 use nsh_core::{
   SubmitBehavior,
-  element::{Align, ElementRef, ImageSrc, Placement, Svg, overlay, svg},
+  element::{Align, ElementRef, ImageSrc, Placement, Svg, clipboard_string, overlay, svg},
   geometry::{Point, Points, px},
   prelude::*,
 };
 
 use crate::{
   editor_bridge::MicaDocumentBridge,
-  editor_keys::{close_slash, execute_slash_item, toggle_block_type},
+  editor_keys::{close_slash, execute_slash_item, toggle_block_type, write_rich_clipboard},
   editor_slash::filter_slash_items,
   editor_view::{EditorHeaderProps, SLASH_MENU_MAX_H, SLASH_MENU_WIDTH, SlashMenuSignals},
   mica_icons,
@@ -1099,3 +1099,179 @@ fn menu_check_row(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn editor_context_menu_overlay(
+  menu_pos: Signal<Option<(f32, f32)>>,
+  bridge: Rc<MicaDocumentBridge>,
+  header: Rc<EditorHeaderProps>,
+  has_selection: Signal<bool>,
+  is_cloud: Signal<bool>,
+  viewport_bounds: Signal<(f32, f32)>,
+  dark_mode: Signal<bool>,
+) -> impl IntoElement {
+  when(move || menu_pos.get().is_some(), move || {
+    let Some((raw_x, raw_y)) = menu_pos.get() else {
+      return view().into_element();
+    };
+    let (vw, vh) = viewport_bounds.get_untracked();
+    let max_x = if vw > 210.0 { vw - 208.0 } else { 8.0 };
+    let max_y = if vh > 260.0 { vh - 248.0 } else { 8.0 };
+    let left_x = raw_x.clamp(8.0, max_x.max(8.0));
+    let top_y = raw_y.clamp(8.0, max_y.max(8.0));
+    let has_sel = has_selection.get();
+    let show_comment = has_sel && is_cloud.get();
+    let (b_cp, b_ct, b_ps, b_pp, b_sa) = (
+      bridge.clone(),
+      bridge.clone(),
+      bridge.clone(),
+      bridge.clone(),
+      bridge.clone(),
+    );
+    let on_comment = header.on_toggle_comments.clone();
+
+    let ctx_btn = move |tid: &'static str, label: &'static str, enabled: bool, on_act: Rc<dyn Fn()>| {
+      button()
+        .test_id(tid)
+        .accessibility_label(label)
+        .w_full()
+        .px_3()
+        .py_1()
+        .rounded(px(6.0))
+        .hover(move |s| {
+          if enabled {
+            s.bg(palette(dark_mode.get_untracked()).surface_hover)
+          } else {
+            s
+          }
+        })
+        .on_press(move || {
+          if enabled {
+            on_act();
+          }
+        })
+        .child(
+          text(label)
+            .text_size(px(12.5))
+            .text_color(move || {
+              let p = palette(dark_mode.get());
+              if enabled { p.text_primary } else { p.text_ghost }
+            }),
+        )
+    };
+
+    let mut card = view()
+      .test_id("editor-context-menu")
+      .absolute()
+      .left(px(left_x))
+      .top(px(top_y))
+      .w(px(196.0))
+      .p_1()
+      .gap(px(2.0))
+      .rounded(px(8.0))
+      .border_1()
+      .border_color(move || palette(dark_mode.get()).border_normal)
+      .bg(move || palette(dark_mode.get()).surface_overlay)
+      .shadow_md()
+      .child(ctx_btn(
+        "ed-ctx-copy",
+        "复制",
+        has_sel,
+        Rc::new(move || {
+          if let Some(payload) = b_cp.copy_selection() {
+            write_rich_clipboard(payload);
+            b_cp.set_status_flash("已复制");
+          }
+          menu_pos.set(None);
+        }),
+      ))
+      .child(ctx_btn(
+        "ed-ctx-cut",
+        "剪切",
+        has_sel,
+        Rc::new(move || {
+          if let Some(payload) = b_ct.copy_selection() {
+            write_rich_clipboard(payload);
+            b_ct.dispatch(EditorCommand::DeleteBackward);
+            b_ct.set_status_flash("已剪切");
+          }
+          menu_pos.set(None);
+        }),
+      ));
+    if show_comment {
+      card = card.child(ctx_btn(
+        "ed-ctx-comment",
+        "添加评论",
+        true,
+        Rc::new(move || {
+          menu_pos.set(None);
+          on_comment();
+        }),
+      ));
+    }
+    card = card
+      .child(menu_sep(dark_mode))
+      .child(ctx_btn(
+        "ed-ctx-paste",
+        "粘贴",
+        true,
+        Rc::new(move || {
+          menu_pos.set(None);
+          let br = b_ps.clone();
+          spawn(async move {
+            let txt = clipboard_string().await;
+            let html = crate::clipboard_platform::read_windows_cf_html(&txt).unwrap_or_default();
+            if !txt.is_empty() || !html.is_empty() {
+              br.paste_clipboard(&txt, &html, false);
+            }
+            br.request_focus();
+          });
+        }),
+      ))
+      .child(ctx_btn(
+        "ed-ctx-paste-plain",
+        "粘贴为纯文本",
+        true,
+        Rc::new(move || {
+          menu_pos.set(None);
+          let br = b_pp.clone();
+          spawn(async move {
+            let txt = clipboard_string().await;
+            if !txt.is_empty() {
+              br.paste_clipboard(&txt, "", true);
+            }
+            br.request_focus();
+          });
+        }),
+      ))
+      .child(menu_sep(dark_mode))
+      .child(ctx_btn(
+        "ed-ctx-select-all",
+        "全选",
+        true,
+        Rc::new(move || {
+          menu_pos.set(None);
+          b_sa.select_all();
+          b_sa.request_focus();
+        }),
+      ));
+
+    overlay()
+      .on_cancel(move || menu_pos.set(None))
+      .child(
+        view()
+          .absolute()
+          .inset_0()
+          .z_index(78)
+          .child(
+            button()
+              .test_id("editor-context-menu-dismiss")
+              .accessibility_label("关闭编辑器右键菜单")
+              .absolute()
+              .inset_0()
+              .on_press(move || menu_pos.set(None)),
+          )
+          .child(card),
+      )
+      .into_element()
+  })
+}

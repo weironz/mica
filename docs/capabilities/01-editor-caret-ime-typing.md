@@ -76,3 +76,4 @@
 - **2026-11-23**：基于 `main:clients/mica_flutter/lib/editor/` 与 `clients/mica_rust`（`ff104b87`）初版沉淀，纳入首行回退标题、底部新建行、移除占位提示、修复 `ttest`/吞反引号及光标闪烁规则。
 - **2026-11-23（补齐迭代）**：新增 `editor_positioning.rs`，补齐跨块 `preferred_x` 垂直方向键保持列（`CAP-01-03`）与隐藏原生 IME 代理实时跟随光标定位（`CAP-01-05`）。
 - **2026-11-28**：真机实测 `CAP-01-06`（跨块选区中文 IME 预编辑与原位替换、保留段首格式及 `Ctrl+Z` 整体撤销）通过，验收状态升级为 `✅`。
+- **2026-11-28（IME 候选框定位与标题回车衔接）**：将 `mica-editor-ime-sink` 收口为单行代理（`multiline(false)` + `submit_behavior(Submit)`，充足单行宽度 `240px`），避免 Windows 微软拼音（TSF）在 `1px` 宽多行控件下按字符竖向折行导致候选框随输入逐字下移；同时为标题回车跳转正文加入单 tick 回车去重守卫，阻止浏览器 Web 端同一次 `keydown(Enter)` 冒泡到正文再触发 `SplitBlock` 插入多余空行。

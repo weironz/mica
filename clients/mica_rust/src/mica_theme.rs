@@ -20,6 +20,8 @@ use nsh_core::{
 pub struct UiAppearance {
   /// UI chrome scale multiplier (`0.90` Small / `1.0` Standard / `1.15` Large).
   pub ui_scale: Signal<f32>,
+  /// Interactive zoom multiplier (`0.75..=1.50`, default `1.00`).
+  pub zoom_factor: Signal<f32>,
   /// Editor body base font size in px (`13..=22`, default `16`).
   pub editor_font_px: Signal<u32>,
   /// Editor font family (`""` System, `"Georgia, serif"` Serif, `"monospace"` Mono).
@@ -30,7 +32,11 @@ pub struct UiAppearance {
 
 impl UiAppearance {
   pub fn scale(&self) -> f32 {
-    self.ui_scale.get().clamp(0.85, 1.3)
+    (self.ui_scale.get() * self.zoom_factor.get()).clamp(0.65, 1.80)
+  }
+
+  pub fn editor_zoom_factor(&self) -> f32 {
+    self.zoom_factor.get().clamp(0.65, 1.80)
   }
 
   pub fn scaled(&self, base_px: f32) -> f32 {

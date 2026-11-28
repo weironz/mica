@@ -1488,6 +1488,7 @@ fn shortcuts_tab(dm: Signal<bool>, allow_local: bool) -> impl IntoElement {
     ("Ctrl + Click", "侧栏：把这一行加进多选／取出"),
     ("Shift + Click", "侧栏：选中同一父级下的一段连续行"),
     ("Esc", "侧栏：清空多选（点侧栏外任意处同样清空）"),
+    ("Ctrl + 滚轮 / Ctrl + = / - / 0", "缩放界面 / 重置缩放"),
   ];
   const APP_ROWS_WEB: &[(&str, &str)] = &[
     ("Ctrl + F", "页内查找"),
@@ -1498,6 +1499,7 @@ fn shortcuts_tab(dm: Signal<bool>, allow_local: bool) -> impl IntoElement {
     ("Ctrl + Click", "侧栏：把这一行加进多选／取出"),
     ("Shift + Click", "侧栏：选中同一父级下的一段连续行"),
     ("Esc", "侧栏：清空多选（点侧栏外任意处同样清空）"),
+    ("Ctrl + 滚轮 / Ctrl + = / - / 0", "缩放界面 / 重置缩放"),
   ];
   const FMT_ROWS: &[(&str, &str)] = &[
     ("Ctrl + B", "加粗"),
