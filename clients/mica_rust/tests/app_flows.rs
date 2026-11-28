@@ -36,9 +36,24 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.wait_for("切换服务器 / 本地库…").unwrap();
   app.press("id:account-menu-btn").unwrap();
 
-  // 4. 320px Workspace Switcher popover opens and lists active workspace + import submenu
+  // 4. 320px Workspace Switcher popover opens with collapsed import toggle; expanding reveals compact format tags
   app.press("id:workspace-switcher-btn").unwrap();
   app.wait_for("新建工作区").unwrap();
+  app.wait_for("导入工作区").unwrap();
+  assert!(
+    !app.shows("id:ws-import-zip"),
+    "workspace import options should be collapsed by default"
+  );
+  app.press("id:ws-import-toggle").unwrap();
+  app.wait_for("从 ZIP 导入").unwrap();
+  app.wait_for("Mica / Markdown").unwrap();
+  app.wait_for("从 Notion 导入").unwrap();
+  app.wait_for("Markdown & CSV").unwrap();
+  assert!(
+    !app.screen().texts().iter().any(|t| t.contains("从 ZIP 导入(") || t.contains("从 Notion 导入(")),
+    "workspace import items must not use cramped parenthesized labels: {:?}",
+    app.screen().texts()
+  );
   app.press("id:workspace-menu-close").unwrap();
 
   // 5. Create a new folder and a new page via sidebar icons (names must NOT carry numeric suffixes)

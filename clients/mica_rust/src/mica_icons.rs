@@ -61,6 +61,14 @@ pub fn plus(color: &str) -> Svg {
   stroked(15.0, color, r##"<path d="M10 4.5V15.5M4.5 10H15.5"/>"##)
 }
 
+pub fn import_icon(color: &str) -> Svg {
+  stroked(
+    15.0,
+    color,
+    r##"<path d="M10 3.5V11.5M6.8 8.5L10 11.7L13.2 8.5M4.5 14V15.5H15.5V14"/>"##,
+  )
+}
+
 pub fn close_sm(color: &str) -> Svg {
   stroked(13.0, color, r##"<path d="M5.5 5.5L14.5 14.5M14.5 5.5L5.5 14.5"/>"##)
 }

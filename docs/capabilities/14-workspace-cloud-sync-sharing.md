@@ -23,7 +23,7 @@
   - **Web 端（`allow_local == false`）**：取消深色营销左栏与多服务器下拉，在暖灰纸张底色上展示 `396px` 居中单卡片登录页（Mica 图标 + 标题 + 当前同源服务器健康状态条 + 干净登录/注册/忘记密码表单 + 365 天滑动会话说明），未登录时隐藏关闭按钮。
 
 ### 工作区管理、跨工作区迁移与成员邀请
-- **`CAP-14-03` 工作区下拉切换菜单**：`320px` 宽工作区菜单（超过 8 个工作区自动出现搜索过滤框）、显示页面计数、每行 `⋯` 菜单支持重命名、导出（Mica 备份 / Markdown ZIP）、导入（文件/文件夹）、删除；底部提供「+ 新建工作区」与「导入工作区（ZIP / Notion）」。
+- **`CAP-14-03` 工作区下拉切换菜单**：`320px` 宽工作区菜单（超过 8 个工作区自动出现搜索过滤框）、显示页面计数、每行 `⋯` 菜单支持重命名、导出（Mica 备份 / Markdown ZIP）、导入（文件/文件夹）、删除；底部提供「+ 新建工作区」与默认折叠的「导入工作区」（点击展开两行去括号紧凑选项：`从 ZIP 导入` + 右侧浅灰 `Mica / Markdown`，以及 `从 Notion 导入` + 右侧浅灰 `Markdown & CSV`）。
 - **`CAP-14-04` 跨工作区移动与复制**：支持将单页、文件夹子树或目录树多选批量项通过目标树选择器移动/复制到另一工作区指定目录。
 - **`CAP-14-05` 工作区设置与成员邀请**：展示角色、工作区 ID、存储用量、重命名与成员管理；添加成员走「发送邀请 → 对方接受后加入」契约（见 `docs/features/workspace-invitations.md`）。
 
@@ -56,3 +56,4 @@
 - **2026-11-27（公开分享开关无法开启修复）**：`share_dialog_modal` 的 `公开访问` 开关位于 `dynamic(...)` 体内，点击触发 `share_busy.set(true)` 后直接裸调 `spawn(...)` 会将异步任务绑定在即将被重建销毁的临时子 `Owner` 上，导致 `POST/DELETE /share` 在发出瞬间即被取消且 `share_busy` 永久卡在 `true`（置灰不可点）。修复为统一在 `app_owner.run` 下派发分享加载/开关及其他弹窗异步任务、接入 `with_auto_refresh` 自动续期与错误内联展示，并在 `share_dialog.rs` 中将复制链接的复原定时器绑定至 `modal_owner`。
 - **2026-11-27（Web 首屏秒开壳、WASM LTO 瘦身与哈希资源 `immutable` 缓存）**：① [web.rs](clients/mica_rust/src/web.rs) 将 `rust_app!` 的 `ui_sets` 从 `vec![nsh_base::registry()]` 改为 `Vec::new()`，并将 Mermaid 源码编辑框改为原生多行 `input()`、移除 `nsh-base` 的 `editor` 特性与新增 `[profile.web] strip = true`，解除全部 75 个未使用 `nsh/base` TSX 注册组件（`syntect`/`html5ever`/`ratex`/`vte`/`zstd`/`plot`/`rich_editor` 等）对 LTO 死代码裁剪的强引用；② [index.html](clients/mica_rust/web/index.html) 改为 T=0 并行启动 `fetch(wasm)`（流式进度 + `compileStreaming`）、`import(nsh.js)` 与单飞 `/api/auth/refresh` 探测，未登录（401/无痕）1 RTT 内直出 1:1 HTML/CSS 登录/注册/找回密码页，已登录直出工作区骨架屏，认证成功后通过内存临时 `window.__micaPreAuth` 零 `localStorage` 秘密交接给 Rust 跳过重复刷新；③ [nginx.conf](deploy/nginx.conf) 对带 `?v=<sha256>` 哈希的 `.js`/`.wasm` 启用 `public, max-age=31536000, immutable` 强缓存（入口 `index.html` 保持 `no-cache`）并同步双份 nginx CSP sha256 哈希。
 - **2026-11-28（`e2e/web_e2e.mjs` 补齐公开分享/工作区设置黑盒测试）**：在 `[1/10]` 补登录页 `#ml-main` SVG 渐变自含校验，新增 `[10/10]` 覆盖云端公开分享开启→未鉴权访问 `/s/{token}` 200→关闭→404 撤销与工作区设置弹窗验证。
+- **2026-11-28（工作区切换菜单底部导入区折叠与去括号排版优化）**：将工作区下拉菜单底部的常驻 3 行导入区改为默认折叠的「导入工作区」同级行（`ws-import-toggle` + 图标 + 右侧箭头），点击就地展开两行单行紧凑子项（`ws-import-zip` / `ws-import-notion`），去掉主标题中的冗长括号说明，将 `Mica / Markdown` 与 `Markdown & CSV` 作为右侧浅灰格式标签展示，并补齐 `app_flows` 断言。

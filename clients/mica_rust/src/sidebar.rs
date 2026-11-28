@@ -1866,6 +1866,7 @@ pub fn workspace_switcher_popover(
   let expanded_ws_menu: Signal<Option<Uuid>> = signal(None);
   let creating_new = signal(false);
   let new_ws_name = signal(String::new());
+  let import_expanded = signal(false);
   let rename_ws_open = signal(false);
   let rename_ws_id: Signal<Option<Uuid>> = signal(None);
   let rename_ws_initial = signal(String::new());
@@ -1878,6 +1879,7 @@ pub fn workspace_switcher_popover(
     expanded_ws_menu.set(None);
     creating_new.set(false);
     new_ws_name.set(String::new());
+    import_expanded.set(false);
   });
 
   let cb_rename_commit = cb.clone();
@@ -2131,20 +2133,64 @@ pub fn workspace_switcher_popover(
                 }
               }))
               .child(
-                view().w_full().pt(px(2.0))
+                view()
+                  .w_full()
                   .child(
-                    view().px_3().py(px(4.0)).child(
-                      text("导入工作区").text_size(px(12.0)).font_weight(FontWeight::MEDIUM)
-                        .text_color(move || palette(dark_mode.get()).text_faint),
-                    ),
+                    button()
+                      .test_id("ws-import-toggle").accessibility_label("导入工作区")
+                      .w_full().h(px(36.0)).px_3().flex_row().items_center().justify_between()
+                      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                      .on_press(move || import_expanded.set(!import_expanded.get_untracked()))
+                      .child(
+                        view().flex_row().items_center().gap_2()
+                          .child(dynamic(move || mica_icons::import_icon(palette(dark_mode.get()).text_primary_hex)))
+                          .child(
+                            text("导入工作区").text_size(px(14.0)).font_weight(FontWeight::MEDIUM)
+                              .text_color(move || palette(dark_mode.get()).text_primary),
+                          ),
+                      )
+                      .child(dynamic(move || {
+                        let hex = palette(dark_mode.get()).text_faint_hex;
+                        if import_expanded.get() {
+                          mica_icons::chevron_down(hex)
+                        } else {
+                          mica_icons::chevron_right(hex)
+                        }
+                      })),
                   )
-                  .child(menu_item_row("ws-import-zip", "从 ZIP 导入(Mica 备份或 Markdown)", dark_mode, false, move || {
-                    (cb_imp_zip.on_close)();
-                    (cb_imp_zip.on_import_workspace_zip)();
-                  }))
-                  .child(menu_item_row("ws-import-notion", "从 Notion 导入(Markdown 和 CSV ZIP)", dark_mode, false, move || {
-                    (cb_imp_notion.on_close)();
-                    (cb_imp_notion.on_import_workspace_notion)();
+                  .child(when(move || import_expanded.get(), {
+                    let cb_z = cb_imp_zip.clone();
+                    let cb_n = cb_imp_notion.clone();
+                    move || {
+                      let cb_z2 = cb_z.clone();
+                      let cb_n2 = cb_n.clone();
+                      view()
+                        .w_full().px_2().pb_1().gap(px(2.0))
+                        .child(workspace_import_option_row(
+                          "ws-import-zip",
+                          "从 ZIP 导入",
+                          "Mica / Markdown",
+                          true,
+                          dark_mode,
+                          move || {
+                            import_expanded.set(false);
+                            (cb_z2.on_close)();
+                            (cb_z2.on_import_workspace_zip)();
+                          },
+                        ))
+                        .child(workspace_import_option_row(
+                          "ws-import-notion",
+                          "从 Notion 导入",
+                          "Markdown & CSV",
+                          false,
+                          dark_mode,
+                          move || {
+                            import_expanded.set(false);
+                            (cb_n2.on_close)();
+                            (cb_n2.on_import_workspace_notion)();
+                          },
+                        ))
+                    }
                   })),
               ),
           )
@@ -2168,6 +2214,42 @@ pub fn workspace_switcher_popover(
         ))
     }
   })
+}
+
+fn workspace_import_option_row(
+  test_id: &'static str,
+  label: &'static str,
+  format_tag: &'static str,
+  is_zip: bool,
+  dark_mode: Signal<bool>,
+  on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+  button()
+    .test_id(test_id)
+    .accessibility_label(label)
+    .w_full().h(px(32.0)).pl(px(28.0)).pr_2().rounded(px(6.0))
+    .flex_row().items_center().justify_between().gap_2()
+    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+    .on_press(on_press)
+    .child(
+      view().flex_row().items_center().gap_2()
+        .child(dynamic(move || {
+          let hex = palette(dark_mode.get()).text_muted_hex;
+          if is_zip {
+            mica_icons::folder(hex)
+          } else {
+            mica_icons::file_doc(hex)
+          }
+        }))
+        .child(
+          text(label).text_size(px(13.0))
+            .text_color(move || palette(dark_mode.get()).text_primary),
+        ),
+    )
+    .child(
+      text(format_tag).text_size(px(11.5))
+        .text_color(move || palette(dark_mode.get()).text_faint),
+    )
 }
 
 // ── Exported 400px Centered Rename Dialog Modal ───────────────────────────────
