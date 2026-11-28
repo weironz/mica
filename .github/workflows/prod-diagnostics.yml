@@ -36,7 +36,7 @@ jobs:
 
       - name: Node
         run: |
-          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@mica.cloudcele.com 'bash -s' <<'EOS'
+          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@ssh.mica.cloudcele.com 'bash -s' <<'EOS'
           echo "--- host"; uptime; nproc | sed 's/^/cpus: /'
           echo "--- memory (MiB)"; free -m
           echo "--- swap devices"; swapon --show 2>/dev/null || echo "(none)"
@@ -48,7 +48,7 @@ jobs:
 
       - name: Mica api
         run: |
-          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@mica.cloudcele.com 'bash -s' <<'EOS'
+          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@ssh.mica.cloudcele.com 'bash -s' <<'EOS'
           echo "--- version"; docker exec mica-api-1 curl -fsS http://127.0.0.1:8080/api/health
           echo; echo "--- api started"; docker inspect -f '{{.State.StartedAt}} restarts={{.RestartCount}}' mica-api-1
           echo "--- startup lines since start"
@@ -68,7 +68,7 @@ jobs:
       # rule counts only — the tunnel token and hostnames stay off a public log.
       - name: Tunnels present on the node
         run: |
-          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@mica.cloudcele.com 'bash -s' <<'EOS'
+          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@ssh.mica.cloudcele.com 'bash -s' <<'EOS'
           for c in $(docker ps --format '{{.Names}}' | grep -iE 'cloudflared|netbird'); do
             echo "--- $c"
             docker inspect -f 'image={{.Config.Image}} network={{.HostConfig.NetworkMode}} restart={{.HostConfig.RestartPolicy.Name}}' "$c"

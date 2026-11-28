@@ -61,7 +61,7 @@
 | `CAP-01-03` 连续上下方向键保持列 | P1 | 桌面/Web | ✅ | `editor_positioning::move_caret_vertical_preserving_x`（跨行+跨块保持 `preferred_x`）+ `text_geometry::tests::multi_line_vertical_navigation_and_selection_span_lines` |
 | `CAP-01-04` 连续打字与反引号不丢失 | P0 | 桌面/Web | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
 | `CAP-01-05` CJK IME 预编辑与上屏 | P0 | 全端 | ✅ | `editor_positioning::schedule_ime_sink_pos_update`（实时跟随光标定位原生 IME 代理）+ `mica-editor::ime_update_handles_cjk_composition_commit_and_input_rules` |
-| `CAP-01-06` 跨块选区中文 IME 替换 | P1 | 桌面/Web | 🟡 | L2 内核支持，L3 实机 IME 专项验证待补 |
+| `CAP-01-06` 跨块选中后直接中文输入 | P1 | 桌面/Web | ✅ | `mica-editor` 内核测试 + 2026-11-28 实机跨块选区中文 IME 原位替换验收通过 |
 | `CAP-01-07` Enter / Shift+Enter 规则 | P0 | 全端 | ✅ | `mica-editor::insert_text_split_and_backspace_merge_with_undo_redo` |
 | `CAP-01-08` Backspace 阶梯退化 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` |
 | `CAP-01-09` 第一行 Backspace 回退标题 | P1 | 桌面/Web | ✅ | `editor_view.rs::try_backspace_to_title`（待真机复测光标落标题末尾） |
@@ -75,3 +75,4 @@
 
 - **2026-11-23**：基于 `main:clients/mica_flutter/lib/editor/` 与 `clients/mica_rust`（`ff104b87`）初版沉淀，纳入首行回退标题、底部新建行、移除占位提示、修复 `ttest`/吞反引号及光标闪烁规则。
 - **2026-11-23（补齐迭代）**：新增 `editor_positioning.rs`，补齐跨块 `preferred_x` 垂直方向键保持列（`CAP-01-03`）与隐藏原生 IME 代理实时跟随光标定位（`CAP-01-05`）。
+- **2026-11-28**：真机实测 `CAP-01-06`（跨块选区中文 IME 预编辑与原位替换、保留段首格式及 `Ctrl+Z` 整体撤销）通过，验收状态升级为 `✅`。

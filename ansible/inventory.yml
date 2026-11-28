@@ -13,7 +13,7 @@
 all:
   hosts:
     mica-prod:
-      ansible_host: mica.cloudcele.com
+      ansible_host: ssh.mica.cloudcele.com
       ansible_user: root
       ansible_python_interpreter: /usr/bin/python3
 

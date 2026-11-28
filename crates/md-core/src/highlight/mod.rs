@@ -3,7 +3,7 @@
 //!
 //! It used to live in Dart (`lib/editor/highlight.dart`), so the editor coloured
 //! code and every exported or shared page showed it flat — two products from one
-//! document. Now the grammars are data ([`languages.json`]) and the scanner is
+//! document. Now the grammars are data (`languages.json`) and the scanner is
 //! here; Dart only maps a [`Role`] to a palette colour.
 //!
 //! The grammars' structural rules are JavaScript regex sources (that is where
