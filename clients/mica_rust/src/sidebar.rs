@@ -993,7 +993,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     // Before indicator
     .child(dynamic(move || match drop_overlay.get() {
       Some((DropMode::Before, level, state)) => view()
-        .absolute().top(px(-4.0)).left(px(0.0)).right(px(0.0)).z_index(30)
+        .absolute().top(px(0.0)).left(px(0.0)).right(px(0.0)).z_index(30)
         .pointer_events(PointerEvents::None)
         .child(drop_indicator(drop_indicator_inset(level), state, dark_mode)),
       _ => view(),
@@ -1233,7 +1233,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     // After indicator
     .child(dynamic(move || match drop_overlay.get() {
       Some((DropMode::After, level, state)) => view()
-        .absolute().bottom(px(-4.0)).left(px(0.0)).right(px(0.0)).z_index(30)
+        .absolute().bottom(px(0.0)).left(px(0.0)).right(px(0.0)).z_index(30)
         .pointer_events(PointerEvents::None)
         .child(drop_indicator(drop_indicator_inset(level), state, dark_mode)),
       _ => view(),
@@ -1466,9 +1466,8 @@ fn drop_indicator(inset: f32, state: DropIndicatorState, dark_mode: Signal<bool>
     DropIndicatorState::Blocked => p.warning,
   };
   view()
-    .w_full().h(px(8.0)).pl(px(inset)).pr(px(4.0)).flex_row().items_center()
-    .child(view().w(px(8.0)).h(px(8.0)).flex_shrink_0().rounded_full().border_2().border_color(color))
-    .child(view().flex_1().h(px(2.0)).bg(color))
+    .w_full().h(px(2.0)).pl(px(inset)).pr(px(4.0))
+    .child(view().w_full().h(px(2.0)).rounded_full().bg(color))
 }
 
 /// Floating drag ghost card (single card or 3-layer stacked deck + `{N} 项` badge).
