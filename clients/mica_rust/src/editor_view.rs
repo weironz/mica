@@ -1580,7 +1580,7 @@ pub fn editor_view(
                   text(move || {
                     let t = hb.page_title.get();
                     if t.trim().is_empty() {
-                      crate::mica_theme::tr("无标题", "Untitled").to_string()
+                      crate::mica_theme::tr("新页面", "New page").to_string()
                     } else {
                       t
                     }
@@ -2349,7 +2349,7 @@ pub fn editor_view(
                     input()
                       .element_ref(&title_ref)
                       .test_id("page-title-input")
-                      .placeholder("无标题")
+                      .placeholder("新页面")
                       .submit_behavior(SubmitBehavior::Submit)
                       .w_full()
                       .pb_1()
@@ -2612,19 +2612,20 @@ pub fn editor_view(
 }
 
 
-/// Return `true` when `name` is an untitled sentinel (`""`, `"未命名页面"`,
-/// `"无标题"`, `"Untitled"`) that should render as the muted placeholder rather
-/// than pre-filled solid text in the page title input.
+/// Return `true` when `name` is an untitled sentinel (`""`, `"新页面"`,
+/// `"未命名页面"`, `"无标题"`, `"Untitled"`) that should render as the muted
+/// placeholder rather than pre-filled solid text in the page title input.
 pub(crate) fn is_default_untitled_title(name: &str) -> bool {
   let trimmed = name.trim();
   trimmed.is_empty()
+    || trimmed == "新页面"
     || trimmed == "未命名页面"
     || trimmed == "无标题"
     || trimmed == "Untitled"
 }
 
 /// Value bound to the page title `<input>`: untitled sentinels map to `""` so
-/// the muted `"无标题"` placeholder is shown and typing replaces it directly.
+/// the muted `"新页面"` placeholder is shown and typing replaces it directly.
 pub(crate) fn page_title_input_value(name: &str) -> String {
   if is_default_untitled_title(name) {
     String::new()
@@ -2674,7 +2675,7 @@ mod tests {
   fn untitled_page_titles_render_empty_input_for_gray_placeholder() {
     use super::{is_default_untitled_title, page_title_input_value};
 
-    for sentinel in ["", "   ", "未命名页面", "无标题", "Untitled"] {
+    for sentinel in ["", "   ", "新页面", "未命名页面", "无标题", "Untitled"] {
       assert!(is_default_untitled_title(sentinel), "expected sentinel for {sentinel:?}");
       assert_eq!(page_title_input_value(sentinel), "");
     }

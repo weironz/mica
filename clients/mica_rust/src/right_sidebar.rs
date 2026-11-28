@@ -488,7 +488,7 @@ fn outline_section(props: Rc<RightSidebarProps>) -> impl IntoElement {
 
       let mut list = view().w_full().gap_1();
       let display_title = if title.trim().is_empty() {
-        "无标题".to_string()
+        "新页面".to_string()
       } else {
         title
       };

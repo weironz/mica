@@ -254,12 +254,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .unwrap_or_default();
     } else {
       let doc_id = Uuid::new_v4();
-      let doc_view = make_view(ws_id, doc_id, "未命名页面", "page", Some(default_folder_id), "0000000010");
+      let doc_view = make_view(ws_id, doc_id, "新页面", "page", Some(default_folder_id), "0000000010");
       let _ = vault.save_view(&initial_origin, &doc_view);
       let _ = vault.save_markdown(&initial_origin, doc_id, "");
       views.push(doc_view);
       initial_doc_id = Some(doc_id);
-      initial_title = "未命名页面".to_string();
+      initial_title = "新页面".to_string();
       initial_folder_name = fallback_folder_name;
     }
   }
@@ -1440,7 +1440,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let on_new_page: Rc<dyn Fn()> = {
     let create = create_page_with_content.clone();
     Rc::new(move || {
-      create("未命名页面".to_string(), String::new());
+      create("新页面".to_string(), String::new());
     })
   };
 
@@ -1846,7 +1846,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           .find(|r| r.object_type == "folder" && !r.is_deleted)
           .map(|r| r.id);
         let did = Uuid::new_v4();
-        let p = make_view(entry.id, did, "未命名页面", "page", fid, "0000000010");
+        let p = make_view(entry.id, did, "新页面", "page", fid, "0000000010");
         let _ = v.save_view(&entry.origin, &p);
         let _ = v.save_markdown(&entry.origin, did, "");
         ws_views.push(p);
@@ -1882,7 +1882,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       };
       let trimmed = next_name.trim();
       let wire_name = if trimmed.is_empty() {
-        "未命名页面".to_string()
+        "新页面".to_string()
       } else {
         trimmed.to_string()
       };
@@ -1926,7 +1926,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         return;
       };
       let persisted_name = if next_name.trim().is_empty() {
-        "未命名页面".to_string()
+        "新页面".to_string()
       } else {
         next_name.clone()
       };
@@ -2341,7 +2341,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           root_focused.get_untracked(),
           active_doc.get_untracked(),
         );
-        create(p, "未命名页面".to_string(), String::new(), false);
+        create(p, "新页面".to_string(), String::new(), false);
       })
     },
     on_new_child_folder: {
@@ -2467,7 +2467,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             .into_iter()
             .find(|r| !r.is_folder && r.object_id == doc_id)
             .map(|r| r.name)
-            .unwrap_or_else(|| "未命名页面".to_string());
+            .unwrap_or_else(|| "新页面".to_string());
           sel_c(doc_id, title);
         }),
       )
@@ -2484,7 +2484,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .into_iter()
         .find(|r| !r.is_folder && r.object_id == doc_id)
         .map(|r| r.name)
-        .unwrap_or_else(|| "未命名页面".to_string());
+        .unwrap_or_else(|| "新页面".to_string());
       sel(doc_id, title);
     })));
   }
@@ -3679,7 +3679,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             .into_iter()
             .find(|r| !r.is_folder && r.object_id == doc_id)
             .map(|r| r.name)
-            .unwrap_or_else(|| "未命名页面".to_string());
+            .unwrap_or_else(|| "新页面".to_string());
           graph_modal_open.set(false);
           sel(doc_id, title);
         })

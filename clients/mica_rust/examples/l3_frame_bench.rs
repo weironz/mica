@@ -43,7 +43,7 @@ fn main() {
 
   // 2. New blank page + 40 real keystrokes (input -> EditorSession -> NSH signal -> frame layout)
   app.press("id:new-page-btn").expect("new page");
-  app.wait_for("未命名页面 2").expect("new page visible");
+  app.wait_for("新页面").expect("new page visible");
   app
     .type_text("id:mica-rich-editor", "Warmup ")
     .expect("warmup");

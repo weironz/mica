@@ -1306,7 +1306,7 @@ pub fn home_screen_view(
                 for (i, (doc_id, title, meta)) in recents.into_iter().enumerate() {
                   let open = on_open_page.clone();
                   let display_title = if title.trim().is_empty() {
-                    "无标题".to_string()
+                    "新页面".to_string()
                   } else {
                     title
                   };

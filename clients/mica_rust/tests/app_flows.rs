@@ -66,9 +66,9 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
     app.screen().texts()
   );
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   assert!(
-    !app.screen().texts().iter().any(|t| t.starts_with("未命名页面 ")),
+    !app.screen().texts().iter().any(|t| t.starts_with("新页面 ")),
     "new page name must not include a numeric suffix: {:?}",
     app.screen().texts()
   );
@@ -77,8 +77,8 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.type_text("id:page-title-input", "纯Rust架构设计").unwrap();
   app.wait_for("纯Rust架构设计").unwrap();
   assert!(
-    !app.shows("未命名页面纯Rust架构设计"),
-    "typing into a new page title must not prepend literal 未命名页面"
+    !app.shows("新页面纯Rust架构设计"),
+    "typing into a new page title must not prepend literal 新页面"
   );
 
   // 7. Toolbar formatting, Favorites pinned section, Slash menu (Code Block & Table & Divider) + Undo
@@ -161,7 +161,7 @@ fn rich_editor_keyboard_enter_ctrl_a_and_editable_code_block() {
 
   // Create a clean blank page so we test real typing from scratch
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   // 1. Real typing + Enter key splits into a new block and continues typing
   app.type_text("id:mica-rich-editor", "First line").unwrap();
@@ -343,7 +343,7 @@ fn virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch() {
 
   // 1. Switch to a brand-new page and verify zero stale blocks leak from previous page.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   app.type_text("id:mica-rich-editor", "Single layer quote text").unwrap();
   app.wait_for("Single layer quote text").unwrap();
   app.press("id:ed-quote").unwrap();
@@ -392,7 +392,7 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
   // 1. Fresh page: type "t", "e", "s", "t" one character at a time via IME sink.
   //    Must produce exact "test" (NEVER doubled "ttest"!) and show focused caret.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   for ch in ["t", "e", "s", "t"] {
     app.type_text("id:mica-editor-ime-sink", ch).unwrap();
   }
@@ -430,7 +430,7 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
   // 4. Typing triple backticks ```` ``` ```` in a fresh paragraph auto-converts to a
   //    code block AND keeps focus seamlessly in the unified IME sink so typing + Backspace work immediately!
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   for ch in ["`", "`", "`"] {
     app.type_text("id:mica-editor-ime-sink", ch).unwrap();
   }
@@ -448,7 +448,7 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
 
   // 5. Cross-block selection spanning a GFM table renders `block-selection-overlay` over the table!
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   let mut paste_ev = nsh_core::PasteEvent::default();
   paste_ev.text = "## Section 3\n\n| ColA | ColB |\n| --- | --- |\n| ISP-01 | 10G |\n\n## Section 4".into();
   app.paste("id:mica-editor-ime-sink", &paste_ev).unwrap();
@@ -471,7 +471,7 @@ fn regression_fifteen_editor_ux_fixes() {
 
   // 1. Fresh empty page must NOT show the removed "输入正文，或输入 / 唤出命令..." placeholder.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   assert!(
     !app.shows("输入正文，或输入 / 唤出命令..."),
     "empty document must not display the removed placeholder prompt"
@@ -512,7 +512,7 @@ fn regression_fifteen_editor_ux_fixes() {
 
   // 5. Same-page copy/paste round-trip via Markdown keeps headings, quotes, and code blocks.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   let mut md_paste = nsh_core::PasteEvent::default();
   md_paste.text = "# 主标题\n\n> 引用段落\n\n```rust\nfn ok() {}\n```".into();
   app.paste("id:mica-editor-ime-sink", &md_paste).unwrap();
@@ -527,7 +527,7 @@ fn regression_fifteen_editor_ux_fixes() {
 
   // 7. Code block at caret (0, 0): pressing Backspace removes the code block cleanly!
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   for ch in ["`", "`", "`"] {
     app.type_text("id:mica-editor-ime-sink", ch).unwrap();
   }
@@ -564,7 +564,7 @@ fn regression_capability_gaps_closed() {
 
   // 3. Table cell focus, Tab navigation to next cell, and Escape back to document (CAP-05-06, CAP-05-07).
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   let mut tbl_paste = nsh_core::PasteEvent::default();
   tbl_paste.text = "| 字段 | 数值 |\n| --- | --- |\n| GPU | 8x B300 |\n| IB | 800G |".into();
   app.paste("id:mica-editor-ime-sink", &tbl_paste).unwrap();
@@ -638,7 +638,7 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
   // inside `nsh_base::editor()` (so its own LIFO `backspace`/`delete` bindings are active!)
   // -> type "ab", Backspace x2 deletes text inside editor, 3rd Backspace deletes the block!
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   app.press("id:ed-code-block").unwrap();
   app.wait_for("输入代码...").unwrap();
   app.type_text("id:mica-editor-ime-sink", "xy").unwrap();
@@ -725,7 +725,7 @@ fn regression_code_block_progressive_ctrl_a_expands_to_page() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   // Type an outer paragraph, then create a code block below it.
   app.type_text("id:mica-editor-ime-sink", "OuterKeepLine").unwrap();
@@ -776,7 +776,7 @@ fn regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   let mut paste = nsh_core::PasteEvent::default();
   paste.text = "| 编号 | **待确认事项** | 责任方 |\n| --- | --- | --- |\n| IDC-01 | **单机柜可用功率** (kW/柜) | IDC |\n| NET-02 | Q3400-RA / 200G / 接入交换机准确型号与端口 | 网络供应商 |".into();
@@ -952,7 +952,7 @@ fn regression_usage_statistics_dashboard_and_live_updates() {
 
   // 1. Create a fresh page so local activity records at least 1 creation today.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   // 2. Open AccountMenu -> click "使用统计" shortcut to jump straight to Settings -> 使用统计.
   app.press("id:account-menu-btn").unwrap();
@@ -1225,7 +1225,7 @@ fn regression_sidebar_folders_collapse_on_workspace_open_and_table_spacing_is_co
 
   // 2. Table vertical spacing matches standard prose spacing and right/bottom `+` bars are slim.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   let mut paste = nsh_core::PasteEvent::default();
   paste.text = "上文标准段落\n\n| 列A | 列B |\n| --- | --- |\n| 值1 | 值2 |\n\n下文标准段落".into();
@@ -2096,7 +2096,7 @@ fn regression_table_default_fits_page_live_column_drag_and_right_edge_resize() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   // Paste a 5-column table with long Chinese/English content (same class as the bug report).
   let mut paste = nsh_core::PasteEvent::default();
@@ -2242,7 +2242,7 @@ fn regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   // 1. Auto language detection in code block: inserting a code block starts as `auto`,
   //    and typing/pasting a shell pipeline immediately switches the badge to `bash ▾` (no `auto`).
@@ -2271,7 +2271,7 @@ fn regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons() {
   // 3. Clicking the right side of an image block shows the trailing caret and pressing Enter
   //    inserts a fresh paragraph below the image!
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   let mut img_paste = nsh_core::PasteEvent::default();
   img_paste.text = "![示例图](https://example.com/demo.png)".into();
   app.paste("id:mica-editor-ime-sink", &img_paste).unwrap();
@@ -2311,7 +2311,7 @@ fn regression_code_auto_lang_fast_backspace_image_caret_and_indent_buttons() {
 
   // 4. Toolbar & floating selection bubble menu both expose increase/decrease indent buttons.
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   let mut list_paste = nsh_core::PasteEvent::default();
   list_paste.text = "- 第一项\n- 第二项".into();
   app.paste("id:mica-editor-ime-sink", &list_paste).unwrap();
@@ -2409,7 +2409,7 @@ fn regression_image_context_menu_actions_survive_menu_close() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   let mut img_paste = nsh_core::PasteEvent::default();
   img_paste.text = test_url.clone();
@@ -2716,7 +2716,7 @@ fn regression_list_tab_code_paste_and_backspace() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   // Create a 2-item bullet list and select both items before pressing Tab.
   app.type_text("id:mica-rich-editor", "- ListHead").unwrap();
@@ -2768,7 +2768,7 @@ fn regression_list_tab_code_paste_and_backspace() {
 }
 
 /// Regression (2026-11-28):
-/// 1. New pages show the gray `"无标题"` placeholder in `page-title-input` instead of
+/// 1. New pages show the gray `"新页面"` placeholder in `page-title-input` instead of
 ///    pre-filled solid `"未命名页面"`, so typing immediately replaces the title.
 /// 2. Creating a new page creates strictly one page with no numeric suffix.
 /// 3. Renaming a folder via context menu -> modal updates the tree cleanly and does not revert.
@@ -2823,21 +2823,21 @@ fn regression_untitled_placeholder_folder_rename_and_batch_delete() {
 
   app.press("id:sidebar-root-drop-zone").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
   app.wait_for("id:sidebar-row-2").unwrap();
   assert!(
-    !app.screen().texts().iter().any(|t| t.starts_with("未命名页面 ")),
+    !app.screen().texts().iter().any(|t| t.starts_with("新页面 ")),
     "new page must not carry a numeric suffix: {:?}",
     app.screen().texts()
   );
 
-  // Page title input starts empty (gray placeholder `"无标题"`); typing directly yields exact title.
-  app.wait_for("无标题").unwrap();
+  // Page title input starts empty (gray placeholder `"新页面"`); typing directly yields exact title.
+  app.wait_for("新页面").unwrap();
   app.type_text("id:page-title-input", "直接输入标题").unwrap();
   app.wait_for("直接输入标题").unwrap();
   assert!(
-    !app.shows("未命名页面直接输入标题"),
-    "typing into a new page title input must not concatenate with 未命名页面"
+    !app.shows("新页面直接输入标题"),
+    "typing into a new page title input must not concatenate with 新页面"
   );
 
   // Rename `新文件夹` (`sidebar-row-1`) via hover menu -> `重命名` modal -> stays `架构归档`.
@@ -3334,7 +3334,7 @@ fn regression_image_compact_hover_toolbar_and_frameless_lightbox() {
 
   app.wait_for("欢迎使用 Mica").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("未命名页面").unwrap();
+  app.wait_for("新页面").unwrap();
 
   let mut img_paste = nsh_core::PasteEvent::default();
   img_paste.text = test_url;

@@ -578,7 +578,7 @@ fn favorites_section(
               for (idx, (doc_id, raw_name)) in items.into_iter().enumerate() {
                 let select_cb = cb_dyn.clone();
                 let is_active = curr == Some(doc_id);
-                let display_name = if raw_name.trim().is_empty() { "无标题".to_string() } else { raw_name.clone() };
+                let display_name = if raw_name.trim().is_empty() { "新页面".to_string() } else { raw_name.clone() };
                 let icon_emoji = tree_dyn
                   .borrow()
                   .get(doc_id)
@@ -924,7 +924,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
   let row_label = computed(move || {
     row_info
       .get()
-      .map(|r| if r.name.trim().is_empty() { "无标题".to_string() } else { r.name })
+      .map(|r| if r.name.trim().is_empty() { "新页面".to_string() } else { r.name })
       .unwrap_or_default()
   });
   let indent_px = computed(move || row_info.get().map(|r| 2.0 + (r.depth as f32) * 16.0).unwrap_or(2.0));
@@ -1379,7 +1379,7 @@ fn start_active_drag(
   let lead_id = dragged_ids.first().copied().unwrap_or(source_view_id);
   let lead = visible.iter().find(|r| r.view_id == lead_id);
   let lead_name = lead
-    .map(|r| if r.name.trim().is_empty() { "无标题".to_string() } else { r.name.clone() })
+    .map(|r| if r.name.trim().is_empty() { "新页面".to_string() } else { r.name.clone() })
     .unwrap_or_default();
 
   refresh_tree_list_geometry(ctx);
@@ -1592,7 +1592,7 @@ fn context_menu_overlay(ctx: Rc<TreeRowContext>) -> impl IntoElement {
             .into_iter()
             .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
             .map(|r| r.name)
-            .unwrap_or_else(|| "未命名页面".to_string());
+            .unwrap_or_else(|| "新页面".to_string());
           panel = panel
             .child(menu_item_row("ctx-favorite-open-new-tab", "在新标签页打开", dark_mode, false, move || {
               context_menu.set(None); (cb_tab.on_open_in_new_tab)(doc_id, fav_title.clone());

@@ -258,7 +258,7 @@ pub(crate) fn render_top_bar(props: TopBarProps) -> impl IntoElement {
             let doc_id = tab.doc_id;
             let title_for_sel = tab.title.clone();
             let title_display = if tab.title.trim().is_empty() {
-              "未命名页面".to_string()
+              "新页面".to_string()
             } else {
               tab.title.clone()
             };

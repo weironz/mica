@@ -52,7 +52,7 @@ pub fn narrow_tab_switcher_button(
       text(move || {
         let t = active_title.get();
         if t.trim().is_empty() {
-          "未命名页面".to_string()
+          "新页面".to_string()
         } else {
           t
         }
@@ -112,7 +112,7 @@ pub fn narrow_tab_popover_view(
       let idx = item.idx;
       let doc_id = item.doc_id;
       let title = if item.title.trim().is_empty() {
-        "未命名页面".to_string()
+        "新页面".to_string()
       } else {
         item.title.clone()
       };
