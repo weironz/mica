@@ -35,6 +35,7 @@ pub mod cloud_sync;
 pub mod comment_panel;
 pub mod doc_sync_session;
 pub mod editor_bridge;
+pub mod editor_header;
 mod editor_keys;
 mod editor_overlays;
 pub mod editor_positioning;
