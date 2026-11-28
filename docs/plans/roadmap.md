@@ -6,12 +6,7 @@
 > 2. 「无 X」「不校验 Y」等否定式条目须对照代码核实，不能靠记忆。
 > 3. 核实结论写在条目内（日期 + 依据）；不另维护容易失真的重复计数表。
 > `[等用户]` 表示仅用户能解锁的发布、策略或实机验证；不是尚未排期。
-> 2026-11-28 复核：安装包的隔离与上一版覆盖升级冒烟（`scripts/smoke-installer.ps1 -UpgradeFrom` / `scripts/release-canary.sh`）已于 2026-11-25 闭环并移入 [roadmap-done.md](roadmap-done.md)；当前路线图仅余以下 2 项外部依赖项。
-
-## SDK 与代码结构
-
-- `[等用户]` `mica-md` npm 公开发布（S，2026-11-28 核实：crates.io 已发布 [`mica-board 0.1.0`](https://crates.io/crates/mica-board) 与 [`mica-md 0.1.0`](https://crates.io/crates/mica-md)，tag `mica-md-v0.1.0`；仅余 `packages/mica-md-js` 待用户执行 `pnpm adduser --registry https://registry.npmjs.org` 与 `pnpm publish --access public`）。
-  见 [S5 发布手册](../single-source/stages/S5-sdk-release.md)。
+> 2026-11-28 复核：安装包的隔离与上一版覆盖升级冒烟（`scripts/smoke-installer.ps1 -UpgradeFrom` / `scripts/release-canary.sh`）已于 2026-11-25 闭环，`mica-board 0.1.0` / `mica-md 0.1.0`（crates.io + npm）已于 2026-11-28 全部公开发布并移入 [roadmap-done.md](roadmap-done.md)；当前路线图仅余以下 1 项外部依赖项。
 
 ## yrs 输入兜底
 
