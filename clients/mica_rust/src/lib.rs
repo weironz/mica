@@ -21,6 +21,8 @@ pub mod ai_dialog;
 mod app_chrome;
 pub mod app_menu;
 mod app_modals;
+mod app_overlays;
+mod app_state;
 mod app_transfer_io;
 pub mod atomic_blocks;
 mod block_atomic_views;
@@ -99,25 +101,25 @@ pub(crate) use crate::app_modals::{
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app_modals::record_startup_probe_once;
 use crate::{
-  ai_dialog::{AiTarget, InlineAiPhase},
+  ai_dialog::InlineAiPhase,
   app_chrome::{EmbeddedBoardEdit, TopBarProps},
   app_menu::{AccountMenuState, AppMenuCallbacks},
   app_modals::{
     AiDialogsCtx, ShareModalCtx, WsSwitcherCtx, build_ai_dialog_states, build_share_dialog_state,
     build_ws_switcher_callbacks,
   },
-  app_transfer_io::{AppTransferContext, AppTransferHandlers, CrossWorkspaceTransferCtx},
+  app_overlays::AppOverlaysProps,
+  app_state::{AiSignals, DocSyncSignals, ModalSignals, ShareModalSignals},
+  app_transfer_io::{AppTransferContext, AppTransferHandlers},
   block_views::{
     CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback,
     OpenMicaPageCallback,
   },
   editor_bridge::MicaDocumentBridge,
   editor_view::EditorHeaderProps,
-  graph_dialog::PageGraphData,
   mica_theme::{install_mica_theme, palette},
   net::{CloudConfig, CloudConnector},
   right_sidebar::{BacklinkEntry, RightSidebarExtras, RightSidebarProps, ToolsTab},
-  search_view::{SearchRecentItem, SearchViewProps, SearchWorkspaceChip},
   sidebar::{SidebarCallbacks, WorkspaceSwitcherItem},
   storage::{DEFAULT_ORIGIN, VaultStore},
   transfer::{ArchiveExportFormat, ImportedPageSpec},
@@ -376,27 +378,36 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   }
 
   // Overlays & modals
-  let app_menu_open = signal(false);
-  let about_modal_open = signal(false);
-  let world_switcher_open = signal(!allow_local);
-  let world_can_close = signal(allow_local);
-  let search_modal_open = signal(false);
-  let search_initial_query: Signal<Option<String>> = signal(None);
-  let search_open_in_new_tab = signal(false);
-  let settings_modal_open = signal(false);
-  let workspace_menu_open = signal(false);
-  let workspace_settings_open = signal(false);
-  let account_menu_open = signal(false);
-  let new_tab_menu_open = signal(false);
-  let graph_modal_open = signal(false);
-  let graph_data = signal(PageGraphData::default());
-  let version_modal_open = signal(false);
-  let share_modal_open = signal(false);
-  let transfer_modal_open = signal(false);
-  let transfer_copy_mode = signal(false);
-  let transfer_source_ids: Signal<Vec<Uuid>> = signal(Vec::new());
-  let embedded_board_edit: Signal<Option<EmbeddedBoardEdit>> = signal(None);
-  let update_status = signal(String::new());
+  let modals = ModalSignals::new(allow_local);
+  let ModalSignals {
+    app_menu_open,
+    about_modal_open,
+    world_switcher_open,
+    world_can_close,
+    search_modal_open,
+    search_initial_query,
+    search_open_in_new_tab,
+    settings_modal_open,
+    workspace_menu_open,
+    workspace_settings_open,
+    account_menu_open,
+    new_tab_menu_open,
+    graph_modal_open,
+    graph_data,
+    version_modal_open,
+    share_modal_open,
+    transfer_modal_open,
+    transfer_copy_mode,
+    transfer_source_ids,
+    embedded_board_edit,
+    update_status,
+    sidebar_rename_open,
+    sidebar_rename_view,
+    sidebar_rename_initial,
+    sidebar_emoji_open,
+    sidebar_emoji_view,
+    sidebar_emoji_current,
+  } = modals;
 
   // Editor display & preferences signals
   let page_width_sig = signal(init_page_width);
@@ -503,14 +514,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let app_owner = Owner::current();
   preview_render::init_preview_owner(app_owner);
 
-  // Root-mounted sidebar rename & emoji picker modal state (avoids 280px sidebar clipping)
-  let sidebar_rename_open = signal(false);
-  let sidebar_rename_view: Signal<Option<Uuid>> = signal(None);
-  let sidebar_rename_initial = signal(String::new());
-  let sidebar_emoji_open = signal(false);
-  let sidebar_emoji_view: Signal<Option<Uuid>> = signal(None);
-  let sidebar_emoji_current: Signal<Option<String>> = signal(None);
-
   // Tabs (with per-tab history)
   let open_tabs = signal(
     initial_doc_id
@@ -604,29 +607,33 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let doc_save_gen = signal(0u64);
   let doc_dirty_gen = signal(0u64);
 
-  // Share dialog state
-  let share_loading = signal(false);
-  let share_busy = signal(false);
-  let share_enabled = signal(false);
-  let share_token: Signal<Option<String>> = signal(None);
-  let share_error: Signal<Option<String>> = signal(None);
+  // Share & AI dialogs state
+  let share_sigs = ShareModalSignals::new();
+  let ShareModalSignals {
+    loading: share_loading,
+    busy: share_busy,
+    enabled: share_enabled,
+    token: share_token,
+    error: share_error,
+  } = share_sigs;
 
-  // AI dialogs state
-  let global_ai_open = signal(false);
-  let global_ai_prompt = signal(String::new());
-  let global_ai_target = signal(AiTarget::NewPage);
-  let global_ai_output = signal(String::new());
-  let global_ai_streaming = signal(false);
-  let global_ai_done = signal(false);
-  let global_ai_error: Signal<Option<String>> = signal(None);
-
-  let inline_ai_open = signal(false);
-  let inline_ai_prompt = signal(String::new());
-  let inline_ai_context = signal(String::new());
-  let inline_ai_allow_replace = signal(true);
-  let inline_ai_output = signal(String::new());
-  let inline_ai_phase = signal(InlineAiPhase::Idle);
-  let inline_ai_error: Signal<Option<String>> = signal(None);
+  let ai_sigs = AiSignals::new();
+  let AiSignals {
+    global_open: global_ai_open,
+    global_prompt: global_ai_prompt,
+    global_target: global_ai_target,
+    global_output: global_ai_output,
+    global_streaming: global_ai_streaming,
+    global_done: global_ai_done,
+    global_error: global_ai_error,
+    inline_open: inline_ai_open,
+    inline_prompt: inline_ai_prompt,
+    inline_context: inline_ai_context,
+    inline_allow_replace: inline_ai_allow_replace,
+    inline_output: inline_ai_output,
+    inline_phase: inline_ai_phase,
+    inline_error: inline_ai_error,
+  } = ai_sigs;
 
   // Virtualized `mica-editor` <-> `MicaDoc` CRDT Bridge
   let initial_md = initial_doc_id
@@ -676,11 +683,14 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     inline_ai_open.set(true);
   })));
 
-  let doc_sync_phase = signal(mica_sync::SyncPhase::Offline);
-  let doc_presence_users: Signal<Vec<mica_sync::PresenceUser>> = signal(Vec::new());
-  let doc_sync_badge = signal(String::new());
-  let doc_loading = signal(false);
-  let doc_load_error: Signal<Option<String>> = signal(None);
+  let doc_sync_sigs = DocSyncSignals::new();
+  let DocSyncSignals {
+    phase: doc_sync_phase,
+    presence_users: doc_presence_users,
+    badge: doc_sync_badge,
+    loading: doc_loading,
+    load_error: doc_load_error,
+  } = doc_sync_sigs;
   let doc_sync = doc_sync_session::DocSyncController::new(
     vault.clone(),
     bridge.clone(),
@@ -2805,129 +2815,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   });
 
   // Desktop auto-updater state + callbacks (Web reports server-managed updates)
-  let available_update: Signal<Option<updater::UpdateInfo>> = signal(None);
-  let update_busy = signal(false);
-  #[cfg(not(target_arch = "wasm32"))]
-  let update_check_gen = signal(0u64);
-
-  let run_check_update: Rc<dyn Fn(bool)> = Rc::new(move |open_dialog: bool| {
-    if open_dialog {
-      about_modal_open.set(true);
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-      update_status.set(format!("Web 版随服务器自动更新（v{APP_VERSION}）"));
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-      if update_busy.get_untracked() {
-        return;
-      }
-      let epoch = update_check_gen.get_untracked().wrapping_add(1);
-      update_check_gen.set(epoch);
-      update_busy.set(true);
-      update_status.set("正在检查更新…".to_string());
-      app_owner.run(move || {
-        spawn(async move {
-          let res = net::run_blocking(|| updater::check_for_update_blocking(APP_VERSION)).await;
-          if update_check_gen.get_untracked() != epoch {
-            return;
-          }
-          update_busy.set(false);
-          match res {
-            Ok(Some(info)) => {
-              let ver = info.version.clone();
-              available_update.set(Some(info));
-              update_status.set(format!("发现新版本 v{ver}（当前 v{APP_VERSION}）"));
-            }
-            Ok(None) => {
-              available_update.set(None);
-              update_status.set(format!("已是最新版本（v{APP_VERSION}）"));
-            }
-            Err(err) => update_status.set(format!("检查更新失败：{err}")),
-          }
-        });
-      });
-    }
-  });
-
-  let on_install_update: Rc<dyn Fn()> = {
-    let br_upd = bridge.clone();
-    Rc::new(move || {
-      #[cfg(target_arch = "wasm32")]
-      {
-        let _ = &br_upd;
-        update_status.set(format!("Web 版随服务器自动更新（v{APP_VERSION}）"));
-      }
-      #[cfg(not(target_arch = "wasm32"))]
-      {
-        if update_busy.get_untracked() {
-          return;
-        }
-        let Some(info) = available_update.get_untracked() else {
-          return;
-        };
-        if !updater::update_supported() {
-          update_status.set(updater::UpdateError::UnsupportedPlatform.to_string());
-          return;
-        }
-        br_upd.flush_pending_persist();
-        update_busy.set(true);
-        let ver = info.version.clone();
-        update_status.set(format!("正在下载并校验 v{ver} 安装包…"));
-        let pid = std::process::id();
-        app_owner.run(move || {
-          spawn(async move {
-            let res = net::run_blocking(move || {
-              updater::download_and_launch_installer_blocking(&info, pid, |_| {})
-            })
-            .await;
-            match res {
-              Ok(_) => {
-                update_status.set(format!("正在启动 v{ver} 安装程序并重启…"));
-                std::process::exit(0);
-              }
-              Err(err) => {
-                update_busy.set(false);
-                update_status.set(err.to_string());
-              }
-            }
-          });
-        });
-      }
-    })
-  };
-
-  if allow_local {
-    provide_context(sidebar::SidebarUpdateState {
-      available_update,
-      update_busy,
-      update_status,
-      on_click_update: Rc::new(move || {
-        about_modal_open.set(true);
-      }),
-    });
-  }
-
-  // Gentle non-intrusive startup update check on desktop (5s delay).
-  #[cfg(not(target_arch = "wasm32"))]
-  {
-    app_owner.run(move || {
-      spawn(async move {
-        timer(std::time::Duration::from_secs(5)).await;
-        if update_busy.get_untracked() || available_update.get_untracked().is_some() {
-          return;
-        }
-        if let Ok(Some(info)) =
-          net::run_blocking(|| updater::check_for_update_blocking(APP_VERSION)).await
-        {
-          let ver = info.version.clone();
-          available_update.set(Some(info));
-          update_status.set(format!("发现新版本 v{ver}"));
-        }
-      });
-    });
-  }
+  let updater_bundle = app_overlays::init_desktop_updater(app_owner, allow_local, modals, bridge.clone());
+  let run_check_update = updater_bundle.run_check_update.clone();
 
   // App Menu, Account Menu, World Switcher, Version History, Share, AI & Workspace Settings states
   let app_menu_cb = AppMenuCallbacks {
@@ -3422,43 +3311,14 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   // Clones for UI tree
   let sel_for_tabs = on_select_doc.clone();
   let close_tab_ui = on_close_tab_at.clone();
-  let new_page_tab = on_new_page.clone();
-  let open_search_tab = on_open_search_with.clone();
-  let tree_search = tree.clone();
-  let docs_search = docs_store.clone();
-  let tree_graph = tree.clone();
-  let br_embed = bridge.clone();
-  let v_transfer = vault.clone();
-  let br_transfer = bridge.clone();
-  let docs_transfer = docs_store.clone();
-  let cc_transfer = cloud_connector.clone();
-  let cs_transfer = cloud_session.clone();
-  let reload_transfer = reload_tree_from_vault.clone();
-  let narrow_tab_count = signal(open_tabs.get_untracked().len().max(1));
-  let narrow_tab_entries: Signal<Vec<responsive_shell::NarrowTabEntry>> = signal(Vec::new());
-  effect(move || {
-    let tabs = open_tabs.get();
-    let active_idx = active_tab_idx.get();
-    narrow_tab_count.set(tabs.len().max(1));
-    narrow_tab_entries.set(
-      tabs
-        .into_iter()
-        .enumerate()
-        .map(|(idx, t)| responsive_shell::NarrowTabEntry {
-          idx,
-          doc_id: t.doc_id,
-          title: t.title,
-          active: idx == active_idx,
-        })
-        .collect(),
-    );
-  });
+  let (narrow_tab_count, narrow_tab_entries) =
+    app_overlays::bind_narrow_tab_signals(open_tabs, active_tab_idx);
 
   cloud_session.restore_startup_session();
 
   let zoom_wheel = zoom_ctrl.clone();
   let inline_rename_up = sidebar_inline_rename_ctl.clone();
-  view()
+  let root = view()
     .flex_1()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
@@ -3699,220 +3559,53 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       },
       on_close_tab_at.clone(),
       on_new_page.clone(),
-    ))
-    // 3. New-Tab `+` 2-item popup menu
-    .child(when(move || new_tab_menu_open.get(), {
-      let np = new_page_tab.clone();
-      let os = open_search_tab.clone();
-      move || {
-        app_chrome::render_new_tab_menu_popover(
-          new_tab_menu_open,
-          dark_mode,
-          np.clone(),
-          os.clone(),
-        )
-      }
-    }))
-    // 4. Top-left Application Menu & About modal
-    .child(app_menu::app_menu_popover(app_menu_open, dark_mode, app_menu_cb))
-    .child(app_menu::about_modal_view(app_menu::AboutModalProps {
-      open: about_modal_open,
+    ));
+
+  app_overlays::mount_app_overlays(
+    root,
+    AppOverlaysProps {
+      app_owner,
+      allow_local,
       dark_mode,
-      app_version: APP_VERSION,
-      show_check_update: allow_local,
-      update_status,
-      available_update,
-      update_busy,
-      on_check_update: {
-        let chk = run_check_update.clone();
-        Rc::new(move || chk(false))
-      },
-      on_install_update,
-    }))
-    // 5. 320px Workspace Switcher Popover & Stacked-Card Account Menu Popover
-    .child(sidebar::workspace_switcher_popover(
-      workspace_menu_open,
-      ws_switcher_items,
+      vault,
+      tree,
+      docs_store,
+      bridge,
+      cloud_connector,
+      cloud_session,
+      modals,
+      is_cloud_signed_in,
+      server_url,
+      account_email,
+      active_origin,
       active_workspace_id,
-      dark_mode,
-      ws_switcher_cb,
-    ))
-    .child(app_menu::account_menu_popover(account_menu_open, dark_mode, account_menu_state))
-    // 6. Full-Window Split World Switcher (`切换世界…`)
-    .child(world_switcher::world_switcher_overlay(world_state))
-    // 7. Workspace Settings, Knowledge Graph (900×640), Version History Diff (980×640), Share (440px)
-    .child(workspace_views::workspace_settings_modal(ws_settings_state, dark_mode))
-    .child(graph_dialog::graph_dialog_modal(
-      graph_modal_open,
-      graph_data,
+      workspace_name,
+      workspaces,
       active_doc,
-      dark_mode,
-      {
-        let sel = on_select_doc.clone();
-        Rc::new(move |doc_id: Uuid| {
-          let title = tree_graph
-            .borrow()
-            .all_live_rows()
-            .into_iter()
-            .find(|r| !r.is_folder && r.object_id == doc_id)
-            .map(|r| r.name)
-            .unwrap_or_else(|| "新页面".to_string());
-          graph_modal_open.set(false);
-          sel(doc_id, title);
-        })
-      },
-      Rc::new(move || graph_modal_open.set(false)),
-    ))
-    .child(version_history::version_history_dialog(version_history_state, dark_mode))
-    .child(share_dialog::share_dialog_modal(share_state, dark_mode))
-    // 8. Global & Inline AI Dialogs
-    .child(ai_dialog::global_ai_dialog(global_ai_state, dark_mode))
-    .child(ai_dialog::inline_ai_dialog(inline_ai_state, dark_mode))
-    // 9. Cross-Workspace Transfer Dialog (440px)
-    .child(when(move || transfer_modal_open.get(), {
-      let vt = v_transfer.clone();
-      let br = br_transfer.clone();
-      let docs = docs_transfer.clone();
-      let cc = cc_transfer.clone();
-      let cs = cs_transfer.clone();
-      let rel = reload_transfer.clone();
-      move || {
-        let state = app_transfer_io::build_transfer_dialog_state(CrossWorkspaceTransferCtx {
-          app_owner,
-          vault: vt.clone(),
-          bridge: br.clone(),
-          docs_store: docs.clone(),
-          cloud_connector: cc.clone(),
-          cloud_session: cs.clone(),
-          allow_local,
-          is_cloud_signed_in,
-          server_url,
-          account_email,
-          reload_tree: rel.clone(),
-          active_workspace_id,
-          active_origin,
-          workspaces,
-          transfer_source_ids,
-          transfer_copy_mode,
-          transfer_modal_open,
-        });
-        transfer_dialog::transfer_dialog_modal(state, dark_mode)
-      }
-    }))
-    // 9b. Root-mounted Sidebar Rename & Emoji Picker modals (centered over full window, never clipped by 280px sidebar)
-    .child(sidebar::rename_dialog_modal(
-      sidebar_rename_open,
-      sidebar_rename_initial,
-      "重命名",
-      dark_mode,
-      {
-        let on_ren = on_rename_view.clone();
-        Rc::new(move |new_name: String| {
-          if let Some(vid) = sidebar_rename_view.get_untracked() {
-            on_ren(vid, new_name);
-          }
-          sidebar_rename_open.set(false);
-          sidebar_rename_view.set(None);
-        })
-      },
-      Rc::new(move || {
-        sidebar_rename_open.set(false);
-        sidebar_rename_view.set(None);
-      }),
-    ))
-    .child(emoji_picker::emoji_picker_modal(
-      sidebar_emoji_open,
-      sidebar_emoji_current,
-      dark_mode,
-      {
-        let on_ic = on_set_icon;
-        Rc::new(move |picked: Option<String>| {
-          if let Some(vid) = sidebar_emoji_view.get_untracked() {
-            on_ic(vid, picked);
-          }
-          sidebar_emoji_open.set(false);
-          sidebar_emoji_view.set(None);
-        })
-      },
-      Rc::new(move || {
-        sidebar_emoji_open.set(false);
-        sidebar_emoji_view.set(None);
-      }),
-    ))
-    // 10. Search Modal (600×440) & Settings Modal (1120×840)
-    .child(when(move || search_modal_open.get(), {
-      let ts = tree_search.clone();
-      let ds = docs_search.clone();
-      let od = on_select_doc.clone();
-      let od_new = on_open_in_new_tab.clone();
-      let sw = on_switch_workspace.clone();
-      move || {
-        let cur_ws = active_workspace_id.get_untracked();
-        let ws_chips: Vec<SearchWorkspaceChip> = workspaces
-          .get_untracked()
-          .into_iter()
-          .map(|w| SearchWorkspaceChip {
-            id: w.id,
-            name: w.name,
-          })
-          .collect();
-        let recents: Vec<SearchRecentItem> = ts
-          .borrow()
-          .all_live_rows()
-          .into_iter()
-          .filter(|r| !r.is_folder)
-          .take(6)
-          .map(|r| SearchRecentItem {
-            view_id: r.view_id,
-            document_id: r.object_id,
-            title: r.name,
-            icon: r.icon,
-            relative_time: "最近编辑".to_string(),
-          })
-          .collect();
-        let open_in_new = search_open_in_new_tab.get_untracked();
-        let on_open_primary = if open_in_new { od_new.clone() } else { od.clone() };
-        let sw_c = sw.clone();
-        search_view::search_modal_view_with_props(Rc::new(SearchViewProps {
-          tree: ts.clone(),
-          docs: ds.clone(),
-          dark_mode,
-          current_workspace_id: Some(cur_ws),
-          current_workspace_name: Some(workspace_name.get_untracked()),
-          workspaces: ws_chips,
-          recents,
-          initial_query: search_initial_query.get_untracked(),
-          on_open_doc: on_open_primary,
-          on_open_doc_new_tab: Some(od_new.clone()),
-          on_reveal_folder: Some({
-            let t_rev = ts.clone();
-            Rc::new(move |fid: Uuid| {
-              t_rev.borrow_mut().set_expanded(fid, true);
-              tree_rev.set(tree_rev.get_untracked() + 1);
-            })
-          }),
-          on_switch_workspace: Some(Rc::new(move |ws_id: Uuid| {
-            if let Some(entry) = workspaces.get_untracked().into_iter().find(|w| w.id == ws_id) {
-              sw_c(entry);
-            }
-          })),
-          on_close: Rc::new(move || search_modal_open.set(false)),
-        }))
-      }
-    }))
-    .child(when(move || settings_modal_open.get(), {
-      let sp = settings_props.clone();
-      move || settings_view::settings_modal_view_with_props(sp.clone())
-    }))
-    // 11. Embedded Document Board Fullscreen Modal (mounted below 34px titlebar so
-    // window min/max/close buttons never overlap; continuously auto-saves every edit
-    // back into the document block via 3-way semantic merge).
-    .child(when(move || embedded_board_edit.get().is_some(), {
-      let br_m = br_embed.clone();
-      move || app_chrome::render_embedded_board_modal(embedded_board_edit, br_m.clone(), dark_mode)
-    }))
-    // 12. Global dark-pill hover tooltip overlay (never clipped by overflow_hidden)
-    .child(tooltip::tooltip_overlay(tooltip_host, dark_mode))
-    .child(toast::toast_overlay(toast_host, dark_mode))
-    .child(zoom_controller::zoom_badge_overlay(&zoom_ctrl, dark_mode))
+      tree_rev,
+      ws_switcher_items,
+      ws_switcher_cb,
+      app_menu_cb,
+      account_menu_state,
+      world_state,
+      ws_settings_state,
+      version_history_state,
+      share_state,
+      global_ai_state,
+      inline_ai_state,
+      settings_props,
+      updater: updater_bundle,
+      tooltip_host,
+      toast_host,
+      zoom_ctrl,
+      reload_tree_from_vault,
+      on_new_page,
+      on_open_search_with,
+      on_select_doc,
+      on_open_in_new_tab,
+      on_switch_workspace,
+      on_rename_view,
+      on_set_icon,
+    },
+  )
 }
