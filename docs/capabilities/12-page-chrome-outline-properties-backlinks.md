@@ -31,7 +31,7 @@
 
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
-| `CAP-12-01` / `02` / `03` 页面顶栏、路径复制、标题联动与页面菜单 | P0 | 全端 | ✅ | `app_flows::regression_recycle_bin_hidden_copy_path_appearance_and_board_click_edit` |
+| `CAP-12-01` / `02` / `03` 页面顶栏、路径复制、标题联动与页面菜单 | P0 | 全端 | ✅ | `app_flows::regression_recycle_bin_hidden_copy_path_appearance_and_board_click_edit` + `editor_view::tests::untitled_page_titles_render_empty_input_for_gray_placeholder` + `app_flows::regression_untitled_placeholder_folder_rename_and_batch_delete` |
 | `CAP-12-04` Front-Matter 属性面板 | P1 | 全端 | ✅ | `property_panel::tests` |
 | `CAP-12-05` / `06` 右侧大纲/评论双标签与页底反链 | P1 | 桌面/Web | ✅ | `comment_panel::tests` + `right_sidebar.rs` |
 | `CAP-12-07` 双栏块级 Diff 版本历史 | P1 | 桌面/Web | ✅ | `version_history::tests` + `storage::tests::version_snapshots_increment_count_and_load_readonly_markdown` |
@@ -41,3 +41,4 @@
 ## 演进记录
 
 - **2026-11-23**：沉淀页面顶栏路径复制、属性面板、右侧大纲/评论、反向链接与块级 Diff 版本历史规格。
+- **2026-11-28**：新建/未命名页面（`""` / `"未命名页面"` / `"无标题"` / `"Untitled"`）在正文顶部 `page-title-input` 中统一映射为空输入并显示灰色占位符 `无标题`，用户无需先删除默认文字即可直接键入正式标题；清空既有页面标题时本地与云端均回落规范兜底名称 `"未命名页面"`（避免服务端空名称校验失败）。

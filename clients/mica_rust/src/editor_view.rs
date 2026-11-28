@@ -2294,7 +2294,7 @@ pub fn editor_view(
                       .font_weight(FontWeight::SEMIBOLD)
                       .text_color(move || palette(dark_mode.get()).text_primary)
                       .bg(move || palette(dark_mode.get()).surface_base)
-                      .value(move || h_val.page_title.get())
+                      .value(move || page_title_input_value(&h_val.page_title.get()))
                       .on_focus(move || {
                         if let Some(cb) = &h_foc {
                           cb(true);
@@ -2535,6 +2535,27 @@ pub fn editor_view(
 }
 
 
+/// Return `true` when `name` is an untitled sentinel (`""`, `"未命名页面"`,
+/// `"无标题"`, `"Untitled"`) that should render as the muted placeholder rather
+/// than pre-filled solid text in the page title input.
+pub(crate) fn is_default_untitled_title(name: &str) -> bool {
+  let trimmed = name.trim();
+  trimmed.is_empty()
+    || trimmed == "未命名页面"
+    || trimmed == "无标题"
+    || trimmed == "Untitled"
+}
+
+/// Value bound to the page title `<input>`: untitled sentinels map to `""` so
+/// the muted `"无标题"` placeholder is shown and typing replaces it directly.
+pub(crate) fn page_title_input_value(name: &str) -> String {
+  if is_default_untitled_title(name) {
+    String::new()
+  } else {
+    name.to_string()
+  }
+}
+
 use crate::editor_keys::{
   EditorKeyAction, apply_sink_text_diff, close_slash, empty_ime_sink, handle_clipboard_paste,
   handle_editor_key, sync_slash_palette_from_caret, toggle_block_type, try_backspace_to_title,
@@ -2570,5 +2591,17 @@ mod tests {
 
     // Styled block (heading/list) sheds style first instead of jumping to title.
     assert!(!should_backspace_to_title(true, Some(&sel0), Some(&heading)));
+  }
+
+  #[test]
+  fn untitled_page_titles_render_empty_input_for_gray_placeholder() {
+    use super::{is_default_untitled_title, page_title_input_value};
+
+    for sentinel in ["", "   ", "未命名页面", "无标题", "Untitled"] {
+      assert!(is_default_untitled_title(sentinel), "expected sentinel for {sentinel:?}");
+      assert_eq!(page_title_input_value(sentinel), "");
+    }
+    assert!(!is_default_untitled_title("纯Rust架构设计"));
+    assert_eq!(page_title_input_value("纯Rust架构设计 "), "纯Rust架构设计 ");
   }
 }

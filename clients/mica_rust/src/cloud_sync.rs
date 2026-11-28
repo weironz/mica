@@ -686,6 +686,7 @@ impl Drop for ViewOpGuard {
 /// tree refresh, and cloud CRUD mutations from `lib.rs`.
 #[derive(Clone)]
 pub(crate) struct CloudSessionHandles {
+  pub app_owner: Owner,
   pub vault: Rc<VaultStore>,
   pub tree: Rc<RefCell<PageTreeModel>>,
   pub docs_store: Rc<RefCell<HashMap<Uuid, String>>>,
@@ -740,7 +741,63 @@ pub(crate) struct CloudSessionHandles {
   pub open_doc_internal: Rc<dyn Fn(Uuid, String, bool, bool)>,
 }
 
+pub(crate) fn dedup_view_ids(ids: Vec<Uuid>) -> Vec<Uuid> {
+  let mut unique = Vec::with_capacity(ids.len());
+  let mut seen = HashSet::new();
+  for id in ids {
+    if seen.insert(id) {
+      unique.push(id);
+    }
+  }
+  unique
+}
+
 impl CloudSessionHandles {
+  /// Spawn a cloud async task under the long-lived application `Owner` so closing
+  /// transient UI scopes (modals, context menus, popovers, hover strips) never
+  /// aborts an in-flight HTTP mutation before it reaches the server.
+  pub(crate) fn spawn_on_app<F>(&self, fut: F)
+  where
+    F: Future<Output = ()> + 'static,
+  {
+    self.app_owner.run(move || {
+      spawn(fut);
+    });
+  }
+
+  /// Sync a renamed view (page or folder) to cloud with pending-title protection
+  /// so concurrent `views_changed` broadcasts cannot revert it mid-flight.
+  pub(crate) fn rename_cloud_view(
+    &self,
+    origin: &str,
+    ws_id: Uuid,
+    view_id: Uuid,
+    next_name: String,
+  ) {
+    if !is_cloud_origin(origin) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
+      self.pending_view_ops.borrow_mut().clear_pending_title(view_id);
+      return;
+    }
+    self
+      .pending_view_ops
+      .borrow_mut()
+      .set_pending_title(view_id, next_name.clone());
+    let rename_req = next_name.clone();
+    let ops_done = self.pending_view_ops.clone();
+    self.spawn_cloud_op_with_done(
+      "云端重命名",
+      move |c| {
+        let rename_req = rename_req.clone();
+        async move { c.update_view(ws_id, view_id, &rename_req, None).await.map(|_| ()) }
+      },
+      Some(Box::new(move |_ok| {
+        ops_done
+          .borrow_mut()
+          .clear_pending_title_if_matches(view_id, &next_name);
+      })),
+    );
+  }
+
   /// Handle an unrecoverable cloud 401 (refresh token expired or revoked) with
   /// ownership verification so a stale request from a previous server/account
   /// can never terminate a newly signed-in session (`async-review-checklist.md` §1).
@@ -830,7 +887,7 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     let guard = ViewOpGuard::enter(self.clone());
-    spawn(async move {
+    self.spawn_on_app(async move {
       let _guard = guard;
       let res = with_auto_refresh(&mut conn, op).await.map(|(_, r)| (conn, r));
       let ok = res.is_ok();
@@ -1032,7 +1089,7 @@ impl CloudSessionHandles {
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let res = async {
         let ((live, trash), rot) = with_auto_refresh(&mut conn, move |c| async move {
           let live = c.list_views(ws_id).await?;
@@ -1125,7 +1182,7 @@ impl CloudSessionHandles {
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let res = fetch_cloud_workspace_snapshot(&mut conn, ws_id, preferred_doc)
         .await
         .map(|s| (conn, s));
@@ -1303,7 +1360,7 @@ impl CloudSessionHandles {
     let h = self.clone();
     let url_req = url.clone();
     let email_req = email.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: url_req,
@@ -1425,7 +1482,7 @@ impl CloudSessionHandles {
     let origin_req = origin.clone();
     let email_req = email.clone();
     let uid_req = (!saved_account_id.trim().is_empty()).then_some(saved_account_id);
-    spawn(async move {
+    self.spawn_on_app(async move {
       let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: origin_req,
@@ -1485,7 +1542,7 @@ impl CloudSessionHandles {
     let url_req = url.clone();
     let email_req = email.clone();
     let pass_req = password.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: url_req,
@@ -1540,7 +1597,7 @@ impl CloudSessionHandles {
       let auth_epoch = self.auth_gen.get_untracked();
       let h = self.clone();
       self.world_busy.set(true);
-      spawn(async move {
+      self.spawn_on_app(async move {
         // Await non-blocking `POST /api/auth/logout` so the server revokes the
         // refresh family and clears HttpOnly cookies BEFORE the sign-in gate
         // becomes interactive (immune to immediate reload).
@@ -1686,7 +1743,7 @@ impl CloudSessionHandles {
     let name_req = name.clone();
     let md_req = markdown.clone();
     let guard = ViewOpGuard::enter(self.clone());
-    spawn(async move {
+    self.spawn_on_app(async move {
       let _guard = guard;
       let res = async {
         let name_c = name_req.clone();
@@ -1807,7 +1864,7 @@ impl CloudSessionHandles {
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     let guard = ViewOpGuard::enter(self.clone());
-    spawn(async move {
+    self.spawn_on_app(async move {
       let _guard = guard;
       let res = async {
         let name_c = name.clone();
@@ -1904,7 +1961,7 @@ impl CloudSessionHandles {
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let res = with_auto_refresh(&mut conn, move |c| {
         let n = name.clone();
         async move { c.create_workspace(&n).await }
@@ -1956,7 +2013,7 @@ impl CloudSessionHandles {
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let res = async {
         let mut folder_cache: HashMap<(Option<Uuid>, String), Uuid> = HashMap::new();
         let mut created_views: Vec<View> = Vec::new();
@@ -2095,7 +2152,7 @@ impl CloudSessionHandles {
     let h = self.clone();
     let origin_req = origin.clone();
     let preauth_json = crate::web_runtime::take_web_preauth_json();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let outcome = async {
         let mut conn = CloudConnector::new(CloudConfig {
           server_url: origin_req,
@@ -2173,7 +2230,7 @@ impl CloudSessionHandles {
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
-    spawn(async move {
+    self.spawn_on_app(async move {
       let res = async {
         let (usage, mut rot) =
           match with_auto_refresh(&mut conn, move |c| async move { c.workspace_usage(ws_id).await })
@@ -2514,5 +2571,151 @@ mod tests {
     );
     ops.clear_pending_title_if_matches(vid, "测试abc标题");
     assert_eq!(ops.pending_title_for(vid), None);
+
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    assert_eq!(dedup_view_ids(vec![a, b, a, b]), vec![a, b]);
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn cloud_rename_and_batch_trash_survive_disposed_when_scope_owner() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use nsh_core::geometry::{px, size};
+    use nsh_engine::{EngineConfig, Root};
+    use nsh_testing::Headless;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock view ops server");
+    let addr = listener.local_addr().unwrap();
+    let recorded_methods: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded_srv = Arc::clone(&recorded_methods);
+    let view_id = Uuid::new_v4();
+    let ws_id = Uuid::new_v4();
+
+    let server_thread = std::thread::spawn(move || {
+      for _ in 0..2 {
+        let Ok((mut stream, _)) = listener.accept() else {
+          break;
+        };
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+        let mut raw = Vec::new();
+        let mut chunk = [0u8; 2048];
+        let mut expected_total = None;
+        loop {
+          match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+              raw.extend_from_slice(&chunk[..n]);
+              if expected_total.is_none()
+                && let Some(hdr_end) = raw.windows(4).position(|w| w == b"\r\n\r\n")
+              {
+                let hdr_str = String::from_utf8_lossy(&raw[..hdr_end]);
+                let content_len = hdr_str
+                  .lines()
+                  .find_map(|line| {
+                    let (k, v) = line.split_once(':')?;
+                    k.eq_ignore_ascii_case("content-length")
+                      .then(|| v.trim().parse::<usize>().ok())
+                      .flatten()
+                  })
+                  .unwrap_or(0);
+                expected_total = Some(hdr_end + 4 + content_len);
+              }
+              if expected_total.is_some_and(|need| raw.len() >= need) {
+                break;
+              }
+            }
+          }
+        }
+        if raw.is_empty() {
+          continue;
+        }
+        let req = String::from_utf8_lossy(&raw);
+        let first_line = req.lines().next().unwrap_or("").to_string();
+        let (status, body) = if first_line.starts_with("PATCH ") {
+          (
+            "200 OK",
+            format!(
+              r#"{{"view":{{"id":"{view_id}","workspace_id":"{ws_id}","parent_view_id":null,"object_id":"{view_id}","object_type":"folder","name":"架构归档","icon":null,"position":"0000000010","is_deleted":false,"created_by":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-28T00:00:00Z","updated_at":"2026-11-28T00:00:00Z"}}}}"#
+            ),
+          )
+        } else {
+          ("200 OK", r#"{"affected":1,"skipped":[]}"#.to_string())
+        };
+        recorded_srv.lock().unwrap().push(first_line);
+        let resp = format!(
+          "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
+      }
+    });
+
+    static MOCK_TARGET: std::sync::Mutex<Option<(String, Uuid, Uuid)>> =
+      std::sync::Mutex::new(None);
+    *MOCK_TARGET.lock().unwrap() = Some((format!("http://{addr}"), ws_id, view_id));
+
+    #[nsh_core::prelude::component]
+    fn DisposedModalCloudOpHarness() -> impl IntoElement {
+      let app_owner = Owner::current();
+      let modal_open = signal(true);
+      let done_count = signal(0usize);
+      let (base_url, ws_id, view_id) = MOCK_TARGET.lock().unwrap().clone().expect("mock target set");
+
+      view()
+        .flex_1()
+        .child(text(move || format!("done-{}", done_count.get())))
+        .child(when(move || modal_open.get(), move || {
+          let base = base_url.clone();
+          nsh_base::button()
+            .test_id("trigger-modal-cloud-ops")
+            .on_press(move || {
+              modal_open.set(false);
+              let base_c = base.clone();
+              app_owner.run(move || {
+                spawn(async move {
+                  nsh_core::prelude::next_frame().await;
+                  nsh_core::prelude::next_frame().await;
+                  let conn = CloudConnector::new(CloudConfig {
+                    server_url: base_c,
+                    access_token: Some("tok".to_string()),
+                    email: Some("w@mica.dev".to_string()),
+                  });
+                  conn
+                    .update_view(ws_id, view_id, "架构归档", None)
+                    .await
+                    .expect("mock PATCH /views must succeed");
+                  conn
+                    .batch_trash_views(ws_id, &[view_id])
+                    .await
+                    .expect("mock POST /views/batch-trash must succeed");
+                  done_count.set(2);
+                });
+              });
+            })
+            .child(text("提交云端变更"))
+        }))
+    }
+
+    let mut config = EngineConfig::new(Root::of::<DisposedModalCloudOpHarness>());
+    config.viewport = size(px(400.0), px(300.0));
+    let mut app = Headless::start(config).unwrap();
+    app.wait_for("id:trigger-modal-cloud-ops").unwrap();
+    app.press("id:trigger-modal-cloud-ops").unwrap();
+    app.wait_for("done-2").unwrap();
+
+    let hits = recorded_methods.lock().unwrap().clone();
+    assert!(
+      hits.iter().any(|h| h.starts_with(&format!("PATCH /api/workspaces/{ws_id}/views/{view_id}"))),
+      "expected PATCH folder rename after modal closed, got: {hits:?}"
+    );
+    assert!(
+      hits.iter().any(|h| h.starts_with(&format!("POST /api/workspaces/{ws_id}/views/batch-trash"))),
+      "expected POST batch-trash after menu closed, got: {hits:?}"
+    );
+    let _ = server_thread.join();
   }
 }

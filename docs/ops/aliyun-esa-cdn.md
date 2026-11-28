@@ -219,8 +219,12 @@ done
 
 ### 1. 同源配置（与主站一致的部分）
 
-- **接入方式与回源**：在 ESA 新增站点 `s3.<YOUR_DOMAIN>`（CNAME 模式、全球加速），DNS 回源填 `<ORIGIN_IP>`、`@${host}`（即 `@`），代理加速开启；
-- **SSL/TLS**：开启边缘证书，回源加密模式选 **完全（Full）**（源站 Traefik 路由 `mica-s3` 对该域名提供 HTTPS 终止）。
+- **复用已有 ESA 站点零成本接入（推荐）**：当 `s3.mica.<DOMAIN>` 与主站 `mica.<DOMAIN>` 同属一个父域时，若主站本身为 **ESA 基础版或以上站点**，**无需为 `s3.` 再单独购买一套付费套餐**——直接在已有父域 ESA 站点下新增一条 A/AAAA 回源记录（主机记录填 `s3`，开启代理，目标为 `<ORIGIN_IP>`），通过主/子域名 Cache Rule 精确隔离缓存行为即可；
+- **独立站点方案**：若主站在免费版下不承载通配子域或需要独立隔离，可在 ESA 新增站点 `s3.<YOUR_DOMAIN>`（CNAME 模式、全球加速），DNS 回源填 `<ORIGIN_IP>`、`@${host}`（即 `@`），代理加速开启；
+- **SSL/TLS**：开启边缘证书（同一基础版站点 DigiCert 单域名配额已被主站占用时，可为 `s3.` 申请免费的 **Let's Encrypt** 边缘证书），回源加密模式选 **完全（Full）**（源站 Traefik 路由 `mica-s3` 对该域名提供 HTTPS 终止）；
+- **缓存隔离规则**：若复用主站站点，必须添加专用 Bypass 规则（如 `(http.host eq "s3.mica.<DOMAIN>")` → **全部绕过缓存** + 缓存键 **保留全部查询字符串**），确保预签名 `PUT`/`GET`/`OPTIONS` 永不与主站静态缓存规则混淆。
+
+> **生产实况（2026-11-28）**：`s3.mica.cloudcele.com` 已按「复用基础版站点 `191392438304884`（`mica.cloudcele.com`）」零增量成本方案接入 ESA（代理 CNAME `s3.mica.cloudcele.com.a2.initac.com` + `Bypass S3 Presigned` 规则 + Let's Encrypt 证书）。
 
 ### 2. 必须严格区分的 5 大核心差异（红线清单）
 

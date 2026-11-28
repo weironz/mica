@@ -13,6 +13,7 @@ use nsh_testing::Headless;
 fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
   config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
   let mut app = Headless::start(config).unwrap();
 
   // 1. Initial warm-gray workspace shell & starter document (including Rust code block!) render cleanly
@@ -56,9 +57,13 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
     app.screen().texts()
   );
 
-  // 6. Rename active page via borderless large title
+  // 6. Rename active page via borderless large title (new page starts with empty input + gray placeholder)
   app.type_text("id:page-title-input", "纯Rust架构设计").unwrap();
-  app.wait_for("未命名页面纯Rust架构设计").unwrap();
+  app.wait_for("纯Rust架构设计").unwrap();
+  assert!(
+    !app.shows("未命名页面纯Rust架构设计"),
+    "typing into a new page title must not prepend literal 未命名页面"
+  );
 
   // 7. Toolbar formatting, Favorites pinned section, Slash menu (Code Block & Table & Divider) + Undo
   app.press("id:ed-star").unwrap();
@@ -94,7 +99,7 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.type_text("id:search-query-input", "纯Rust").unwrap();
   app.wait_for("找到 1 条与 \"纯Rust\" 相关的结果").unwrap();
   app.press("id:search-hit-0").unwrap();
-  app.wait_for("未命名页面纯Rust架构设计").unwrap();
+  app.wait_for("纯Rust架构设计").unwrap();
 
   // 11. 1120×840 Two-column Settings Modal: Appearance, Cloud Account, Data Export, Shortcuts
   app.press("id:open-settings-btn").unwrap();
@@ -2653,4 +2658,134 @@ fn regression_list_tab_code_paste_and_backspace() {
   app.press_key("backspace").unwrap();
   app.settle();
   app.wait_for("  line_one\nline_past").unwrap();
+}
+
+/// Regression (2026-11-28):
+/// 1. New pages show the gray `"无标题"` placeholder in `page-title-input` instead of
+///    pre-filled solid `"未命名页面"`, so typing immediately replaces the title.
+/// 2. Creating a new page creates strictly one page with no numeric suffix.
+/// 3. Renaming a folder via context menu -> modal updates the tree cleanly and does not revert.
+/// 4. Shift-range selecting a page and folder, deleting them, and then creating a new folder
+///    never resurrects the deleted items.
+#[test]
+fn regression_untitled_placeholder_folder_rename_and_batch_delete() {
+  use nsh_core::{
+    EventKind, EventPayload, PressEvent,
+    geometry::point,
+    keymap::Modifiers,
+  };
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  let click_row_with_mods = |app: &mut Headless, test_id: &str, mods: Modifiers| {
+    let node = app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .find(|n| n.test_id.as_deref() == Some(test_id))
+      .unwrap_or_else(|| panic!("{test_id} must be laid out"));
+    let center_local = point(px(node.bounds.size.width.0 * 0.5), px(node.bounds.size.height.0 * 0.5));
+    let center_page = point(
+      node.bounds.origin.x + center_local.x,
+      node.bounds.origin.y + center_local.y,
+    );
+    app.engine().control().dispatch_event(
+      node.id,
+      EventKind::Press,
+      EventPayload::Press(PressEvent {
+        position: center_local,
+        page_position: center_page,
+        modifiers: mods,
+        clicks: 1,
+      }),
+    );
+    app.settle();
+  };
+
+  // Focus workspace root (`sidebar-root-drop-zone`), then create a root folder (`row 1`)
+  // and a root sibling page (`row 2`).
+  app.press("id:sidebar-root-drop-zone").unwrap();
+  app.press("id:new-folder-btn").unwrap();
+  app.wait_for("新文件夹").unwrap();
+  app.wait_for("id:sidebar-row-1").unwrap();
+
+  app.press("id:sidebar-root-drop-zone").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面").unwrap();
+  app.wait_for("id:sidebar-row-2").unwrap();
+  assert!(
+    !app.screen().texts().iter().any(|t| t.starts_with("未命名页面 ")),
+    "new page must not carry a numeric suffix: {:?}",
+    app.screen().texts()
+  );
+
+  // Page title input starts empty (gray placeholder `"无标题"`); typing directly yields exact title.
+  app.wait_for("无标题").unwrap();
+  app.type_text("id:page-title-input", "直接输入标题").unwrap();
+  app.wait_for("直接输入标题").unwrap();
+  assert!(
+    !app.shows("未命名页面直接输入标题"),
+    "typing into a new page title input must not concatenate with 未命名页面"
+  );
+
+  // Rename `新文件夹` (`sidebar-row-1`) via hover menu -> `重命名` modal -> stays `架构归档`.
+  app.hover("id:sidebar-row-1").unwrap();
+  app.wait_for("id:sidebar-row-menu-1").unwrap();
+  app.press("id:sidebar-row-menu-1").unwrap();
+  app.wait_for("id:ctx-rename").unwrap();
+  app.press("id:ctx-rename").unwrap();
+  app.wait_for("id:rename-dialog-input").unwrap();
+  app.type_text("id:rename-dialog-input", "").unwrap();
+  for _ in 0..4 {
+    app.press_key("backspace").unwrap();
+  }
+  app.type_text("id:rename-dialog-input", "架构归档").unwrap();
+  app.press("id:rename-dialog-save").unwrap();
+  app.wait_for("架构归档").unwrap();
+  assert!(
+    !app.shows("新文件夹"),
+    "renamed folder must not show old default name 新文件夹"
+  );
+
+  // Shift-select `架构归档` (row 1) through `直接输入标题` (row 2), batch delete both,
+  // then click `new-folder-btn`: neither deleted item may resurrect.
+  click_row_with_mods(&mut app, "sidebar-row-1", Modifiers::default());
+  click_row_with_mods(
+    &mut app,
+    "sidebar-row-2",
+    Modifiers { shift: true, ..Modifiers::default() },
+  );
+
+  app.hover("id:sidebar-row-1").unwrap();
+  app.wait_for("id:sidebar-row-menu-1").unwrap();
+  app.press("id:sidebar-row-menu-1").unwrap();
+  app.wait_for("id:ctx-batch-delete").unwrap();
+  app.press("id:ctx-batch-delete").unwrap();
+  app
+    .wait_for_gone("架构归档", std::time::Duration::from_millis(400))
+    .unwrap();
+  app
+    .wait_for_gone("id:sidebar-row-1", std::time::Duration::from_millis(400))
+    .unwrap();
+
+  app.press("id:new-folder-btn").unwrap();
+  app.wait_for("新文件夹").unwrap();
+  app.wait_for("id:sidebar-row-1").unwrap();
+  assert!(
+    !app.shows("架构归档"),
+    "deleted folder must remain deleted after creating a new folder"
+  );
+  assert!(
+    app
+      .screen()
+      .layout_nodes()
+      .iter()
+      .all(|n| n.test_id.as_deref() != Some("sidebar-row-2")),
+    "deleted page and folder must remain deleted so only 知识库 (row 0) and 新文件夹 (row 1) exist"
+  );
 }

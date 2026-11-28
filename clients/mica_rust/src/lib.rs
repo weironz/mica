@@ -722,31 +722,33 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             server_url.get_untracked(),
             account_email.get_untracked(),
           );
-          spawn(async move {
-            timer(std::time::Duration::from_millis(600)).await;
-            if doc_save_gen.get_untracked() != epoch
-              || active_origin.get_untracked() != orig
-              || active_workspace_id.get_untracked() != ws_id
-            {
-              return;
-            }
-            let mut conn = cc_a.borrow().clone();
-            let res = cloud_sync::push_cloud_document(&mut conn, ws_id, doc_id, &md)
-              .await
-              .map(|r| (conn, r));
-            if active_origin.get_untracked() != orig {
-              return;
-            }
-            match res {
-              Ok((conn, rot)) if rot.is_some() => {
-                *cc_a.borrow_mut() = conn;
-                if allow_local {
-                  cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
-                }
+          app_owner.run(move || {
+            spawn(async move {
+              timer(std::time::Duration::from_millis(600)).await;
+              if doc_save_gen.get_untracked() != epoch
+                || active_origin.get_untracked() != orig
+                || active_workspace_id.get_untracked() != ws_id
+              {
+                return;
               }
-              Ok(_) => {}
-              Err(err) => cloud_status.set(format!("云端保存失败：{err}")),
-            }
+              let mut conn = cc_a.borrow().clone();
+              let res = cloud_sync::push_cloud_document(&mut conn, ws_id, doc_id, &md)
+                .await
+                .map(|r| (conn, r));
+              if active_origin.get_untracked() != orig {
+                return;
+              }
+              match res {
+                Ok((conn, rot)) if rot.is_some() => {
+                  *cc_a.borrow_mut() = conn;
+                  if allow_local {
+                    cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+                  }
+                }
+                Ok(_) => {}
+                Err(err) => cloud_status.set(format!("云端保存失败：{err}")),
+              }
+            });
           });
         }
       })
@@ -832,72 +834,74 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let docs_a = docs_d.clone();
         let seqs_a = seqs_d.clone();
         let cloud_a = cloud_d.clone();
-        spawn(async move {
-          timer(std::time::Duration::from_millis(300)).await;
-          if doc_dirty_gen.get_untracked() != epoch
-            || active_origin.get_untracked() != orig
-            || active_doc.get_untracked() != Some(doc_id)
-          {
-            return;
-          }
-          let Some(blocks) = br_a.take_pending_export_blocks() else {
-            return;
-          };
-          let write_seq = seqs_a
-            .lock()
-            .ok()
-            .map(|mut map| {
-              let entry = map.entry((orig.clone(), doc_id)).or_insert(0);
-              *entry = entry.wrapping_add(1);
-              *entry
-            })
-            .unwrap_or(0);
-          let v_bg = (*vault_a).clone();
-          let orig_bg = orig.clone();
-          let seqs_bg = seqs_a.clone();
-          let cloud_origin_bg = if cloud_sync::is_cloud_origin(&orig) {
-            let srv = cloud_sync::canonicalize_cloud_url(&server_url.get_untracked());
-            if !srv.is_empty() {
-              Some(srv)
-            } else {
-              mica_client::web_runtime::web_origin()
+        app_owner.run(move || {
+          spawn(async move {
+            timer(std::time::Duration::from_millis(300)).await;
+            if doc_dirty_gen.get_untracked() != epoch
+              || active_origin.get_untracked() != orig
+              || active_doc.get_untracked() != Some(doc_id)
+            {
+              return;
             }
-          } else {
-            None
-          };
-          let md = net::run_blocking(move || {
-            let image_map = image_blocks::build_blocks_image_urls(
-              &blocks,
-              ws_id,
-              cloud_origin_bg.as_deref(),
-            );
-            let md = mica_editor::export_blocks_markdown(&blocks, &image_map);
-            let still_latest = seqs_bg
+            let Some(blocks) = br_a.take_pending_export_blocks() else {
+              return;
+            };
+            let write_seq = seqs_a
               .lock()
               .ok()
-              .and_then(|map| map.get(&(orig_bg.clone(), doc_id)).copied())
-              .is_none_or(|cur| cur == write_seq);
-            if still_latest && !cloud_sync::is_cloud_origin(&orig_bg) {
-              let _ = v_bg.save_markdown_tracked(
-                &orig_bg,
+              .map(|mut map| {
+                let entry = map.entry((orig.clone(), doc_id)).or_insert(0);
+                *entry = entry.wrapping_add(1);
+                *entry
+              })
+              .unwrap_or(0);
+            let v_bg = (*vault_a).clone();
+            let orig_bg = orig.clone();
+            let seqs_bg = seqs_a.clone();
+            let cloud_origin_bg = if cloud_sync::is_cloud_origin(&orig) {
+              let srv = cloud_sync::canonicalize_cloud_url(&server_url.get_untracked());
+              if !srv.is_empty() {
+                Some(srv)
+              } else {
+                mica_client::web_runtime::web_origin()
+              }
+            } else {
+              None
+            };
+            let md = net::run_blocking(move || {
+              let image_map = image_blocks::build_blocks_image_urls(
+                &blocks,
                 ws_id,
-                doc_id,
-                &md,
-                mica_core::ActivitySource::Manual,
+                cloud_origin_bg.as_deref(),
               );
+              let md = mica_editor::export_blocks_markdown(&blocks, &image_map);
+              let still_latest = seqs_bg
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&(orig_bg.clone(), doc_id)).copied())
+                .is_none_or(|cur| cur == write_seq);
+              if still_latest && !cloud_sync::is_cloud_origin(&orig_bg) {
+                let _ = v_bg.save_markdown_tracked(
+                  &orig_bg,
+                  ws_id,
+                  doc_id,
+                  &md,
+                  mica_core::ActivitySource::Manual,
+                );
+              }
+              md
+            })
+            .await;
+            let still_latest = seqs_a
+              .lock()
+              .ok()
+              .and_then(|map| map.get(&(orig.clone(), doc_id)).copied())
+              .is_none_or(|cur| cur == write_seq);
+            if still_latest {
+              docs_a.borrow_mut().insert(doc_id, md.clone());
+              cloud_a(orig, ws_id, doc_id, md);
             }
-            md
-          })
-          .await;
-          let still_latest = seqs_a
-            .lock()
-            .ok()
-            .and_then(|map| map.get(&(orig.clone(), doc_id)).copied())
-            .is_none_or(|cur| cur == write_seq);
-          if still_latest {
-            docs_a.borrow_mut().insert(doc_id, md.clone());
-            cloud_a(orig, ws_id, doc_id, md);
-          }
+          });
         });
       }));
     }
@@ -1089,60 +1093,62 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           exp_slot.clone(),
         );
         let email_req = account_email.get_untracked();
-        spawn(async move {
-          let mut conn = cc_a.borrow().clone();
-          let res = cloud_sync::fetch_cloud_document(&mut conn, ws_id, doc_id)
-            .await
-            .map(|(m, r)| (conn, m, r));
-          if doc_fetch_gen.get_untracked() != fetch_epoch
-            || active_origin.get_untracked() != orig
-            || active_workspace_id.get_untracked() != ws_id
-            || active_doc.get_untracked() != Some(doc_id)
-          {
-            return;
-          }
-          doc_loading.set(false);
-          match res {
-            Ok((conn, remote_md, rot)) => {
-              doc_load_error.set(None);
-              if rot.is_some() {
-                *cc_a.borrow_mut() = conn;
-                if allow_local {
-                  cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
-                }
-              }
-              docs_a.borrow_mut().insert(doc_id, remote_md.clone());
-              if !ds_a.is_ready_for(&orig, ws_id, doc_id)
-                && doc_dirty_gen.get_untracked() == dirty_snap
-                && (needs_remote_load || remote_md != md)
-              {
-                br_a.load_markdown(&remote_md);
-              }
-              backlinks_sig.set(compute_backlinks_for(
-                &tree_a.borrow(),
-                &docs_a.borrow(),
-                Some(doc_id),
-                &title,
-              ));
+        app_owner.run(move || {
+          spawn(async move {
+            let mut conn = cc_a.borrow().clone();
+            let res = cloud_sync::fetch_cloud_document(&mut conn, ws_id, doc_id)
+              .await
+              .map(|(m, r)| (conn, m, r));
+            if doc_fetch_gen.get_untracked() != fetch_epoch
+              || active_origin.get_untracked() != orig
+              || active_workspace_id.get_untracked() != ws_id
+              || active_doc.get_untracked() != Some(doc_id)
+            {
+              return;
             }
-            Err(err) => {
-              if CloudConnector::is_unauthorized_error(&err) {
-                if let Some(cb) = exp_a.borrow().clone() {
-                  cb(srv_req);
+            doc_loading.set(false);
+            match res {
+              Ok((conn, remote_md, rot)) => {
+                doc_load_error.set(None);
+                if rot.is_some() {
+                  *cc_a.borrow_mut() = conn;
+                  if allow_local {
+                    cloud_sync::persist_refreshed_tokens(&v_a, &srv_req, &email_req, rot);
+                  }
                 }
-                if needs_remote_load {
-                  doc_load_error.set(Some(
-                    "云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。"
-                      .to_string(),
-                  ));
+                docs_a.borrow_mut().insert(doc_id, remote_md.clone());
+                if !ds_a.is_ready_for(&orig, ws_id, doc_id)
+                  && doc_dirty_gen.get_untracked() == dirty_snap
+                  && (needs_remote_load || remote_md != md)
+                {
+                  br_a.load_markdown(&remote_md);
                 }
-              } else if needs_remote_load && !ds_a.is_ready_for(&orig, ws_id, doc_id) {
-                doc_load_error.set(Some(format!("无法从云端加载页面：{err}")));
-              } else {
-                cloud_status.set(format!("加载云端页面失败：{err}"));
+                backlinks_sig.set(compute_backlinks_for(
+                  &tree_a.borrow(),
+                  &docs_a.borrow(),
+                  Some(doc_id),
+                  &title,
+                ));
+              }
+              Err(err) => {
+                if CloudConnector::is_unauthorized_error(&err) {
+                  if let Some(cb) = exp_a.borrow().clone() {
+                    cb(srv_req);
+                  }
+                  if needs_remote_load {
+                    doc_load_error.set(Some(
+                      "云端登录已过期，暂无法拉取该页面最新内容（云端数据安全无损），请重新登录后继续。"
+                        .to_string(),
+                    ));
+                  }
+                } else if needs_remote_load && !ds_a.is_ready_for(&orig, ws_id, doc_id) {
+                  doc_load_error.set(Some(format!("无法从云端加载页面：{err}")));
+                } else {
+                  cloud_status.set(format!("加载云端页面失败：{err}"));
+                }
               }
             }
-          }
+          });
         });
       } else {
         doc_loading.set(false);
@@ -1219,6 +1225,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   let account_id = signal(String::new());
   let cloud_session = cloud_sync::CloudSessionHandles {
+    app_owner,
     vault: vault.clone(),
     tree: tree.clone(),
     docs_store: docs_store.clone(),
@@ -1601,11 +1608,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       };
       if let Some(row) = updated {
         let _ = v.save_view(&orig, &row);
-        let rename_req = next_name.clone();
-        cs.spawn_cloud_op("云端重命名", move |c| {
-          let rename_req = rename_req.clone();
-          async move { c.update_view(cur_ws, vid, &rename_req, None).await.map(|_| ()) }
-        });
+        cs.rename_cloud_view(&orig, cur_ws, vid, next_name.clone());
         if active_doc.get_untracked() == Some(row.object_id) {
           active_title.set(next_name.clone());
         }
@@ -1629,7 +1632,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move |vid: Uuid| {
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
-      let _ = v.trash_view_subtree(&orig, vid);
+      let trashed = v.trash_view_subtree(&orig, vid).unwrap_or_default();
+      if focused_nav_id
+        .get_untracked()
+        .is_some_and(|fid| fid == vid || trashed.contains(&fid))
+      {
+        focused_nav_id.set(None);
+      }
       reload();
       cs.spawn_cloud_op("云端移入回收站", move |c| async move { c.delete_view(cur_ws, vid).await });
     })
@@ -1823,29 +1832,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       else {
         return;
       };
-      if !cloud_sync::is_cloud_origin(&orig) || ws_id.is_nil() {
-        cs.pending_view_ops.borrow_mut().clear_pending_title(vid);
-        return;
-      }
-      let trimmed = next_name.trim().to_string();
-      if trimmed.is_empty() {
-        cs.pending_view_ops.borrow_mut().clear_pending_title(vid);
-        return;
-      }
-      let committed = next_name.clone();
-      let ops_done = cs.pending_view_ops.clone();
-      cs.spawn_cloud_op_with_done(
-        "云端重命名",
-        move |c| {
-          let rename_req = trimmed.clone();
-          async move { c.update_view(ws_id, vid, &rename_req, None).await.map(|_| ()) }
-        },
-        Some(Box::new(move |_ok| {
-          ops_done
-            .borrow_mut()
-            .clear_pending_title_if_matches(vid, &committed);
-        })),
-      );
+      let trimmed = next_name.trim();
+      let wire_name = if trimmed.is_empty() {
+        "未命名页面".to_string()
+      } else {
+        trimmed.to_string()
+      };
+      cs.rename_cloud_view(&orig, ws_id, vid, wire_name);
     })
   };
 
@@ -1884,10 +1877,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let Some(vid) = target_id else {
         return;
       };
+      let persisted_name = if next_name.trim().is_empty() {
+        "未命名页面".to_string()
+      } else {
+        next_name.clone()
+      };
       let updated = {
         let mut t = tree_ref.borrow_mut();
         t.get(vid).cloned().map(|mut row| {
-          row.name = next_name.clone();
+          row.name = persisted_name.clone();
           row.updated_at = Utc::now();
           t.upsert_view(row.clone());
           row
@@ -1898,7 +1896,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let mut tabs = open_tabs.get_untracked();
         for tab in &mut tabs {
           if tab.doc_id == row.object_id {
-            tab.title = next_name.clone();
+            tab.title = persisted_name.clone();
           }
         }
         open_tabs.set(tabs);
@@ -1908,21 +1906,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
           cs.pending_view_ops
             .borrow_mut()
-            .set_pending_title(vid, next_name.clone());
+            .set_pending_title(vid, persisted_name.clone());
           *pending.borrow_mut() = Some(PendingTitleRename {
             origin: orig,
             ws_id: cur_ws,
             view_id: vid,
-            name: next_name,
+            name: persisted_name,
           });
           let epoch = title_rename_gen.get_untracked().wrapping_add(1);
           title_rename_gen.set(epoch);
           let flush_t = flush.clone();
-          spawn(async move {
-            timer(std::time::Duration::from_millis(400)).await;
-            if title_rename_gen.get_untracked() == epoch {
-              flush_t();
-            }
+          app_owner.run(move || {
+            spawn(async move {
+              timer(std::time::Duration::from_millis(400)).await;
+              if title_rename_gen.get_untracked() == epoch {
+                flush_t();
+              }
+            });
           });
         }
       }
@@ -2346,17 +2346,27 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let reload = reload_tree_from_vault.clone();
       let cs = cloud_session.clone();
       Rc::new(move |ids: Vec<Uuid>| {
-        if ids.is_empty() {
+        let unique_ids = cloud_sync::dedup_view_ids(ids);
+        if unique_ids.is_empty() {
           return;
         }
         let orig = active_origin.get_untracked();
         let cur_ws = active_workspace_id.get_untracked();
-        for &id in &ids {
-          let _ = v.trash_view_subtree(&orig, id);
+        let mut trashed_all = Vec::new();
+        for &id in &unique_ids {
+          if let Ok(sub) = v.trash_view_subtree(&orig, id) {
+            trashed_all.extend(sub);
+          }
+        }
+        if focused_nav_id
+          .get_untracked()
+          .is_some_and(|fid| unique_ids.contains(&fid) || trashed_all.contains(&fid))
+        {
+          focused_nav_id.set(None);
         }
         reload();
         cs.spawn_cloud_op("云端批量移入回收站", move |c| {
-          let ids = ids.clone();
+          let ids = unique_ids.clone();
           async move { c.batch_trash_views(cur_ws, &ids).await }
         });
       })
