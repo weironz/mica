@@ -457,7 +457,10 @@ async function crossCodeBlockAndMobileTouchSelection(browser, opts) {
 
   // ── 10. Public share (/s/{token}), Workspace settings & list Tab ─────────
   console.log('==> [10/10] Public share (/s/{token}), Workspace settings & multi-line list Tab...');
-  const shareCtx = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  const shareCtx = await browser.newContext({
+    viewport: { width: 1280, height: 820 },
+    permissions: ['clipboard-read', 'clipboard-write'],
+  });
   try {
     const page = await shareCtx.newPage();
     await signInOnPage(page, opts.base, opts.email, opts.password);
@@ -476,8 +479,17 @@ async function crossCodeBlockAndMobileTouchSelection(browser, opts) {
 
     const urlLoc = page.locator('[data-testid="share-url-text"]');
     await urlLoc.waitFor({ state: 'visible', timeout: 10000 });
-    const shareUrl = ((await urlLoc.textContent()) || '').trim();
-    assert(shareUrl.includes('/s/'), `expected /s/{token} share url, got: ${shareUrl}`);
+    await page.locator('[data-testid="share-copy-btn"]').click();
+    let shareUrl = '';
+    for (let i = 0; i < 15; i += 1) {
+      await page.waitForTimeout(150);
+      shareUrl = ((await page.evaluate(() => navigator.clipboard.readText())) || '').trim();
+      if (shareUrl.includes('/s/') && !shareUrl.includes('…')) break;
+    }
+    assert(
+      shareUrl.includes('/s/') && !shareUrl.includes('…'),
+      `expected full /s/{token} share url from copy button, got: ${shareUrl}`,
+    );
 
     const pubResp = await fetch(shareUrl);
     assert.equal(pubResp.status, 200, `expected unauthenticated GET ${shareUrl} -> 200`);
