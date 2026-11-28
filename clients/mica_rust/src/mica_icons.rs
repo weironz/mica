@@ -381,3 +381,47 @@ pub fn info_icon(color: &str) -> Svg {
     r##"<circle cx="10" cy="10" r="6.5"/><path d="M10 9.5V13.5M10 6.8H10.05"/>"##,
   )
 }
+
+pub fn expand_fullscreen_icon(color: &str) -> Svg {
+  stroked(
+    14.5,
+    color,
+    r##"<path d="M12 4H16V8M16 4L11.5 8.5M8 16H4V12M4 16L8.5 11.5"/>"##,
+  )
+}
+
+pub fn align_left_icon(color: &str) -> Svg {
+  stroked(
+    14.5,
+    color,
+    r##"<path d="M3.5 5.5H16.5M3.5 10H12.5M3.5 14.5H14.5"/>"##,
+  )
+}
+
+pub fn align_center_icon(color: &str) -> Svg {
+  stroked(
+    14.5,
+    color,
+    r##"<path d="M3.5 5.5H16.5M5.5 10H14.5M4.5 14.5H15.5"/>"##,
+  )
+}
+
+pub fn align_right_icon(color: &str) -> Svg {
+  stroked(
+    14.5,
+    color,
+    r##"<path d="M3.5 5.5H16.5M7.5 10H16.5M5.5 14.5H16.5"/>"##,
+  )
+}
+
+pub fn caption_icon(color: &str) -> Svg {
+  stroked(
+    14.5,
+    color,
+    r##"<rect x="3.5" y="4" width="13" height="7" rx="1.5"/><path d="M4.5 14.2H15.5M6.5 17H13.5"/>"##,
+  )
+}
+
+pub fn close_icon(color: &str) -> Svg {
+  stroked(16.0, color, r##"<path d="M5 5L15 15M15 5L5 15"/>"##)
+}

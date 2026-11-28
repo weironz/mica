@@ -9,10 +9,11 @@
 //!   cleanly across Desktop, Web, and collaborators.
 //! - Single-click block selection (blue border, `Ctrl+C` / `Ctrl+X` / `Delete`),
 //!   double-click fullscreen zoom lightbox, true natural aspect ratio via `on_load`,
-//!   hover toolbar (`放大 / 复制 / 左 / 中 / 右 / 图注 / 删除`), right-edge drag
-//!   resize handle (`data.width`), external-link badge + server/client re-hosting,
-//!   and complete right-click context menu (copy bitmap, cut, copy link, open in
-//!   browser, replace, paste-replace, download/save-as, delete).
+//!   compact dark-glass icon hover toolbar (放大 / 复制 / 对齐 / 图注 / `⋯`) with
+//!   hover tooltips, right-edge drag resize handle (`data.width`), external-link
+//!   badge + server/client re-hosting, and complete action/context menu (including
+//!   alignment switcher, copy bitmap, cut, copy link, open in browser, replace,
+//!   paste-replace, download/save-as, delete).
 
 use std::{
   cell::RefCell,
@@ -28,6 +29,7 @@ use mica_editor::{DocSelection, EditorBlock};
 use nsh_base::{button, input};
 use nsh_core::{
   ContextMenuEvent, Cursor, MouseEvent, PointerEvents, SubmitBehavior,
+  color::rgba,
   element::{ImageSrc, ResponderEvent, TouchClaim, overlay, set_clipboard},
   geometry::{DevicePixels, Size, px},
   prelude::*,
@@ -42,8 +44,10 @@ use crate::{
   },
   cloud_sync::{canonicalize_cloud_url, with_auto_refresh},
   editor_bridge::MicaDocumentBridge,
+  mica_icons,
   mica_theme::palette,
   net::CloudConnector,
+  tooltip::{hide_tooltip, with_dynamic_tooltip, with_tooltip},
 };
 
 const IMAGE_PICK_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
@@ -69,6 +73,8 @@ pub struct ImageContext {
   pub caption_edit: Signal<Option<ImageCaptionEditState>>,
   /// Transient bottom-center feedback toast `(message, generation)`.
   pub toast_state: Signal<Option<(String, u64)>>,
+  /// Currently hovered image block ID (preserved across `block_rev` rebuilds such as align cycling).
+  pub hovered_block: Signal<Option<String>>,
 }
 
 impl ImageContext {
@@ -92,6 +98,7 @@ impl ImageContext {
       context_menu: signal(None),
       caption_edit: signal(None),
       toast_state: signal(None),
+      hovered_block: signal(None),
     }
   }
 
@@ -151,6 +158,7 @@ pub struct ImageContextMenuState {
   pub block_id: String,
   pub block_index: usize,
   pub resolved: ResolvedImage,
+  pub align: String,
   pub x: f32,
   pub y: f32,
 }
@@ -1130,7 +1138,6 @@ pub fn render_image_block_view(
   let last_click = env.last_click;
   let last_ptr_touch = env.last_pointer_is_touch;
 
-  let hovered = signal(false);
   let copied_flash = signal(false);
   let copied_gen = signal(0u64);
   let load_failed = signal(false);
@@ -1139,6 +1146,9 @@ pub fn render_image_block_view(
   let live_idx = move || crate::block_views::live_index(at);
 
   let block_id = block.id.clone();
+  let hovered_sig = img_ctx.hovered_block;
+  let bid_is_hov = block_id.clone();
+  let is_hovered = move || hovered_sig.get().as_deref() == Some(bid_is_hov.as_str());
   let resolved = resolve_image_block(&block, &img_ctx);
   let align = block
     .data
@@ -1206,13 +1216,29 @@ pub fn render_image_block_view(
   });
 
   let br_outer = bridge.clone();
+  let bid_enter = block_id.clone();
+  let bid_move = block_id.clone();
+  let bid_leave = block_id.clone();
   let mut outer = view()
     .test_id("node-view-image")
     .w_full()
     .my_2()
     .cursor(Cursor::Text)
-    .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
-    .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
+    .on_mouse_enter(move |_: &MouseEvent| {
+      if hovered_sig.get_untracked().as_deref() != Some(bid_enter.as_str()) {
+        hovered_sig.set(Some(bid_enter.clone()));
+      }
+    })
+    .on_mouse_move(move |_: &MouseEvent| {
+      if hovered_sig.get_untracked().as_deref() != Some(bid_move.as_str()) {
+        hovered_sig.set(Some(bid_move.clone()));
+      }
+    })
+    .on_mouse_leave(move |_: &MouseEvent| {
+      if hovered_sig.get_untracked().as_deref() == Some(bid_leave.as_str()) {
+        hovered_sig.set(None);
+      }
+    })
     .on_press_down(move |_: &PressEvent| {
       if last_ptr_touch.get_untracked() {
         return;
@@ -1379,12 +1405,13 @@ pub fn render_image_block_view(
   let alt_expand = caption_text.clone();
   let resolved_copy = resolved.clone();
   let ctx_copy = img_ctx.clone();
-  let br_al = bridge.clone();
-  let br_ac = bridge.clone();
-  let br_ar = bridge.clone();
-  let br_del = bridge.clone();
+  let br_align = bridge.clone();
+  let br_tb_more = bridge.clone();
   let bid_tb_cap = block_id.clone();
+  let bid_tb_more = block_id.clone();
+  let resolved_tb_more = resolved.clone();
   let cap_tb_init = caption_text.clone();
+  let align_ctx = align.clone();
 
   let card = view()
     .test_id("image-card")
@@ -1405,61 +1432,100 @@ pub fn render_image_block_view(
         block_id: bid_ctx.clone(),
         block_index: idx,
         resolved: resolved_ctx.clone(),
+        align: align_ctx.clone(),
         x: e.page_position.x.0.max(8.0),
         y: e.page_position.y.0.max(8.0),
       }));
     })
     .child(body)
-    // Hover / selected top-right floating toolbar (放大 / 复制 / 左 / 中 / 右 / 图注 / 删除).
-    .child(when(move || hovered.get() || resize_dragging.get(), {
+    // Compact dark-glass icon hover toolbar (放大 / 复制 / 对齐 / 图注 / ⋯).
+    .child(when({ let is_h = is_hovered.clone(); move || is_h() || resize_dragging.get() }, {
       let align_cur = align.clone();
+      let has_caption = !cap_tb_init.trim().is_empty();
+      let has_zoom_url = !url_expand.is_empty();
       move || {
-        let (b1, b2, b3, b4) = (br_al.clone(), br_ac.clone(), br_ar.clone(), br_del.clone());
-        let u_exp = url_expand.clone();
-        let a_exp = alt_expand.clone();
+        let br_a = br_align.clone();
+        let br_m = br_tb_more.clone();
         let res_cp = resolved_copy.clone();
+        let res_m = resolved_tb_more.clone();
         let c_cp = ctx_copy.clone();
         let bid_c = bid_tb_cap.clone();
+        let bid_m = bid_tb_more.clone();
         let init_c = cap_tb_init.clone();
         let a_cur = align_cur.clone();
+        let a_for_btn = align_cur.clone();
+        let a_for_tip = align_cur.clone();
+        let a_for_more = align_cur.clone();
+        let next_align = match a_cur.as_str() {
+          "left" => "center",
+          "right" => "left",
+          _ => "right",
+        };
+        let align_tip = match a_for_tip.as_str() {
+          "left" => "左对齐（点击居中）",
+          "right" => "右对齐（点击左对齐）",
+          _ => "居中对齐（点击右对齐）",
+        };
+        let more_anchor = signal((320.0_f32, 120.0_f32));
+
         view()
           .test_id("image-hover-toolbar")
           .absolute()
-          .top(px(8.0))
-          .right(px(8.0))
+          .top(px(6.0))
+          .right(px(6.0))
           .z_index(20)
           .flex_row()
           .items_center()
           .gap(px(2.0))
-          .p_1()
+          .p(px(3.0))
           .rounded(px(6.0))
-          .bg(move || palette(dark_mode.get()).surface_overlay)
+          .bg(move || {
+            if dark_mode.get() {
+              rgba(0x181A_1EE0)
+            } else {
+              rgba(0x1E20_24CC)
+            }
+          })
           .border_1()
-          .border_color(move || palette(dark_mode.get()).border_normal)
+          .border_color(rgba(0xFFFF_FF26))
           .shadow_sm()
-          .child(when(move || !u_exp.is_empty(), {
+          .child(when(move || has_zoom_url, {
             let u2 = url_expand.clone();
-            let a2 = a_exp.clone();
+            let a2 = alt_expand.clone();
             move || {
               let u3 = u2.clone();
               let a3 = a2.clone();
-              img_toolbar_chip("放大", false, false, dark_mode, move || {
-                lightbox.set(Some(LightboxContent::Image {
-                  url: u3.clone(),
-                  alt: a3.clone(),
-                  natural_size: natural_size.get_untracked(),
-                }));
-              })
+              with_tooltip(
+                img_toolbar_icon_btn(
+                  "image-zoom-btn",
+                  "全屏查看",
+                  mica_icons::expand_fullscreen_icon("#F4F4F5"),
+                  false,
+                  move || {
+                    hide_tooltip();
+                    lightbox.set(Some(LightboxContent::Image {
+                      url: u3.clone(),
+                      alt: a3.clone(),
+                      natural_size: natural_size.get_untracked(),
+                    }));
+                  },
+                ),
+                "全屏查看",
+              )
             }
           }))
-          .child(
+          .child(with_dynamic_tooltip(
             button()
               .test_id("image-copy-btn")
-              .px_2()
-              .py_1()
+              .accessibility_label("复制图片")
+              .w(px(24.0))
+              .h(px(24.0))
               .rounded(px(4.0))
-              .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+              .items_center()
+              .justify_center()
+              .hover(|s| s.bg(rgba(0xFFFF_FF26)))
               .on_press(move || {
+                hide_tooltip();
                 let r = res_cp.clone();
                 let c = c_cp.clone();
                 let next_gen = copied_gen.get_untracked().wrapping_add(1);
@@ -1486,38 +1552,97 @@ pub fn render_image_block_view(
                   }
                 });
               })
-              .child(
-                text(move || if copied_flash.get() { "已复制" } else { "复制" })
-                  .text_size(px(11.5))
-                  .text_color(move || {
-                    let p = palette(dark_mode.get());
-                    if copied_flash.get() { p.accent } else { p.text_primary }
-                  }),
-              ),
-          )
-          .child(img_toolbar_chip("左", a_cur == "left", false, dark_mode, move || {
-            b1.update_block_data_attr_at(live_idx(), "align", Value::String("left".into()));
-          }))
-          .child(img_toolbar_chip("中", a_cur == "center", false, dark_mode, move || {
-            b2.update_block_data_attr_at(live_idx(), "align", Value::String("center".into()));
-          }))
-          .child(img_toolbar_chip("右", a_cur == "right", false, dark_mode, move || {
-            b3.update_block_data_attr_at(live_idx(), "align", Value::String("right".into()));
-          }))
-          .child(img_toolbar_chip("图注", !init_c.is_empty(), false, dark_mode, move || {
-            cap_edit_sig.set(Some(ImageCaptionEditState {
-              block_id: bid_c.clone(),
-              block_index: live_idx(),
-              initial: init_c.clone(),
-            }));
-          }))
-          .child(img_toolbar_chip("删除", false, true, dark_mode, move || {
-            b4.delete_block_at(live_idx());
-          }))
+              .child(dynamic(move || {
+                if copied_flash.get() {
+                  mica_icons::check_icon("#4ADE80").into_element()
+                } else {
+                  mica_icons::copy_icon("#F4F4F5").into_element()
+                }
+              })),
+            move || if copied_flash.get() { "已复制" } else { "复制图片" },
+          ))
+          .child(with_tooltip(
+            img_toolbar_icon_btn(
+              "image-align-btn",
+              align_tip,
+              match a_for_btn.as_str() {
+                "left" => mica_icons::align_left_icon("#F4F4F5"),
+                "right" => mica_icons::align_right_icon("#F4F4F5"),
+                _ => mica_icons::align_center_icon("#F4F4F5"),
+              },
+              false,
+              move || {
+                hide_tooltip();
+                br_a.update_block_data_attr_at(
+                  live_idx(),
+                  "align",
+                  Value::String(next_align.into()),
+                );
+              },
+            ),
+            align_tip,
+          ))
+          .child(with_tooltip(
+            img_toolbar_icon_btn(
+              "image-caption-btn",
+              "编辑图注",
+              mica_icons::caption_icon(if has_caption { "#93C5FD" } else { "#F4F4F5" }),
+              has_caption,
+              move || {
+                hide_tooltip();
+                cap_edit_sig.set(Some(ImageCaptionEditState {
+                  block_id: bid_c.clone(),
+                  block_index: live_idx(),
+                  initial: init_c.clone(),
+                }));
+              },
+            ),
+            "编辑图注",
+          ))
+          .child(with_tooltip(
+            button()
+              .test_id("image-more-btn")
+              .accessibility_label("更多")
+              .w(px(24.0))
+              .h(px(24.0))
+              .rounded(px(4.0))
+              .items_center()
+              .justify_center()
+              .hover(|s| s.bg(rgba(0xFFFF_FF26)))
+              .on_mouse_enter(move |e: &MouseEvent| {
+                more_anchor.set((
+                  (e.page_position.x.0 - 186.0).max(8.0),
+                  (e.page_position.y.0 + 18.0).max(8.0),
+                ));
+              })
+              .on_mouse_move(move |e: &MouseEvent| {
+                more_anchor.set((
+                  (e.page_position.x.0 - 186.0).max(8.0),
+                  (e.page_position.y.0 + 18.0).max(8.0),
+                ));
+              })
+              .on_press(move || {
+                hide_tooltip();
+                let idx = live_idx();
+                editor_focused.set(true);
+                br_m.set_selection(DocSelection::caret(idx, 0));
+                let (ax, ay) = more_anchor.get_untracked();
+                ctx_menu_sig.set(Some(ImageContextMenuState {
+                  block_id: bid_m.clone(),
+                  block_index: idx,
+                  resolved: res_m.clone(),
+                  align: a_for_more.clone(),
+                  x: ax,
+                  y: ay,
+                }));
+              })
+              .child(mica_icons::more_dots("#F4F4F5")),
+            "更多",
+          ))
       }
     }))
     // Right-edge draggable resize handle (exact parity with v0.14.11).
-    .child(when(move || (hovered.get() || resize_dragging.get()) && !display_uri.is_empty(), move || {
+    .child(when({ let is_h = is_hovered.clone(); move || (is_h() || resize_dragging.get()) && !display_uri.is_empty() }, move || {
       let br_r = br_resize.clone();
       view()
         .test_id("image-resize-handle")
@@ -1611,33 +1736,25 @@ pub fn render_image_block_view(
   ))
 }
 
-fn img_toolbar_chip(
+fn img_toolbar_icon_btn(
+  tid: &'static str,
   label: &'static str,
+  icon: impl IntoElement,
   active: bool,
-  danger: bool,
-  dark_mode: Signal<bool>,
   on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
   button()
-    .px_2()
-    .py_1()
+    .test_id(tid)
+    .accessibility_label(label)
+    .w(px(24.0))
+    .h(px(24.0))
     .rounded(px(4.0))
-    .bg(move || {
-      let p = palette(dark_mode.get());
-      if active { p.accent_soft } else { crate::block_views::TRANSPARENT_RGBA }
-    })
-    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+    .items_center()
+    .justify_center()
+    .bg(if active { rgba(0xFFFF_FF2E) } else { crate::block_views::TRANSPARENT_RGBA })
+    .hover(|s| s.bg(rgba(0xFFFF_FF26)))
     .on_press(on_press)
-    .child(text(label).text_size(px(11.5)).text_color(move || {
-      let p = palette(dark_mode.get());
-      if danger {
-        p.danger
-      } else if active {
-        p.accent
-      } else {
-        p.text_primary
-      }
-    }))
+    .child(icon)
 }
 
 // ── Top-Level Image Context Menu, Caption Modal & Toast ──────────────────────
@@ -1727,6 +1844,68 @@ pub fn render_image_context_menu_overlay(
             initial: init_c.clone(),
           }));
         }));
+      }
+
+      // 2b. 对齐方式（左 / 中 / 右）
+      {
+        let align_cur = state.align.clone();
+        let align_btn = |tid: &'static str, key: &'static str, label: &'static str| {
+          let active = align_cur == key;
+          let br_a = br_o.clone();
+          let bid_a = bid.clone();
+          let icon_hex = if active {
+            palette(dark_mode.get()).accent_hex
+          } else {
+            palette(dark_mode.get()).text_primary_hex
+          };
+          let icon = match key {
+            "left" => mica_icons::align_left_icon(icon_hex),
+            "right" => mica_icons::align_right_icon(icon_hex),
+            _ => mica_icons::align_center_icon(icon_hex),
+          };
+          button()
+            .test_id(tid)
+            .accessibility_label(label)
+            .w(px(26.0))
+            .h(px(24.0))
+            .rounded(px(4.0))
+            .items_center()
+            .justify_center()
+            .bg(move || {
+              let p = palette(dark_mode.get());
+              if active { p.accent_soft } else { crate::block_views::TRANSPARENT_RGBA }
+            })
+            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+            .on_press(move || {
+              menu_sig.set(None);
+              let idx = find_block_index_by_id(&br_a, &bid_a).unwrap_or(bidx);
+              br_a.update_block_data_attr_at(idx, "align", Value::String(key.into()));
+            })
+            .child(icon)
+        };
+        menu = menu.child(
+          view()
+            .w_full()
+            .px_3()
+            .py(px(4.0))
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
+              text("对齐")
+                .text_size(px(12.5))
+                .text_color(move || palette(dark_mode.get()).text_muted),
+            )
+            .child(
+              view()
+                .flex_row()
+                .items_center()
+                .gap(px(2.0))
+                .child(align_btn("img-menu-align-left", "left", "左对齐"))
+                .child(align_btn("img-menu-align-center", "center", "居中对齐"))
+                .child(align_btn("img-menu-align-right", "right", "右对齐")),
+            ),
+        );
       }
 
       // 3. 替换图片…

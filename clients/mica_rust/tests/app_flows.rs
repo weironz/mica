@@ -3310,3 +3310,159 @@ fn regression_ctrl_wheel_and_shortcuts_zoom_within_bounds() {
   app.press_key("mod+0").unwrap();
   app.wait_for("100%").unwrap();
 }
+
+#[test]
+fn regression_image_compact_hover_toolbar_and_frameless_lightbox() {
+  use std::{io::Read, io::Write, net::TcpListener};
+
+  let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
+  let addr = listener.local_addr().unwrap();
+  let _srv = std::thread::spawn(move || {
+    for stream in listener.incoming().take(4).flatten() {
+      let mut s = stream;
+      let mut buf = [0u8; 512];
+      let _ = s.read(&mut buf);
+      let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    }
+  });
+  let test_url = format!("http://{addr}/ocp-demo.png");
+
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面").unwrap();
+
+  let mut img_paste = nsh_core::PasteEvent::default();
+  img_paste.text = test_url;
+  app.paste("id:mica-editor-ime-sink", &img_paste).unwrap();
+  app.wait_for("id:image-card").unwrap();
+
+  // Hovering the image reveals a compact icon-only toolbar instead of text buttons.
+  app.hover("id:image-card").unwrap();
+  app.wait_for("id:image-hover-toolbar").unwrap();
+  app.wait_for("id:image-zoom-btn").unwrap();
+  app.wait_for("id:image-copy-btn").unwrap();
+  app.wait_for("id:image-align-btn").unwrap();
+  app.wait_for("id:image-caption-btn").unwrap();
+  app.wait_for("id:image-more-btn").unwrap();
+
+  let tb = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("image-hover-toolbar"))
+    .expect("image-hover-toolbar must be laid out");
+  assert!(
+    tb.bounds.size.width.0 <= 180.0,
+    "compact icon hover toolbar width must be <= 180px, got {}",
+    tb.bounds.size.width.0
+  );
+  let visible_texts = app.screen().texts();
+  assert!(
+    !visible_texts.iter().any(|&t| t == "放大" || t == "删除"),
+    "hover toolbar must not render bulky inline Chinese text labels: {visible_texts:?}"
+  );
+
+  let card_x = |app: &mut Headless| {
+    app
+      .screen()
+      .layout_nodes()
+      .into_iter()
+      .find(|n| n.test_id.as_deref() == Some("image-card"))
+      .expect("image-card must exist")
+      .bounds
+      .origin
+      .x
+      .0
+  };
+  let initial_x = card_x(&mut app);
+
+  // Align button cycles left (default) -> center -> right -> left cleanly.
+  app.press("id:image-align-btn").unwrap();
+  app.settle();
+  let center_x = card_x(&mut app);
+  assert!(
+    center_x > initial_x + 40.0,
+    "expected center alignment to move card right ({initial_x} -> {center_x})"
+  );
+
+  app.press("id:image-align-btn").unwrap();
+  app.settle();
+  let right_x = card_x(&mut app);
+  assert!(
+    right_x > center_x + 40.0,
+    "expected right alignment to move card further right ({center_x} -> {right_x})"
+  );
+
+  app.press("id:image-align-btn").unwrap();
+  app.settle();
+  let left_x = card_x(&mut app);
+  assert!(
+    (left_x - initial_x).abs() < 4.0,
+    "expected cycling back to left alignment ({initial_x} vs {left_x})"
+  );
+
+  // `⋯` button opens the full image menu with 3-way alignment controls.
+  app.press("id:image-more-btn").unwrap();
+  app.wait_for("id:image-context-menu").unwrap();
+  app.wait_for("id:img-menu-align-left").unwrap();
+  app.wait_for("id:img-menu-align-center").unwrap();
+  app.wait_for("id:img-menu-align-right").unwrap();
+  app.press("id:img-menu-align-center").unwrap();
+  app
+    .wait_for_gone("id:image-context-menu", std::time::Duration::from_millis(600))
+    .unwrap();
+  let recentered_x = card_x(&mut app);
+  assert!(
+    (recentered_x - center_x).abs() < 4.0,
+    "img-menu-align-center must set center alignment ({center_x} vs {recentered_x})"
+  );
+
+  // Zoom button opens frameless full-viewport image lightbox (no boxed header or margin card).
+  app.hover("id:image-card").unwrap();
+  app.wait_for("id:image-zoom-btn").unwrap();
+  app.press("id:image-zoom-btn").unwrap();
+  app.wait_for("id:mica-lightbox-modal").unwrap();
+  app.wait_for("id:lightbox-pan-stage").unwrap();
+  app.wait_for("id:lightbox-zoom-in").unwrap();
+  app.wait_for("id:lightbox-zoom-out").unwrap();
+  app.wait_for("id:lightbox-zoom-reset").unwrap();
+  app.wait_for("id:lightbox-close-btn").unwrap();
+
+  let backdrop = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-lightbox-backdrop"))
+    .expect("mica-lightbox-backdrop must exist");
+  let modal = app
+    .screen()
+    .layout_nodes()
+    .into_iter()
+    .find(|n| n.test_id.as_deref() == Some("mica-lightbox-modal"))
+    .expect("mica-lightbox-modal must exist");
+  assert_eq!(
+    modal.bounds.size,
+    backdrop.bounds.size,
+    "image lightbox must be frameless and fill backdrop cleanly without an enclosing card"
+  );
+  let lb_texts = app.screen().texts();
+  assert!(
+    !lb_texts.iter().any(|&t| t == "图片预览" || t.contains("双指捏合")),
+    "frameless image lightbox must not render boxed modal header or hint banner: {lb_texts:?}"
+  );
+
+  app.press("id:lightbox-zoom-in").unwrap();
+  app.wait_for("125%").unwrap();
+  app.press("id:lightbox-zoom-reset").unwrap();
+  app.wait_for("100%").unwrap();
+
+  app.press("id:lightbox-close-btn").unwrap();
+  app
+    .wait_for_gone("id:mica-lightbox-modal", std::time::Duration::from_millis(600))
+    .unwrap();
+}

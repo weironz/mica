@@ -28,7 +28,7 @@ use mica_editor::{
 };
 use nsh_base::{button, input};
 use nsh_core::{
-  color::Rgba,
+  color::{Rgba, rgba},
   element::{ImageSrc, Svg, open_url, set_clipboard, svg, text_measurer},
   geometry::{Bounds, Points, px},
   prelude::*,
@@ -1804,6 +1804,25 @@ fn render_divider_block_view(env: &BlockRenderEnv, at: Position) -> impl IntoEle
 
 // ── 9. Floating Zoom & Pan Lightbox Dialog (Mermaid & Images) ────────────────
 
+/// Compute balanced display bounds `(w, h)` for a standalone frameless image lightbox
+/// inside `viewport` (`(cw, ch)`), showing small images cleanly at 1:1 without awkward
+/// upscaling and shrinking large images to fit without redundant card margins.
+pub(crate) fn compute_image_lightbox_fit(
+  natural: Option<(f32, f32)>,
+  viewport: (f32, f32),
+) -> (f32, f32) {
+  let avail_w = (viewport.0 - 80.0).max(160.0);
+  let avail_h = (viewport.1 - 120.0).max(160.0);
+  if let Some((nw, nh)) = natural
+    && nw > 1.0
+    && nh > 1.0
+  {
+    let scale = (avail_w / nw).min(avail_h / nh).min(1.0);
+    return ((nw * scale).max(64.0), (nh * scale).max(48.0));
+  }
+  (avail_w.min(720.0), avail_h.min(480.0))
+}
+
 pub fn render_lightbox_modal(
   lightbox: Signal<Option<LightboxContent>>,
   bridge: Rc<MicaDocumentBridge>,
@@ -1813,8 +1832,10 @@ pub fn render_lightbox_modal(
   let pan = signal((0.0_f32, 0.0_f32));
   let gesture: Rc<RefCell<crate::touch_selection::LightboxGesture>> =
     Rc::new(RefCell::new(crate::touch_selection::LightboxGesture::new()));
-  let canvas_size = signal((960.0_f32, 580.0_f32));
+  let canvas_size = signal((1280.0_f32, 820.0_f32));
   let show_source = signal(false);
+  let tap_origin: Signal<Option<(f32, f32)>> = signal(None);
+  let tap_dragged = signal(false);
 
   when(move || lightbox.get().is_some(), {
     let br = bridge.clone();
@@ -1824,12 +1845,7 @@ pub fn render_lightbox_modal(
         return view().into_element();
       };
       let br_s = br.clone();
-      let title_text = match &content {
-        LightboxContent::Mermaid { .. } => "Mermaid 图表预览",
-        LightboxContent::Image { alt, .. } if !alt.trim().is_empty() => "图片预览",
-        LightboxContent::Image { .. } => "图片预览",
-      };
-      let is_mermaid = matches!(content, LightboxContent::Mermaid { .. });
+      let is_image = matches!(content, LightboxContent::Image { .. });
       let base_size = signal((780.0_f32, 500.0_f32));
       let apply_zoom = move |target: f32| {
         let old_z = zoom.get_untracked().max(0.01);
@@ -1846,125 +1862,349 @@ pub fn render_lightbox_modal(
       let gesture_reset = gesture_root.clone();
       let gesture_stage_base = gesture_root.clone();
       let close_dialog = move || {
+        crate::tooltip::hide_tooltip();
         zoom.set(1.0);
         pan.set((0.0, 0.0));
+        tap_origin.set(None);
+        tap_dragged.set(false);
         gesture_close.borrow_mut().reset();
         show_source.set(false);
         lightbox.set(None);
       };
 
-      // Interactive zoom/pan canvas shared by Mermaid diagrams and images.
-      let build_zoom_pan_stage = move |stage_content: AnyElement| {
-        let gesture_touch = gesture_stage_base.clone();
-        view()
-          .test_id("lightbox-pan-stage")
-          .flex_1()
-          .w_full()
-          .min_h(px(0.0))
-          .relative()
-          .overflow_hidden()
-          .bg(move || palette(dark_mode.get()).surface_sunken)
-          .cursor(Cursor::Grab)
-          .on_layout(move |b: &Bounds<Points>| {
-            let (w, h) = (b.size.width.0, b.size.height.0);
-            if w > 10.0 && h > 10.0 {
-              let (pw, ph) = canvas_size.get_untracked();
-              if (pw - w).abs() > 2.0 || (ph - h).abs() > 2.0 {
-                canvas_size.set((w, h));
+      // Interactive zoom/pan stage. When `frameless` (for images), keeps a completely
+      // transparent backdrop and closes when tapping/clicking outside the rendered image.
+      type FitResizeCallback = Rc<dyn Fn((f32, f32))>;
+      let close_dialog_stage = close_dialog.clone();
+      let build_zoom_pan_stage =
+        move |stage_content: AnyElement,
+              frameless: bool,
+              on_fit_resize: Option<FitResizeCallback>| {
+          let gesture_touch = gesture_stage_base.clone();
+          let close_tap = close_dialog_stage.clone();
+          view()
+            .test_id("lightbox-pan-stage")
+            .flex_1()
+            .w_full()
+            .min_h(px(0.0))
+            .relative()
+            .overflow_hidden()
+            .bg(move || {
+              if frameless {
+                TRANSPARENT_RGBA
+              } else {
+                palette(dark_mode.get()).surface_sunken
               }
-            }
-          })
-          .on_wheel(move |ev: &WheelEvent| {
-            let dy = match ev.delta {
-              WheelDelta::Points(pt) => f32::from(pt.y),
-              WheelDelta::Lines(pt) => pt.y * 24.0,
-            };
-            if dy.abs() > 0.01 {
-              let factor = if dy < 0.0 { 1.12 } else { 1.0 / 1.12 };
-              apply_zoom(zoom.get_untracked() * factor);
-            }
-          })
-          .claim_touches(TouchClaim::on_start().block_native(true))
-          .keep_touches(true)
-          .on_touch(move |e: &nsh_core::TouchEvent| {
-            let pts: Vec<crate::touch_selection::LightboxTouchPt> = e
-              .points
-              .iter()
-              .map(|p| crate::touch_selection::LightboxTouchPt {
-                id: p.id,
-                page: (f32::from(p.page.x), f32::from(p.page.y)),
-                location: (f32::from(p.location.x), f32::from(p.location.y)),
-                changed: p.changed,
-              })
-              .collect();
-            if let Some((next_zoom, next_pan)) = gesture_touch.borrow_mut().handle_touch(
-              e.phase,
-              &pts,
-              canvas_size.get_untracked(),
-              zoom.get_untracked(),
-              pan.get_untracked(),
-            ) {
-              if (next_zoom - zoom.get_untracked()).abs() > 1e-4 {
-                zoom.set(next_zoom);
+            })
+            .cursor(Cursor::Grab)
+            .on_layout(move |b: &Bounds<Points>| {
+              let (w, h) = (b.size.width.0, b.size.height.0);
+              if w > 10.0 && h > 10.0 {
+                let (pw, ph) = canvas_size.get_untracked();
+                if (pw - w).abs() > 2.0 || (ph - h).abs() > 2.0 {
+                  canvas_size.set((w, h));
+                  if let Some(ref cb) = on_fit_resize {
+                    cb((w, h));
+                  }
+                }
               }
-              pan.set(next_pan);
-            }
-          })
-          .child(
-            view()
-              .absolute()
-              .left(move || {
-                let (cw, _) = canvas_size.get();
-                let (ox, _) = pan.get();
-                let (bw, _) = base_size.get();
-                px((cw - bw * zoom.get()) * 0.5 + ox)
-              })
-              .top(move || {
-                let (_, ch) = canvas_size.get();
-                let (_, oy) = pan.get();
-                let (_, bh) = base_size.get();
-                px((ch - bh * zoom.get()) * 0.5 + oy)
-              })
-              .pointer_events(PointerEvents::None)
-              .child(stage_content),
-          )
-          .child(
-            view()
-              .absolute()
-              .left(px(12.0))
-              .bottom(px(10.0))
-              .px_2()
-              .py_1()
-              .rounded(px(6.0))
-              .bg(move || palette(dark_mode.get()).surface_overlay)
-              .border_1()
-              .border_color(move || palette(dark_mode.get()).border_subtle)
-              .pointer_events(PointerEvents::None)
-              .child(
-                text("双指捏合 / 滚轮缩放 · 拖拽平移")
-                  .text_size(px(11.5))
-                  .text_color(move || palette(dark_mode.get()).text_faint),
-              ),
-          )
-      };
+            })
+            .on_wheel(move |ev: &WheelEvent| {
+              let dy = match ev.delta {
+                WheelDelta::Points(pt) => f32::from(pt.y),
+                WheelDelta::Lines(pt) => pt.y * 24.0,
+              };
+              if dy.abs() > 0.01 {
+                let factor = if dy < 0.0 { 1.12 } else { 1.0 / 1.12 };
+                apply_zoom(zoom.get_untracked() * factor);
+              }
+            })
+            .claim_touches(TouchClaim::on_start().block_native(true))
+            .keep_touches(true)
+            .on_touch(move |e: &nsh_core::TouchEvent| {
+              if frameless {
+                match e.phase {
+                  nsh_core::TouchPhase::Start if e.points.len() == 1 => {
+                    let p = &e.points[0];
+                    tap_origin.set(Some((f32::from(p.location.x), f32::from(p.location.y))));
+                    tap_dragged.set(false);
+                  }
+                  nsh_core::TouchPhase::Move => {
+                    if e.points.len() >= 2 {
+                      tap_dragged.set(true);
+                    } else if let (Some((sx, sy)), Some(p)) = (tap_origin.get_untracked(), e.points.first()) {
+                      let dx = f32::from(p.location.x) - sx;
+                      let dy = f32::from(p.location.y) - sy;
+                      if dx * dx + dy * dy > 36.0 {
+                        tap_dragged.set(true);
+                      }
+                    }
+                  }
+                  nsh_core::TouchPhase::End if !tap_dragged.get_untracked() => {
+                    if let Some((tx, ty)) = tap_origin.get_untracked() {
+                      let (cw, ch) = canvas_size.get_untracked();
+                      let (bw, bh) = base_size.get_untracked();
+                      let z = zoom.get_untracked();
+                      let (ox, oy) = pan.get_untracked();
+                      let img_l = (cw - bw * z) * 0.5 + ox;
+                      let img_t = (ch - bh * z) * 0.5 + oy;
+                      let inside = tx >= img_l && tx <= img_l + bw * z && ty >= img_t && ty <= img_t + bh * z;
+                      tap_origin.set(None);
+                      if !inside {
+                        close_tap();
+                        return;
+                      }
+                    }
+                  }
+                  nsh_core::TouchPhase::Cancel => {
+                    tap_origin.set(None);
+                  }
+                  _ => {}
+                }
+              }
 
-      view()
-        .test_id("mica-lightbox-backdrop")
-        .absolute()
-        .inset_0()
-        .z_index(65)
-        .items_center()
-        .justify_center()
-        .bg(move || palette(dark_mode.get()).backdrop)
-        .child(
-          button()
-            .test_id("lightbox-backdrop-dismiss")
-            .accessibility_label("关闭预览弹窗")
+              let pts: Vec<crate::touch_selection::LightboxTouchPt> = e
+                .points
+                .iter()
+                .map(|p| crate::touch_selection::LightboxTouchPt {
+                  id: p.id,
+                  page: (f32::from(p.page.x), f32::from(p.page.y)),
+                  location: (f32::from(p.location.x), f32::from(p.location.y)),
+                  changed: p.changed,
+                })
+                .collect();
+              if let Some((next_zoom, next_pan)) = gesture_touch.borrow_mut().handle_touch(
+                e.phase,
+                &pts,
+                canvas_size.get_untracked(),
+                zoom.get_untracked(),
+                pan.get_untracked(),
+              ) {
+                if (next_zoom - zoom.get_untracked()).abs() > 1e-4 {
+                  zoom.set(next_zoom);
+                }
+                pan.set(next_pan);
+              }
+            })
+            .child(
+              view()
+                .absolute()
+                .left(move || {
+                  let (cw, _) = canvas_size.get();
+                  let (ox, _) = pan.get();
+                  let (bw, _) = base_size.get();
+                  px((cw - bw * zoom.get()) * 0.5 + ox)
+                })
+                .top(move || {
+                  let (_, ch) = canvas_size.get();
+                  let (_, oy) = pan.get();
+                  let (_, bh) = base_size.get();
+                  px((ch - bh * zoom.get()) * 0.5 + oy)
+                })
+                .pointer_events(PointerEvents::None)
+                .child(stage_content),
+            )
+            .child(when(move || !frameless, move || {
+              view()
+                .absolute()
+                .left(px(12.0))
+                .bottom(px(10.0))
+                .px_2()
+                .py_1()
+                .rounded(px(6.0))
+                .bg(move || palette(dark_mode.get()).surface_overlay)
+                .border_1()
+                .border_color(move || palette(dark_mode.get()).border_subtle)
+                .pointer_events(PointerEvents::None)
+                .child(
+                  text("双指捏合 / 滚轮缩放 · 拖拽平移")
+                    .text_size(px(11.5))
+                    .text_color(move || palette(dark_mode.get()).text_faint),
+                )
+            }))
+        };
+
+      let modal_content = match content {
+        LightboxContent::Image { url, alt, natural_size } => {
+          let raw_natural = signal(natural_size);
+          let fit_now = compute_image_lightbox_fit(natural_size, canvas_size.get_untracked());
+          base_size.set(fit_now);
+          let on_fit_resize: Rc<dyn Fn((f32, f32))> = Rc::new(move |vp| {
+            base_size.set(compute_image_lightbox_fit(raw_natural.get_untracked(), vp));
+          });
+          let img_el = image(ImageSrc::from(url))
+            .w(move || px(base_size.get().0 * zoom.get()))
+            .h(move || px(base_size.get().1 * zoom.get()))
+            .rounded(px(4.0))
+            .shadow_md()
+            .on_load(move |sz: &nsh_core::geometry::Size<nsh_core::geometry::DevicePixels>| {
+              let nw = sz.width.0 as f32;
+              let nh = sz.height.0 as f32;
+              if nw > 1.0 && nh > 1.0 {
+                raw_natural.set(Some((nw, nh)));
+                base_size.set(compute_image_lightbox_fit(Some((nw, nh)), canvas_size.get_untracked()));
+              }
+            })
+            .into_element();
+
+          let reset_fn = gesture_reset.clone();
+          let close_btn_fn = close_dialog.clone();
+          let alt_cap = alt.clone();
+          let has_alt = !alt.trim().is_empty();
+
+          view()
+            .test_id("mica-lightbox-modal")
             .absolute()
             .inset_0()
-            .on_press(close_dialog.clone()),
-        )
-        .child(
+            .z_index(66)
+            .child(build_zoom_pan_stage(img_el, true, Some(on_fit_resize)))
+            .child(
+              view()
+                .absolute()
+                .top(px(16.0))
+                .right(px(16.0))
+                .z_index(68)
+                .child(crate::tooltip::with_tooltip(
+                  button()
+                    .test_id("lightbox-close-btn")
+                    .accessibility_label("关闭预览")
+                    .w(px(36.0))
+                    .h(px(36.0))
+                    .rounded(px(18.0))
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x1E20_24CC))
+                    .border_1()
+                    .border_color(rgba(0xFFFF_FF28))
+                    .shadow_sm()
+                    .hover(|s| s.bg(rgba(0x3235_3CE6)))
+                    .on_press(close_btn_fn)
+                    .child(mica_icons::close_icon("#F4F4F5")),
+                  "关闭 (Esc)",
+                )),
+            )
+            .child(
+              view()
+                .absolute()
+                .left(px(0.0))
+                .right(px(0.0))
+                .bottom(px(20.0))
+                .z_index(68)
+                .items_center()
+                .gap(px(8.0))
+                .pointer_events(PointerEvents::BoxNone)
+                .child(when(move || has_alt, {
+                  let a = alt_cap.clone();
+                  move || {
+                    view()
+                      .px_3()
+                      .py_1()
+                      .rounded(px(6.0))
+                      .bg(rgba(0x1E20_24BF))
+                      .border_1()
+                      .border_color(rgba(0xFFFF_FF1E))
+                      .child(
+                        text(a.clone())
+                          .text_size(px(12.5))
+                          .text_color(rgba(0xF4F4_F5FF)),
+                      )
+                  }
+                }))
+                .child(
+                  view()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(999.0))
+                    .bg(rgba(0x1E20_24CC))
+                    .border_1()
+                    .border_color(rgba(0xFFFF_FF24))
+                    .shadow_sm()
+                    .child(
+                      button()
+                        .test_id("lightbox-zoom-out")
+                        .accessibility_label("缩小")
+                        .w(px(26.0))
+                        .h(px(26.0))
+                        .rounded(px(13.0))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(rgba(0xFFFF_FF22)))
+                        .on_press(move || apply_zoom(zoom.get_untracked() / 1.25))
+                        .child(text("−").text_size(px(13.0)).text_color(rgba(0xF4F4_F5FF))),
+                    )
+                    .child(
+                      text(move || format!("{}%", (zoom.get() * 100.0).round() as i32))
+                        .px_2()
+                        .text_size(px(12.0))
+                        .text_color(rgba(0xE4E4_E7FF)),
+                    )
+                    .child(
+                      button()
+                        .test_id("lightbox-zoom-in")
+                        .accessibility_label("放大")
+                        .w(px(26.0))
+                        .h(px(26.0))
+                        .rounded(px(13.0))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(rgba(0xFFFF_FF22)))
+                        .on_press(move || apply_zoom(zoom.get_untracked() * 1.25))
+                        .child(text("+").text_size(px(13.0)).text_color(rgba(0xF4F4_F5FF))),
+                    )
+                    .child(view().w(px(1.0)).h(px(14.0)).mx_1().bg(rgba(0xFFFF_FF26)))
+                    .child(
+                      button()
+                        .test_id("lightbox-zoom-reset")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(999.0))
+                        .hover(|s| s.bg(rgba(0xFFFF_FF22)))
+                        .on_press(move || {
+                          zoom.set(1.0);
+                          pan.set((0.0, 0.0));
+                          reset_fn.borrow_mut().reset();
+                        })
+                        .child(text("重置").text_size(px(11.5)).text_color(rgba(0xF4F4_F5FF))),
+                    ),
+                ),
+            )
+            .into_element()
+        }
+        LightboxContent::Mermaid { block_index, source } => {
+          let live_source = signal(source.clone());
+          let init_svg = render_mermaid_svg_for_theme(&source, dark_mode.get_untracked());
+          let (init_w, init_h) = init_svg
+            .as_deref()
+            .map(|s| parse_svg_aspect_size(s, 960.0, 520.0))
+            .unwrap_or((680.0, 320.0));
+          base_size.set((init_w, init_h));
+
+          let diagram_el = dynamic(move || {
+            let _ = crate::preview_render::preview_rev().get();
+            let current_src = live_source.get();
+            if let Some(svg_markup) = render_mermaid_svg_for_theme(&current_src, dark_mode.get()) {
+              let (w0, h0) = parse_svg_aspect_size(&svg_markup, 960.0, 520.0);
+              let (pw, ph) = base_size.get_untracked();
+              if (pw - w0).abs() > 1.0 || (ph - h0).abs() > 1.0 {
+                base_size.set((w0, h0));
+              }
+              image(ImageSrc::svg_markup(&svg_markup))
+                .w(move || px(w0 * zoom.get()))
+                .h(move || px(h0 * zoom.get()))
+                .into_element()
+            } else {
+              text(current_src)
+                .text_size(px(13.0))
+                .text_color(move || palette(dark_mode.get()).text_primary)
+                .into_element()
+            }
+          })
+          .into_element();
+
+          let close_btn_fn = close_dialog.clone();
           view()
             .test_id("mica-lightbox-modal")
             .w(relative(0.86))
@@ -1979,7 +2219,6 @@ pub fn render_lightbox_modal(
             .shadow_md()
             .z_index(66)
             .child(
-              // Floating dialog header bar
               view()
                 .w_full()
                 .h(px(46.0))
@@ -1991,7 +2230,7 @@ pub fn render_lightbox_modal(
                 .border_b_1()
                 .border_color(move || palette(dark_mode.get()).border_subtle)
                 .child(
-                  text(title_text)
+                  text("Mermaid 图表预览")
                     .text_size(px(14.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(move || palette(dark_mode.get()).text_primary),
@@ -2052,10 +2291,8 @@ pub fn render_lightbox_modal(
                             .text_color(move || palette(dark_mode.get()).text_primary),
                         ),
                     )
-                    .child(when(move || is_mermaid, move || {
-                      mini_chip("源码", dark_mode, move || {
-                        show_source.set(!show_source.get_untracked());
-                      })
+                    .child(mini_chip("源码", dark_mode, move || {
+                      show_source.set(!show_source.get_untracked());
                     }))
                     .child(
                       button()
@@ -2064,129 +2301,74 @@ pub fn render_lightbox_modal(
                         .py_1()
                         .rounded(px(6.0))
                         .bg(move || palette(dark_mode.get()).accent)
-                        .on_press(close_dialog)
+                        .on_press(close_btn_fn)
                         .child(text("关闭").text_size(px(12.5)).text_color(nsh_core::color::white())),
                     ),
                 ),
             )
-            .child(match content {
-              LightboxContent::Mermaid { block_index, source } => {
-                let live_source = signal(source.clone());
-                let init_svg = render_mermaid_svg_for_theme(&source, dark_mode.get_untracked());
-                let (init_w, init_h) = init_svg
-                  .as_deref()
-                  .map(|s| parse_svg_aspect_size(s, 960.0, 520.0))
-                  .unwrap_or((680.0, 320.0));
-                base_size.set((init_w, init_h));
-
-                let diagram_el = dynamic(move || {
-                  let _ = crate::preview_render::preview_rev().get();
-                  let current_src = live_source.get();
-                  if let Some(svg_markup) = render_mermaid_svg_for_theme(&current_src, dark_mode.get()) {
-                    let (w0, h0) = parse_svg_aspect_size(&svg_markup, 960.0, 520.0);
-                    let (pw, ph) = base_size.get_untracked();
-                    if (pw - w0).abs() > 1.0 || (ph - h0).abs() > 1.0 {
-                      base_size.set((w0, h0));
-                    }
-                    image(ImageSrc::svg_markup(&svg_markup))
-                      .w(move || px(w0 * zoom.get()))
-                      .h(move || px(h0 * zoom.get()))
-                      .into_element()
-                  } else {
-                    text(current_src)
-                      .text_size(px(13.0))
-                      .text_color(move || palette(dark_mode.get()).text_primary)
-                      .into_element()
-                  }
-                })
-                .into_element();
-
-                view()
-                  .flex_1()
-                  .w_full()
-                  .min_h(px(0.0))
-                  .child(build_zoom_pan_stage(diagram_el))
-                  .child(when(move || show_source.get(), move || {
-                    let br_e = br_s.clone();
-                    let se = live_source.get_untracked();
-                    view()
-                      .w_full()
-                      .h(px(200.0))
-                      .flex_shrink_0()
-                      .p_3()
-                      .border_t_1()
-                      .border_color(move || palette(dark_mode.get()).border_normal)
-                      .bg(move || palette(dark_mode.get()).code_bg)
-                      .child(
-                        input()
-                          .w_full()
-                          .h_full()
-                          .multiline(true)
-                          .default_value(se)
-                          .text_size(px(13.0))
-                          .line_height(px(20.0))
-                          .font_family("monospace")
-                          .text_color(move || palette(dark_mode.get()).text_primary)
-                          .bg(move || palette(dark_mode.get()).code_bg)
-                          .border(px(0.0))
-                          .on_change(move |v: &str| {
-                            br_e.update_block_source_at(block_index, v);
-                            live_source.set(v.to_string());
-                          }),
-                      )
-                  }))
-                  .into_element()
-              }
-              LightboxContent::Image { url, alt, natural_size } => {
-                let fit_box = |nat: Option<(f32, f32)>| -> (f32, f32) {
-                  if let Some((nw, nh)) = nat
-                    && nw > 1.0
-                    && nh > 1.0
-                  {
-                    let scale = (860.0 / nw).min(560.0 / nh).min(1.0);
-                    return ((nw * scale).max(80.0), (nh * scale).max(60.0));
-                  }
-                  (780.0, 500.0)
-                };
-                base_size.set(fit_box(natural_size));
-                let img_el = image(ImageSrc::from(url))
-                  .w(move || px(base_size.get().0 * zoom.get()))
-                  .h(move || px(base_size.get().1 * zoom.get()))
-                  .on_load(move |sz: &nsh_core::geometry::Size<nsh_core::geometry::DevicePixels>| {
-                    let nw = sz.width.0 as f32;
-                    let nh = sz.height.0 as f32;
-                    if nw > 1.0 && nh > 1.0 {
-                      base_size.set(fit_box(Some((nw, nh))));
-                    }
-                  })
-                  .into_element();
-                view()
-                  .flex_1()
-                  .w_full()
-                  .min_h(px(0.0))
-                  .child(build_zoom_pan_stage(img_el))
-                  .child(when({ let has_a = !alt.trim().is_empty(); move || has_a }, {
-                    let a = alt.clone();
-                    move || {
-                      view()
+            .child(
+              view()
+                .flex_1()
+                .w_full()
+                .min_h(px(0.0))
+                .child(build_zoom_pan_stage(diagram_el, false, None))
+                .child(when(move || show_source.get(), move || {
+                  let br_e = br_s.clone();
+                  let se = live_source.get_untracked();
+                  view()
+                    .w_full()
+                    .h(px(200.0))
+                    .flex_shrink_0()
+                    .p_3()
+                    .border_t_1()
+                    .border_color(move || palette(dark_mode.get()).border_normal)
+                    .bg(move || palette(dark_mode.get()).code_bg)
+                    .child(
+                      input()
                         .w_full()
-                        .flex_shrink_0()
-                        .px_4()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(move || palette(dark_mode.get()).border_subtle)
-                        .items_center()
-                        .child(
-                          text(a.clone())
-                            .text_size(px(12.5))
-                            .text_color(move || palette(dark_mode.get()).text_muted),
-                        )
-                    }
-                  }))
-                  .into_element()
-              }
-            }),
+                        .h_full()
+                        .multiline(true)
+                        .default_value(se)
+                        .text_size(px(13.0))
+                        .line_height(px(20.0))
+                        .font_family("monospace")
+                        .text_color(move || palette(dark_mode.get()).text_primary)
+                        .bg(move || palette(dark_mode.get()).code_bg)
+                        .border(px(0.0))
+                        .on_change(move |v: &str| {
+                          br_e.update_block_source_at(block_index, v);
+                          live_source.set(v.to_string());
+                        }),
+                    )
+                })),
+            )
+            .into_element()
+        }
+      };
+
+      view()
+        .test_id("mica-lightbox-backdrop")
+        .absolute()
+        .inset_0()
+        .z_index(65)
+        .items_center()
+        .justify_center()
+        .bg(move || {
+          if is_image {
+            rgba(0x0000_00D9)
+          } else {
+            palette(dark_mode.get()).backdrop
+          }
+        })
+        .child(
+          button()
+            .test_id("lightbox-backdrop-dismiss")
+            .accessibility_label("关闭预览弹窗")
+            .absolute()
+            .inset_0()
+            .on_press(close_dialog),
         )
+        .child(modal_content)
         .into_element()
     }
   })
@@ -2429,5 +2611,19 @@ mod tests {
       resolve_code_block_language_display("python", bash_cmd),
       ("python".to_string(), "python".to_string())
     );
+  }
+
+  #[test]
+  fn compute_image_lightbox_fit_preserves_small_images_and_fits_large_without_card_margin() {
+    // Small image renders at crisp 1:1 natural size rather than stretching into a fixed card.
+    assert_eq!(
+      compute_image_lightbox_fit(Some((420.0, 260.0)), (1280.0, 820.0)),
+      (420.0, 260.0)
+    );
+    // Large landscape image scales proportionally inside viewport minus comfortable edge margin.
+    let (w, h) = compute_image_lightbox_fit(Some((2400.0, 1200.0)), (1280.0, 820.0));
+    assert!((w - 1200.0).abs() < 0.5 && (h - 600.0).abs() < 0.5, "got ({w}, {h})");
+    // Unloaded fallback uses bounded default size.
+    assert_eq!(compute_image_lightbox_fit(None, (1280.0, 820.0)), (720.0, 480.0));
   }
 }
