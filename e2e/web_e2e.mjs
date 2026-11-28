@@ -165,6 +165,15 @@ async function readIdbDocs(page) {
 }
 
 async function waitForSyncBadge(page, timeoutMs = 20000) {
+  const vp = page.viewportSize();
+  if (vp && vp.width < 640) {
+    // Compact mobile header (<640px) intentionally hides the sync text badge
+    // to preserve title and primary action space; wait for sign-in dismissal
+    // and compact editor header readiness instead.
+    await page.locator('[data-testid="world-auth-submit"]').waitFor({ state: 'hidden', timeout: timeoutMs }).catch(() => {});
+    await page.locator('[data-testid="ed-more"]').waitFor({ state: 'visible', timeout: timeoutMs });
+    return;
+  }
   await page.getByText('已实时同步').waitFor({ state: 'visible', timeout: timeoutMs });
 }
 

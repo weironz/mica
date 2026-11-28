@@ -2047,15 +2047,9 @@ impl CloudConnector {
 
   async fn authed_get(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
     let (base, token) = self.require_auth()?;
-    send_http(
-      "GET",
-      &format!("{base}{path}"),
-      token,
-      None,
-      timeout_secs,
-    )
-    .await
-    .map_err(|e| format!("GET {path} failed: {e}"))
+    send_http("GET", &format!("{base}{path}"), token, None, timeout_secs)
+      .await
+      .map_err(|e| format!("GET {path} failed: {e}"))
   }
 
   async fn authed_post_json(
@@ -2296,9 +2290,7 @@ async fn send_put_bytes(
       req = req.header("Authorization", &format!("Bearer {tok}"));
     }
     req = req.header("Content-Type", &ct_owned);
-    let mut resp = req
-      .send(body_owned.as_slice())
-      .map_err(|e| e.to_string())?;
+    let mut resp = req.send(body_owned.as_slice()).map_err(|e| e.to_string())?;
     Ok(resp.body_mut().read_to_string().unwrap_or_default())
   })
   .await
@@ -3455,10 +3447,19 @@ mod tests {
       build_avatar_url("https://mica.cloudcele.com/", "u-1", Some("abc123")),
       Some("https://mica.cloudcele.com/api/users/u-1/avatar?v=abc123".to_string())
     );
-    assert_eq!(build_avatar_url("https://mica.cloudcele.com", "u-1", None), None);
-    assert_eq!(build_avatar_url("https://mica.cloudcele.com", "u-1", Some("   ")), None);
+    assert_eq!(
+      build_avatar_url("https://mica.cloudcele.com", "u-1", None),
+      None
+    );
+    assert_eq!(
+      build_avatar_url("https://mica.cloudcele.com", "u-1", Some("   ")),
+      None
+    );
     assert_eq!(build_avatar_url("", "u-1", Some("abc123")), None);
-    assert_eq!(build_avatar_url("https://mica.cloudcele.com", "", Some("abc123")), None);
+    assert_eq!(
+      build_avatar_url("https://mica.cloudcele.com", "", Some("abc123")),
+      None
+    );
   }
 
   #[cfg(not(target_arch = "wasm32"))]
@@ -3488,8 +3489,12 @@ mod tests {
       assert_eq!(pre.avatar_version(), Some("hex16"));
 
       // 2. upload_avatar sends raw bytes with Content-Type and Bearer header
-      let (up_conn, _, up_h) = mock_conn("200 OK", r#"{"avatar_version":"deadbeef12345678"}"#, true);
-      let ver = up_conn.upload_avatar(b"\x89PNG\r\n\x1a\n", "image/png").await.unwrap();
+      let (up_conn, _, up_h) =
+        mock_conn("200 OK", r#"{"avatar_version":"deadbeef12345678"}"#, true);
+      let ver = up_conn
+        .upload_avatar(b"\x89PNG\r\n\x1a\n", "image/png")
+        .await
+        .unwrap();
       assert_eq!(ver.as_deref(), Some("deadbeef12345678"));
       let up_req = up_h.join().unwrap();
       assert!(up_req.starts_with("PUT /api/auth/me/avatar "));
@@ -3500,7 +3505,12 @@ mod tests {
       // 3. delete_avatar calls DELETE /api/auth/me/avatar
       let (del_conn, _, del_h) = mock_conn("200 OK", r#"{"avatar_version":null}"#, true);
       del_conn.delete_avatar().await.unwrap();
-      assert!(del_h.join().unwrap().starts_with("DELETE /api/auth/me/avatar "));
+      assert!(
+        del_h
+          .join()
+          .unwrap()
+          .starts_with("DELETE /api/auth/me/avatar ")
+      );
 
       // 4. update_me calls PATCH /api/auth/me
       let (upd_conn, _, upd_h) = mock_conn(
@@ -3512,21 +3522,33 @@ mod tests {
       assert_eq!(updated.display_name, "New Name");
       assert_eq!(updated.avatar_version.as_deref(), Some("hex16"));
       let upd_req = upd_h.join().unwrap();
-      assert!(upd_req.starts_with("PATCH /api/auth/me "), "upd_req: {upd_req}");
+      assert!(
+        upd_req.starts_with("PATCH /api/auth/me "),
+        "upd_req: {upd_req}"
+      );
       assert!(upd_req.contains("\"New Name\""), "upd_req: {upd_req}");
 
       // 5. change_password calls POST /api/auth/password
       let (pw_conn, _, pw_h) = mock_conn("204 No Content", "", true);
-      pw_conn.change_password("old-secret-1", "new-secret-2").await.unwrap();
+      pw_conn
+        .change_password("old-secret-1", "new-secret-2")
+        .await
+        .unwrap();
       let pw_req = pw_h.join().unwrap();
-      assert!(pw_req.starts_with("POST /api/auth/password "), "pw_req: {pw_req}");
+      assert!(
+        pw_req.starts_with("POST /api/auth/password "),
+        "pw_req: {pw_req}"
+      );
       assert!(pw_req.contains("\"old-secret-1\""), "pw_req: {pw_req}");
 
       // 6. delete_account calls DELETE /api/auth/me with JSON password body
       let (da_conn, _, da_h) = mock_conn("204 No Content", "", true);
       da_conn.delete_account("confirm-pass").await.unwrap();
       let da_req = da_h.join().unwrap();
-      assert!(da_req.starts_with("DELETE /api/auth/me "), "da_req: {da_req}");
+      assert!(
+        da_req.starts_with("DELETE /api/auth/me "),
+        "da_req: {da_req}"
+      );
       assert!(da_req.contains("\"confirm-pass\""), "da_req: {da_req}");
     });
   }
