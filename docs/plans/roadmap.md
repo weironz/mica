@@ -10,8 +10,7 @@
 
 ## SDK 与代码结构
 
-- `[等用户]` `mica-md` crate/npm 公开发布（S，2026-11-01 核实）。
-  SDK 已就绪且保留 `publish = false`，严格 HTML 档已完成；由用户批准并亲自发布。
+- `[等用户]` `mica-md` npm 公开发布（S，2026-11-28 核实：crates.io 已发布 [`mica-board 0.1.0`](https://crates.io/crates/mica-board) 与 [`mica-md 0.1.0`](https://crates.io/crates/mica-md)，tag `mica-md-v0.1.0`；仅余 `packages/mica-md-js` 待用户执行 `pnpm adduser --registry https://registry.npmjs.org` 与 `pnpm publish --access public`）。
   见 [S5 发布手册](../single-source/stages/S5-sdk-release.md)。
 
 ## yrs 输入兜底
