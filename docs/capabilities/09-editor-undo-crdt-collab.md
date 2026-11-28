@@ -41,7 +41,7 @@
 | `CAP-09-01` / `02` 单栈 Undo/Redo 与全操作覆盖 | P0 | 全端 | ✅ | `mica-editor::insert_text_split_and_backspace_merge_with_undo_redo` + `ai_block_edits_apply_atomically_and_reject_stale_snapshot` |
 | `CAP-09-03` 增量 yrs 合并与无回声 | P0 | 全端 | ✅ | `mica-editor::crdt_two_peer_remote_merge_preserves_local_caret_and_undo` + `mica-core::root_invariant` + `mica-editor::ensure_root_in_doc_never_wipes_existing_blocks_when_root_missing` + `mica_rust::doc_sync_session::tests::synthetic_markdown_session_suppresses_crdt_diff_until_load_crdt_doc_binds_lineage` |
 | `CAP-09-04` 远端合并选区重定位 | P0 | 全端 | ✅ | `mica-editor::reconcile_selection_tracks_remote_insert_and_block_shift` |
-| `CAP-09-05` 本地 SQLite 离线存储与云同步重试 | P0 | 桌面/Web | 🟡 | `storage_and_sync`（17/17 通过），生产云端长连协作联调待专项实测 |
+| `CAP-09-05` 本地 SQLite 离线存储与云同步重试 | P0 | 桌面/Web | 🟡 | `storage_and_sync`（含 `cap_09_05_multi_cycle_disconnect_backoff_outbox_and_remote_convergence` 多轮断连/重启 SQLite outbox/退避与并发合并回归），真实弱网环境长时间连接仍建议端到端专项复测 |
 
 ---
 

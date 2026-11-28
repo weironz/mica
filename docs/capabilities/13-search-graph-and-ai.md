@@ -33,7 +33,7 @@
 | --- | --- | --- | --- | --- |
 | `CAP-13-01` / `02` 全局搜索（工作区/文件夹/页面 + 高亮 + 键盘） | P0 | 全端 | ✅ | `search_view::tests` |
 | `CAP-13-03` 知识关系图谱（力导向布局 + 缩放/平移/跳转） | P1 | 桌面/Web | ✅ | `graph_dialog::tests` + `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips` |
-| `CAP-13-04` / `05` 全局/行内/代码块 AI 与服务商配置 | P1 | 桌面/Web | 🟡 | `ai_dialog::tests` + `mica-editor::ai_block_edits_apply_atomically_and_reject_stale_snapshot` + `net::tests`（需线上 AI 服务实测流式响应） |
+| `CAP-13-04` / `05` 全局/行内/代码块 AI 与服务商配置 | P1 | 桌面/Web | 🟡 | `ai_dialog::tests` + `mica-editor::ai_block_edits_apply_atomically_and_reject_stale_snapshot` + `net::tests` + `routes::ai*`；2026-11-28 已使用真实 DeepSeek API 完成非流式（HTTP 200）与 SSE 流式（8 chunks + `[DONE]`）协议兼容实测，待生产环境配置管理员 Key 后端到端页面操作复验 |
 
 ---
 

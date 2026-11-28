@@ -210,3 +210,39 @@ done
 ### 快速回滚（秒级切回源站）
 
 若需紧急绕过 CDN，只需在**原 DNS 解析商**处将 `<YOUR_DOMAIN>` 的 `CNAME` 记录改回指向 `<ORIGIN_IP>` 的 `A` 记录即可（无需改动源站代码与容器配置）；建议长期稳定运行前将原 DNS 与 ESA 侧记录 TTL 设在 `300~600s` 以兼顾稳定性与切换速度。
+
+---
+
+## 七、对象存储 RustFS 域名（`s3.<YOUR_DOMAIN>`）接入 ESA 差异与避坑
+
+> 例如生产环境中的 `s3.mica.cloudcele.com`。对象存储承接的是 **AWS SigV4 预签名直传（`PUT`）** 与 **带签名查询参数的外链读取（`GET`）**，接入流程与主站域名相似，但**规则配置不能直接照搬主站**。
+
+### 1. 同源配置（与主站一致的部分）
+
+- **接入方式与回源**：在 ESA 新增站点 `s3.<YOUR_DOMAIN>`（CNAME 模式、全球加速），DNS 回源填 `<ORIGIN_IP>`、`@${host}`（即 `@`），代理加速开启；
+- **SSL/TLS**：开启边缘证书，回源加密模式选 **完全（Full）**（源站 Traefik 路由 `mica-s3` 对该域名提供 HTTPS 终止）。
+
+### 2. 必须严格区分的 5 大核心差异（红线清单）
+
+| 维度 | 主站（`mica.<DOMAIN>`） | RustFS 对象存储（`s3.mica.<DOMAIN>`） | 错误后果 |
+| --- | --- | --- | --- |
+| **业务类型 / 规则模版** | 网站页面（关闭模版） | **网站页面**或仅创建裸记录（**务必关闭规则模版 & 关闭一键防盗刷**） | 误开大文件模版或严格 WAF 规则可能拦截 `PUT` 二进制图片流或重写缓存键 |
+| **允许请求方法与上传体积** | 主要是 `GET`/`POST`/WS | **Browser 直传必须放行 `PUT` / `OPTIONS` / `GET` / `HEAD`**，注意单文件最大上传放宽（默认 `20 MB` 内网图无压力，WAF 不要拦截大包 binary `PUT`） | 编辑器粘贴/上传图片时在预签名 `PUT` 阶段直接报错 `403` / `405` |
+| **回源 `HOST` 必须原样透传** | 匹配 Traefik | **严禁改写 `Host` 头**，必须保留 `s3.mica.<DOMAIN>` | SigV4 将 `host` 签入 `X-Amz-SignedHeaders`，改动即触发 RustFS `403 SignatureDoesNotMatch` |
+| **缓存键 Query String** | 保留 `?v=` 哈希参数 | **严禁勾选「忽略全部查询字符串（Ignore Query String）」** | 预签名 URL 靠 `?X-Amz-Algorithm=...&X-Amz-Expires=...&X-Amz-Signature=...` 鉴权；忽略参数会让无签名/过期请求误命中缓存造成越权 |
+| **CORS 响应头** | 同源为主 | **不要在边缘剥离或覆写源站返回的 `Access-Control-*` 头**，且对 `OPTIONS` 预检请求不应缓存错误结果 | 主站前端直传 `PUT` 到 `s3.` 子域名跨域失败 |
+
+### 3. 对缓存命中率的合理预期
+
+- `/api/workspaces/{ws}/files/resolve` 每次签发的 RustFS `GET` URL 都带有不同时间戳和 `X-Amz-Signature`。只要严格保留完整 Query String，**不同签名的请求之间默认不会跨会话复用缓存**；
+- 只有单标签页/短期内重复请求同一签发 URL（或公开外链稳定 URL）能命中边缘 `HIT`；
+- 因此 `s3.` 接入 ESA 的主要收益是 **近端边缘 TLS 握手加速 + 跨境专线稳定回源（解决跨国传图/看图慢和丢包断流）**，而不是静态高命中率。若确实只代理单次 `GET` 而不经过签名校验才考虑签名剥离（私有工作区文档图片严禁剥离）。
+
+---
+
+## 八、主域名切入 ESA 后 Ansible / CI SSH 部署避坑
+
+- [ansible/inventory.yml](../../ansible/inventory.yml) 中生产主机若填写了 `ansible_host: mica.cloudcele.com`，一旦主域名 CNAME 指向阿里云 ESA 代理 IP，**ESA 默认只代理 80/443（HTTP/HTTPS）端口，不转发 SSH 22 端口**，会导致 GitHub Actions `Deploy` 任务在 SSH 连接阶段超时失败。
+- **标准修法（任选其一，推荐方案 A）**：
+  1. **方案 A（推荐，保留域名语义与独立 SSH 入口）**：在原 DNS 解析商新增一条**不经 ESA 代理的直连 `A` 记录**（如 `ssh.mica.cloudcele.com` 或 `origin.mica.cloudcele.com` → `<ORIGIN_IP>`），然后将 [ansible/inventory.yml](../../ansible/inventory.yml) 的 `ansible_host` 改为该直连域名，并按新主机名同步更新 GitHub 仓库 Secret `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan -H <新主机名>`）。
+  2. **方案 B（最简）**：直接将 `ansible_host` 改为 `<ORIGIN_IP>`，并用源站 IP 的主机公钥条目更新 GitHub Secret `DEPLOY_KNOWN_HOSTS`。

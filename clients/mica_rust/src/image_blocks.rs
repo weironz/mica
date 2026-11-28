@@ -1128,6 +1128,7 @@ pub fn render_image_block_view(
   let marquee_origin_page = env.marquee_origin_page;
   let sink_clear_rev = env.sink_clear_rev;
   let last_click = env.last_click;
+  let last_ptr_touch = env.last_pointer_is_touch;
 
   let hovered = signal(false);
   let copied_flash = signal(false);
@@ -1213,6 +1214,9 @@ pub fn render_image_block_view(
     .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
     .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
     .on_press_down(move |_: &PressEvent| {
+      if last_ptr_touch.get_untracked() {
+        return;
+      }
       focused_code.set(None);
       focused_cell.set(None);
       table_sel.set(None);
@@ -1275,10 +1279,13 @@ pub fn render_image_block_view(
       .cursor(Cursor::Pointer)
       .on_press(move || {
         marquee_selected.set(None);
-        editor_focused.set(true);
+        let is_touch = last_ptr_touch.get_untracked();
+        editor_focused.set(!is_touch);
         let idx = live_idx();
         br_click.set_selection(DocSelection::caret(idx, 0));
-        br_click.request_focus();
+        if !is_touch {
+          br_click.request_focus();
+        }
         // Double-click detection (matching `v0.14.11`: single click selects, double click zooms).
         let now_ms = crate::touch_selection::now_ms();
         let (prev_idx, _prev_off, prev_t, prev_clicks) = last_click.get_untracked();

@@ -9,7 +9,7 @@ use chrono::Utc;
 use mica_api_types::{AuthResponse, User, View};
 use mica_client::WorldOrigin;
 use mica_core::{Block, MicaDoc};
-use mica_sync::{SyncEffect, SyncEvent, SyncPhase};
+use mica_sync::{SyncEffect, SyncEvent, SyncPhase, TimerKind};
 use uuid::Uuid;
 
 use mica_client::net::{CloudConfig, CloudConnector};
@@ -897,4 +897,339 @@ fn usage_stats_vault_and_cloud_connector_endpoints() {
   assert!(reqs[1].starts_with(&format!(
     "GET /api/stats/activity?range=7d&tz_offset=480&include_imports=false&workspace_id={ws_id} "
   )));
+}
+
+fn test_b64_encode(input: &[u8]) -> String {
+  const TBL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+  for chunk in input.chunks(3) {
+    let b0 = chunk[0] as u32;
+    let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+    let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+    let triple = (b0 << 16) | (b1 << 8) | b2;
+    out.push(TBL[((triple >> 18) & 0x3F) as usize] as char);
+    out.push(TBL[((triple >> 12) & 0x3F) as usize] as char);
+    out.push(if chunk.len() > 1 { TBL[((triple >> 6) & 0x3F) as usize] as char } else { '=' });
+    out.push(if chunk.len() > 2 { TBL[(triple & 0x3F) as usize] as char } else { '=' });
+  }
+  out
+}
+
+fn test_b64_decode(input: &str) -> Vec<u8> {
+  let val = |c: u8| -> Option<u32> {
+    match c {
+      b'A'..=b'Z' => Some((c - b'A') as u32),
+      b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+      b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+      b'+' => Some(62),
+      b'/' => Some(63),
+      _ => None,
+    }
+  };
+  let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+  let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+  for chunk in bytes.as_chunks::<4>().0 {
+    let a = val(chunk[0]).unwrap();
+    let b = val(chunk[1]).unwrap();
+    let c = if chunk[2] == b'=' { 0 } else { val(chunk[2]).unwrap() };
+    let d = if chunk[3] == b'=' { 0 } else { val(chunk[3]).unwrap() };
+    let t = (a << 18) | (b << 12) | (c << 6) | d;
+    out.push(((t >> 16) & 0xFF) as u8);
+    if chunk[2] != b'=' {
+      out.push(((t >> 8) & 0xFF) as u8);
+    }
+    if chunk[3] != b'=' {
+      out.push((t & 0xFF) as u8);
+    }
+  }
+  out
+}
+
+#[test]
+fn cap_09_05_multi_cycle_disconnect_backoff_outbox_and_remote_convergence() {
+  let db_path = temp_vault_path("cap0905");
+  let db_str = db_path.to_str().unwrap().to_string();
+  let origin = "https://sync.cap0905.test";
+  let doc_id = Uuid::new_v4().to_string();
+
+  // Server / peer initial snapshot.
+  let mut server_doc = MicaDoc::from_blocks_with_client_id(
+    "root",
+    &[
+      Block::new("root", "page").with_children(vec!["p0".into()]),
+      Block::new("p0", "paragraph").with_text("Initial cloud block"),
+    ],
+    Some(2),
+  );
+  let init_base_b64 = test_b64_encode(&server_doc.encode_state());
+
+  // Phase 1: Initial live session -> apply & ack one online edit -> abrupt disconnect.
+  let sv_after_online;
+  {
+    let vault = VaultStore::open_at(&db_str).expect("open vault");
+    let storage = vault.create_sync_storage(origin, &doc_id);
+    let conn = CloudConnector::new(CloudConfig {
+      server_url: origin.to_string(),
+      access_token: Some("tok-1".to_string()),
+      email: Some("a@mica.test".to_string()),
+    });
+    let mut engine = conn.create_doc_sync_with_storage(&doc_id, vault.client_id(), "Alice", storage);
+
+    let e1 = engine.handle_event(SyncEvent::Connect);
+    let epoch1 = e1
+      .iter()
+      .find_map(|ef| match ef {
+        SyncEffect::OpenSocket { epoch } => Some(*epoch),
+        _ => None,
+      })
+      .expect("open socket epoch 1");
+    let _ = engine.handle_event(SyncEvent::SocketOpened { epoch: epoch1 });
+    let base_effects = engine.handle_event(SyncEvent::SocketFrame {
+      epoch: epoch1,
+      json: serde_json::json!({
+        "type": "sync.base",
+        "base": init_base_b64,
+        "base_rid": 10
+      })
+      .to_string(),
+    });
+    assert!(base_effects.iter().any(|ef| matches!(ef, SyncEffect::Ready { .. })));
+    let _ = engine.handle_event(SyncEvent::SocketFrame {
+      epoch: epoch1,
+      json: serde_json::json!({ "type": "sync.updates", "updates": [] }).to_string(),
+    });
+    assert!(engine.is_online());
+    assert_eq!(engine.phase(), SyncPhase::Synced);
+
+    // Online edit 1 + server ack.
+    let diff1 = {
+      let doc = engine.doc_mut().unwrap();
+      let sv = doc.state_vector();
+      doc.insert_block("root", 1, &Block::new("a1", "paragraph").with_text("Online edit A1"));
+      doc.encode_diff(&sv).unwrap()
+    };
+    let push1 = engine.handle_event(SyncEvent::ApplyLocalDiff(diff1));
+    let (ack_id1, push1_update_b64) = push1
+      .iter()
+      .find_map(|ef| match ef {
+        SyncEffect::SendWsJson { payload, .. } => {
+          let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+          if v.get("type")?.as_str()? == "sync.push" {
+            Some((
+              v.get("id")?.as_str()?.to_string(),
+              v.get("payload")?.get("update")?.as_str()?.to_string(),
+            ))
+          } else {
+            None
+          }
+        }
+        _ => None,
+      })
+      .expect("online edit must emit sync.push");
+    server_doc
+      .apply_update(&test_b64_decode(&push1_update_b64))
+      .unwrap();
+    let _ = engine.handle_event(SyncEvent::SocketFrame {
+      epoch: epoch1,
+      json: serde_json::json!({ "type": "sync.ack", "ack_id": ack_id1, "rid": 11 }).to_string(),
+    });
+    assert!(engine.outbox_empty());
+    assert_eq!(engine.phase(), SyncPhase::Synced);
+    sv_after_online = server_doc.state_vector();
+
+    // Disconnect (network drops) -> exponential backoff timer scheduled.
+    let drop_effects = engine.handle_event(SyncEvent::SocketClosed {
+      epoch: epoch1,
+      reason: "network drop".to_string(),
+    });
+    assert!(!engine.is_online());
+    assert_eq!(engine.phase(), SyncPhase::Offline);
+    let backoff1 = drop_effects
+      .iter()
+      .find_map(|ef| match ef {
+        SyncEffect::ScheduleTimer {
+          kind: TimerKind::Reconnect,
+          delay_ms,
+          ..
+        } => Some(*delay_ms),
+        _ => None,
+      })
+      .expect("disconnect schedules first reconnect timer");
+
+    // Failed reconnect attempt #1 -> backoff grows strictly.
+    let tick1 = engine.handle_event(SyncEvent::Tick {
+      now_ms: 10_000,
+      timer_kind: TimerKind::Reconnect,
+      epoch: epoch1,
+    });
+    let epoch2 = tick1
+      .iter()
+      .find_map(|ef| match ef {
+        SyncEffect::OpenSocket { epoch } => Some(*epoch),
+        _ => None,
+      })
+      .expect("retry opens epoch 2");
+    assert!(epoch2 > epoch1);
+    let fail_reconnect = engine.handle_event(SyncEvent::SocketClosed {
+      epoch: epoch2,
+      reason: "connect timeout".to_string(),
+    });
+    let backoff2 = fail_reconnect
+      .iter()
+      .find_map(|ef| match ef {
+        SyncEffect::ScheduleTimer {
+          kind: TimerKind::Reconnect,
+          delay_ms,
+          ..
+        } => Some(*delay_ms),
+        _ => None,
+      })
+      .expect("failed reconnect schedules longer backoff");
+    assert!(
+      backoff2 > backoff1,
+      "expected exponential backoff: {backoff2} > {backoff1}"
+    );
+
+    // Offline local burst edits -> queued into SQLite outbox.
+    for n in 1..=3 {
+      let diff_n = {
+        let doc = engine.doc_mut().unwrap();
+        let sv = doc.state_vector();
+        doc.insert_block(
+          "root",
+          n + 1,
+          &Block::new(format!("off{n}"), "paragraph").with_text(format!("Offline burst {n}")),
+        );
+        doc.encode_diff(&sv).unwrap()
+      };
+      let _ = engine.handle_event(SyncEvent::ApplyLocalDiff(diff_n));
+    }
+    assert!(!engine.outbox_empty());
+    let _ = engine.handle_event(SyncEvent::FlushForExit);
+  }
+
+  // Meanwhile peer B writes concurrently while client A is offline / restarted.
+  server_doc.insert_block(
+    "root",
+    2,
+    &Block::new("b_remote", "paragraph").with_text("Peer B concurrent edit"),
+  );
+  let peer_b_diff_b64 = test_b64_encode(&server_doc.encode_diff(&sv_after_online).unwrap());
+
+  // Phase 2: Simulate full app restart against the same SQLite vault -> reconnect ->
+  // receive remote update -> replay outbox -> converge identically with zero gaps.
+  {
+    let vault_reopened = VaultStore::open_at(&db_str).expect("reopen vault");
+    let storage = vault_reopened.create_sync_storage(origin, &doc_id);
+    let conn = CloudConnector::new(CloudConfig {
+      server_url: origin.to_string(),
+      access_token: Some("tok-1".to_string()),
+      email: Some("a@mica.test".to_string()),
+    });
+    let mut engine = conn.create_doc_sync_with_storage(
+      &doc_id,
+      vault_reopened.client_id(),
+      "Alice",
+      storage,
+    );
+
+    let c_fx = engine.handle_event(SyncEvent::Connect);
+    assert!(
+      !engine.outbox_empty(),
+      "SQLite outbox must survive full restart across offline edits"
+    );
+    let epoch = c_fx
+      .iter()
+      .find_map(|ef| match ef {
+        SyncEffect::OpenSocket { epoch } => Some(*epoch),
+        _ => None,
+      })
+      .unwrap();
+    let _ = engine.handle_event(SyncEvent::SocketOpened { epoch });
+
+    // Server answers reconnect sync.bootstrap with delta updates since client's SV (Peer B concurrent edit).
+    let base_b64_before_b = init_base_b64.clone();
+    let base_fx = engine.handle_event(SyncEvent::SocketFrame {
+      epoch,
+      json: serde_json::json!({
+        "type": "sync.base",
+        "base": base_b64_before_b,
+        "base_rid": 10
+      })
+      .to_string(),
+    });
+    let updates_fx = engine.handle_event(SyncEvent::SocketFrame {
+      epoch,
+      json: serde_json::json!({
+        "type": "sync.updates",
+        "updates": [
+          { "rid": 12, "update": peer_b_diff_b64 }
+        ]
+      })
+      .to_string(),
+    });
+    assert!(updates_fx.iter().any(|ef| matches!(ef, SyncEffect::RemoteBlocksChanged { .. })));
+
+    // Empty tail completes catch-up and drains any remaining queued outbox pushes.
+    let tail_fx = engine.handle_event(SyncEvent::SocketFrame {
+      epoch,
+      json: serde_json::json!({ "type": "sync.updates", "updates": [] }).to_string(),
+    });
+    let mut pushed = Vec::new();
+    for ef in base_fx.into_iter().chain(updates_fx).chain(tail_fx) {
+      if let SyncEffect::SendWsJson { payload, .. } = ef
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload)
+        && v.get("type").and_then(|t| t.as_str()) == Some("sync.push")
+      {
+        pushed.push((
+          v.get("id").unwrap().as_str().unwrap().to_string(),
+          v.get("payload").unwrap().get("update").unwrap().as_str().unwrap().to_string(),
+        ));
+      }
+    }
+    assert!(
+      !pushed.is_empty(),
+      "queued offline outbox edits must replay automatically on reconnect"
+    );
+
+    let mut rid = 12i64;
+    for (ack_id, upd_b64) in pushed {
+      rid += 1;
+      server_doc.apply_update(&test_b64_decode(&upd_b64)).unwrap();
+      let _ = engine.handle_event(SyncEvent::SocketFrame {
+        epoch,
+        json: serde_json::json!({ "type": "sync.ack", "ack_id": ack_id, "rid": rid }).to_string(),
+      });
+    }
+
+    assert!(engine.outbox_empty(), "all outbox edits must drain cleanly");
+    assert_eq!(engine.phase(), SyncPhase::Synced);
+
+    let client_doc = engine.doc().expect("hydrated doc");
+    assert!(!client_doc.has_pending_updates());
+    assert!(!server_doc.has_pending_updates());
+
+    let client_texts: Vec<String> = client_doc
+      .to_blocks()
+      .into_iter()
+      .map(|b| b.text)
+      .filter(|t| !t.is_empty())
+      .collect();
+    let server_texts: Vec<String> = server_doc
+      .to_blocks()
+      .into_iter()
+      .map(|b| b.text)
+      .filter(|t| !t.is_empty())
+      .collect();
+    assert_eq!(client_texts, server_texts);
+    assert!(client_texts.contains(&"Online edit A1".to_string()));
+    assert!(client_texts.contains(&"Offline burst 1".to_string()));
+    assert!(client_texts.contains(&"Offline burst 2".to_string()));
+    assert!(client_texts.contains(&"Offline burst 3".to_string()));
+    assert!(client_texts.contains(&"Peer B concurrent edit".to_string()));
+  }
+
+  if let Some(dir) = db_path.parent() {
+    let _ = std::fs::remove_dir_all(dir);
+  }
 }

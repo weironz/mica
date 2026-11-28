@@ -188,13 +188,22 @@ pub(crate) fn render_code_block_view(
     let measure_sel = measure.clone();
     let measure_click = measure.clone();
     let measure_lp = measure.clone();
+    let measure_press = measure.clone();
     let measure_move = measure;
     let inner_drag_hit_code = env.inner_drag_hit.clone();
     let last_ptr_touch_code = env.last_pointer_is_touch;
     let last_ptr_touch_code_lp = env.last_pointer_is_touch;
-    let touch_sel_code = env.touch_selection_active;
+    let touch_sel_code_press = env.touch_selection_active;
     let touch_sel_code_lp = env.touch_selection_active;
-    let tap_tracker_code = env.touch_tap_tracker.clone();
+    let tap_tracker_code_down = env.touch_tap_tracker.clone();
+    let tap_tracker_code_press = env.touch_tap_tracker.clone();
+    let pending_code_touch_tap: Rc<RefCell<Option<crate::touch_selection::PendingTouchTap>>> =
+      Rc::new(RefCell::new(None));
+    let pending_code_touch_down = pending_code_touch_tap.clone();
+    let pending_code_touch_lp = pending_code_touch_tap.clone();
+    let pending_code_touch_press = pending_code_touch_tap;
+    let layouts_press = layouts.clone();
+    let bid_press = block_id.clone();
     let layouts_code_lp = layouts.clone();
     let bid_code_lp = block_id.clone();
     let br_code_lp = bridge.clone();
@@ -252,6 +261,18 @@ pub(crate) fn render_code_block_view(
         }
       })
       .on_press_down(move |e: &PressEvent| {
+        *pending_code_touch_down.borrow_mut() = None;
+        if last_ptr_touch_code.get_untracked() {
+          *pending_code_touch_down.borrow_mut() = Some(crate::touch_selection::PendingTouchTap {
+            local_x: e.position.x.0,
+            local_y: e.position.y.0,
+            page_x: e.page_position.x.0,
+            page_y: e.page_position.y.0,
+            alt: e.modifiers.alt,
+          });
+          return;
+        }
+
         focused_code.set(None);
         focused_cell.set(None);
         table_sel.set(None);
@@ -264,38 +285,30 @@ pub(crate) fn render_code_block_view(
         let text_click = live_src.get_untracked();
         let text_u16_len = utf16_len(&text_click);
         let off = hit_code_offset(&layouts_click, &bid_click, &text_click, &measure_click, e.position.x.0, e.position.y.0);
-        let is_touch = last_ptr_touch_code.get_untracked();
-        let click_count = if is_touch {
-          tap_tracker_code.borrow_mut().bump(
-            e.page_position.x.0,
-            e.page_position.y.0,
-            crate::touch_selection::now_ms(),
-          )
-        } else {
-          tap_tracker_code.borrow_mut().reset();
-          e.clicks.clamp(1, 3)
-        };
+        tap_tracker_code_down.borrow_mut().reset();
+        let click_count = e.clicks.clamp(1, 3);
         let idx = live_index(at);
         if click_count == 3 {
           let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, text_u16_len));
-          drag_anchor.set(if is_touch { None } else { Some(sel.anchor_pos()) });
-          touch_sel_code.set(is_touch && !sel.is_collapsed());
+          drag_anchor.set(Some(sel.anchor_pos()));
+          touch_sel_code_press.set(false);
           br_click.set_selection(sel);
         } else if click_count == 2 {
           let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
           let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
-          drag_anchor.set(if is_touch { None } else { Some(sel.anchor_pos()) });
-          touch_sel_code.set(is_touch && !sel.is_collapsed());
+          drag_anchor.set(Some(sel.anchor_pos()));
+          touch_sel_code_press.set(false);
           br_click.set_selection(sel);
         } else {
           let pos = DocPosition::new(idx, off);
-          drag_anchor.set(if is_touch { None } else { Some(pos) });
-          touch_sel_code.set(false);
+          drag_anchor.set(Some(pos));
+          touch_sel_code_press.set(false);
           br_click.set_selection(DocSelection::caret(idx, off));
         }
         br_click.request_focus();
       })
       .on_long_press(move |e: &PressEvent| {
+        *pending_code_touch_lp.borrow_mut() = None;
         if !last_ptr_touch_code_lp.get_untracked() {
           return;
         }
@@ -318,6 +331,51 @@ pub(crate) fn render_code_block_view(
         }
       })
       .on_press(move || {
+        if let Some(tap) = pending_code_touch_press.borrow_mut().take() {
+          focused_code.set(None);
+          focused_cell.set(None);
+          table_sel.set(None);
+          table_drag.set(None);
+          marquee_selected.set(None);
+          blank_marquee_ready.set(false);
+          marquee_origin_page.set(None);
+          sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+          drag_anchor.set(None);
+
+          let text_click = live_src.get_untracked();
+          let text_u16_len = utf16_len(&text_click);
+          let off = hit_code_offset(
+            &layouts_press,
+            &bid_press,
+            &text_click,
+            &measure_press,
+            tap.local_x,
+            tap.local_y,
+          );
+          let click_count = tap_tracker_code_press.borrow_mut().bump(
+            tap.page_x,
+            tap.page_y,
+            crate::touch_selection::now_ms(),
+          );
+          let idx = live_index(at);
+          if click_count == 3 {
+            let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, text_u16_len));
+            touch_sel_code_press.set(!sel.is_collapsed());
+            br_press.set_selection(sel);
+          } else if click_count == 2 {
+            let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
+            let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
+            touch_sel_code_press.set(!sel.is_collapsed());
+            br_press.set_selection(sel);
+          } else {
+            touch_sel_code_press.set(false);
+            br_press.set_selection(DocSelection::caret(idx, off));
+          }
+          if crate::touch_selection::should_request_keyboard_focus_on_touch_tap(click_count, false) {
+            br_press.request_focus();
+          }
+          return;
+        }
         // Accessibility / headless test press fallback when `on_press_down` wasn't synthesized.
         let idx = live_index(at);
         if br_press.selection().is_none_or(|s| s.focus_node() != idx) {
@@ -586,6 +644,10 @@ pub(crate) fn render_code_block_view(
   let touch_sel_card = env.touch_selection_active;
   let last_ptr_touch_card = env.last_pointer_is_touch;
   let br_card_down = bridge.clone();
+  let br_card_press = bridge.clone();
+  let pending_card_touch_tap: Rc<RefCell<Option<u32>>> = Rc::new(RefCell::new(None));
+  let pending_card_touch_down = pending_card_touch_tap.clone();
+  let pending_card_touch_press = pending_card_touch_tap;
   let code_row = view()
     .w_full()
     .flex_row()
@@ -642,6 +704,13 @@ pub(crate) fn render_code_block_view(
         })
         .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
         .on_press_down(move |e: &PressEvent| {
+          *pending_card_touch_down.borrow_mut() = None;
+          let text_u16_len = utf16_len(&live_src.get_untracked());
+          let off = if e.position.x.0 < 14.0 { 0 } else { text_u16_len };
+          if last_ptr_touch_card.get_untracked() {
+            *pending_card_touch_down.borrow_mut() = Some(off);
+            return;
+          }
           focused_code.set(None);
           focused_cell.set(None);
           table_sel.set(None);
@@ -652,16 +721,28 @@ pub(crate) fn render_code_block_view(
           touch_sel_card.set(false);
           sink_clear_rev.update(|v| *v = v.wrapping_add(1));
           let idx = live_index(at);
-          let text_u16_len = utf16_len(&live_src.get_untracked());
-          let off = if e.position.x.0 < 14.0 { 0 } else { text_u16_len };
           let pos = DocPosition::new(idx, off);
-          drag_anchor.set(if last_ptr_touch_card.get_untracked() {
-            None
-          } else {
-            Some(pos)
-          });
+          drag_anchor.set(Some(pos));
           br_card_down.set_selection(DocSelection::caret(idx, off));
           br_card_down.request_focus();
+        })
+        .on_press(move || {
+          let Some(off) = pending_card_touch_press.borrow_mut().take() else {
+            return;
+          };
+          focused_code.set(None);
+          focused_cell.set(None);
+          table_sel.set(None);
+          table_drag.set(None);
+          marquee_selected.set(None);
+          blank_marquee_ready.set(false);
+          marquee_origin_page.set(None);
+          touch_sel_card.set(false);
+          sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+          drag_anchor.set(None);
+          let idx = live_index(at);
+          br_card_press.set_selection(DocSelection::caret(idx, off));
+          br_card_press.request_focus();
         })
         .child(code_row)
         // Floating top-right hover/active toolbar (suppressed during drag-selection

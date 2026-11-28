@@ -12,6 +12,11 @@ grep -iq '^cache-control:.*no-cache' <<<"$entry_hdrs" \
 grep -iq "^content-security-policy-report-only:.*script-src 'self' 'wasm-unsafe-eval' 'sha256-" <<<"$entry_hdrs" \
   || { echo "FAIL: $base/ CSP script-src not pinned by sha256 hash" >&2; exit 1; }
 
+# 1b. Service Worker entry (/sw.js): 200, Cache-Control: no-cache.
+sw_hdrs=$(curl -fsSI "$base/sw.js")
+grep -iq '^cache-control:.*no-cache' <<<"$sw_hdrs" \
+  || { echo "FAIL: $base/sw.js missing Cache-Control: no-cache" >&2; exit 1; }
+
 # 2. Main WASM: 200, application/wasm, Brotli-encoded when client accepts br.
 wasm_hdrs=$(curl -fsSI -H 'Accept-Encoding: br' "$base/mica_rust_bg.wasm")
 grep -iq '^content-type:.*application/wasm' <<<"$wasm_hdrs" \

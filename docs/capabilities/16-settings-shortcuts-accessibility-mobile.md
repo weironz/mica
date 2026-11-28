@@ -44,7 +44,7 @@
 | `CAP-16-04` 快捷键体系与设置页清单 | P0 | 桌面/Web | ✅ | [docs/features/shortcuts.md](../features/shortcuts.md) + `editor_view.rs` + `lib.rs` |
 | `CAP-16-05` 移动端 `<768px` 抽屉与窄屏标签切换 | P1 | 移动端/窄屏 | ✅ | `responsive_shell.rs`（`<768px` 覆盖抽屉 + 遮罩 + `narrow-tab-switcher` + 自动隐藏页宽手柄）+ `app_flows::regression_narrow_viewport_drawers_and_touch_bar` |
 | `CAP-16-06` 触摸选区（CJK 1–2 字规则）、水滴拖动手柄与操作栏 | P1 | 移动端/Web | ✅ | `touch_selection::tests`（CJK 1–2 字选词、触摸多击计数、跨段落/代码块/表格手柄命中）+ `app_flows::regression_narrow_viewport_drawers_and_touch_bar` + `on_long_press` / `touch-handle-start` / `touch-handle-end`（`TouchClaim::on_start().block_native(true)` 锁手势防滚动劫持） |
-| `CAP-16-07` 移动端流畅阅读与灯箱缩放 | P1 | 移动端 | 🟡 | 虚拟滚动与灯箱核心逻辑已复用，待 iOS/Android 实机打包验收 |
+| `CAP-16-07` 移动端流畅阅读与灯箱缩放 | P1 | 移动端 | 🟡 | 虚拟滚动、触摸防误弹键盘（滚动滑动不触发 `request_focus`，仅干脆单击落光标唤起输入法）与多指捏合状态机（`touch_selection::LightboxGesture` + `touch_selection::tests`）已落地，待下一版发版后 iOS/Android 实机复测 |
 
 ---
 
@@ -53,3 +53,4 @@
 - **2026-11-23**：沉淀设置中心、快捷键体系、主题外观与移动端（含 `touchWordBounds` 触摸选区）规格。
 - **2026-11-23（补齐迭代）**：新增 `responsive_shell.rs` 与 `touch_selection.rs`，补齐 `<768px` 响应式左右覆盖抽屉、窄屏标签切换器、CJK 1–2 字触摸选词算法与窄屏紧凑触摸选区操作条（`CAP-16-05` / `06`）。
 - **2026-11-24（使用统计与可观测性 #191）**：设置中心扩展为 9 标签新增「使用统计」（同步在左下角账号菜单提供直达入口），接入 L1 统一 `mica_core::word_count` / `usage_stats`、本地 SQLite 小时桶活跃表与云端 `/api/stats/overview` `/api/stats/activity` + Prometheus `/metrics` 业务指标。
+- **2026-11-28（真机体验修复 `CAP-16-07` & Web 离线 PWA 外壳）**：① 正文/代码块/图片在触摸指针（`Touch`/`Pen`）下不再于 `on_press_down` 提前 `request_focus()`，改为仅干脆单击 `on_press` 时才聚焦 IME，根治长文档下滑刚触屏就弹出输入法；② 放大灯箱改为 `TouchClaim::on_start().block_native(true)` + 基于指针 ID 的 `LightboxGesture` 状态机，支持以双指中点为锚点的顺滑缩放与单/双指切换零跳动，修复双指缩放在区域内来回跳动；③ 新增构建期内容哈希版 `sw.js`（HTML 首页 Network-First 离线兜底、`?v=` 静态 JS/WASM Cache-First、`/api/*` `/ws/*` `/s/*` 严格直通）支持 Web 端离线按 F5 刷新秒开本机缓存。

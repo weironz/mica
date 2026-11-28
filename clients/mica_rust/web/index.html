@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#6357E8">
 <meta name="color-scheme" content="light dark">
 <meta name="mica-preview-version" content="">
+<meta name="mica-sw-cache" content="">
 <title>Mica</title>
 <link rel="icon" type="image/svg+xml" href="./favicon.svg">
 <link id="mica-nsh-preload" rel="modulepreload" href="./nsh.js">
@@ -279,7 +280,9 @@
   const glueUrl = document.getElementById("mica-glue-preload")?.getAttribute("href") || "./mica_rust.js";
   const wasmUrl = document.getElementById("mica-wasm-preload")?.getAttribute("href") || "./mica_rust_bg.wasm";
   const previewVer = document.querySelector('meta[name="mica-preview-version"]')?.getAttribute("content") || "";
+  const swCacheName = document.querySelector('meta[name="mica-sw-cache"]')?.getAttribute("content") || "";
   const qs = previewVer ? `?v=${previewVer}` : "";
+  let wasmCacheCopy = null;
 
   const previewMods = { math: null, mermaid: null };
   async function loadPreview(kind) {
@@ -398,9 +401,35 @@
     playerInstance.runRust();
   };
 
+  const warmOfflineShell = () => {
+    if (!isHttpOrigin || !swCacheName) return;
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
+    }
+    if (!("caches" in window)) return;
+    (async () => {
+      try {
+        const cache = await caches.open(swCacheName);
+        if (wasmCacheCopy) {
+          const copy = wasmCacheCopy;
+          wasmCacheCopy = null;
+          await cache.put(wasmUrl, copy);
+        }
+        for (const assetUrl of [nshUrl, glueUrl, "./favicon.svg"]) {
+          if (!(await cache.match(assetUrl))) {
+            await cache.add(assetUrl).catch(() => {});
+          }
+        }
+      } catch {}
+    })();
+  };
+
   // Start fetching WASM immediately (matching <link rel="preload" as="fetch" crossorigin>
   // so the browser reuses the single HTTP request) while reporting live stream progress.
   const wasmResponsePromise = fetch(wasmUrl).then((resp) => {
+    if (resp.ok && swCacheName && "caches" in window) {
+      try { wasmCacheCopy = resp.clone(); } catch {}
+    }
     if (!resp.ok || !resp.body || typeof TransformStream === "undefined") {
       setProgress(88, "正在编译编辑器引擎…");
       return resp;
@@ -449,6 +478,7 @@
       engineReady = true;
       setProgress(100, "编辑器已就绪");
       launchRustIfReady();
+      warmOfflineShell();
       return player;
     })
     .catch((err) => {

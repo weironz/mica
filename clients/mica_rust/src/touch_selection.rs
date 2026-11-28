@@ -29,6 +29,172 @@ pub use mica_editor::interaction::{
   TouchTapTracker, is_atomic_selection_kind, touch_selected_slice, touch_word_bounds,
 };
 
+/// Deferred single-touch tap captured on `on_press_down` so scrolling or
+/// long-press gestures never focus the hidden IME sink (which would pop up the
+/// mobile virtual keyboard while the user tries to scroll).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingTouchTap {
+  pub local_x: f32,
+  pub local_y: f32,
+  pub page_x: f32,
+  pub page_y: f32,
+  pub alt: bool,
+}
+
+/// Only a clean single touch tap on editable content (not multi-tap word/block
+/// selection and not opening a link) should raise the mobile soft keyboard.
+pub fn should_request_keyboard_focus_on_touch_tap(click_count: u32, opened_link: bool) -> bool {
+  click_count == 1 && !opened_link
+}
+
+/// Normalized pointer snapshot consumed by [`LightboxGesture`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LightboxTouchPt {
+  pub id: u32,
+  pub page: (f32, f32),
+  pub location: (f32, f32),
+  pub changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LightboxGestureMode {
+  Idle,
+  Pan {
+    pointer_id: u32,
+    start_page: (f32, f32),
+    start_pan: (f32, f32),
+  },
+  Pinch {
+    ids: (u32, u32),
+    start_dist: f32,
+    start_mid: (f32, f32),
+    start_zoom: f32,
+    start_pan: (f32, f32),
+  },
+}
+
+/// Multi-touch pinch-zoom + single-pointer pan state machine for the image and
+/// Mermaid fullscreen lightbox (`CAP-16-07`).
+///
+/// Tracks pointers by their stable `id` so two-finger pinch never feeds
+/// alternating coordinates into a single-finger pan delta.
+#[derive(Clone, Copy, Debug)]
+pub struct LightboxGesture {
+  mode: LightboxGestureMode,
+}
+
+impl Default for LightboxGesture {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl LightboxGesture {
+  pub const MIN_ZOOM: f32 = 0.25;
+  pub const MAX_ZOOM: f32 = 6.0;
+
+  pub fn new() -> Self {
+    Self {
+      mode: LightboxGestureMode::Idle,
+    }
+  }
+
+  pub fn reset(&mut self) {
+    self.mode = LightboxGestureMode::Idle;
+  }
+
+  pub fn handle_touch(
+    &mut self,
+    phase: nsh_core::TouchPhase,
+    points: &[LightboxTouchPt],
+    canvas_size: (f32, f32),
+    current_zoom: f32,
+    current_pan: (f32, f32),
+  ) -> Option<(f32, (f32, f32))> {
+    let active: Vec<LightboxTouchPt> = match phase {
+      nsh_core::TouchPhase::End | nsh_core::TouchPhase::Cancel => {
+        points.iter().copied().filter(|p| !p.changed).collect()
+      }
+      _ => points.to_vec(),
+    };
+
+    if active.is_empty() {
+      self.mode = LightboxGestureMode::Idle;
+      return None;
+    }
+
+    if active.len() >= 2 {
+      let a = active[0];
+      let b = active[1];
+      let dist = (a.page.0 - b.page.0).hypot(a.page.1 - b.page.1).max(8.0);
+      let mid = (
+        (a.location.0 + b.location.0) * 0.5,
+        (a.location.1 + b.location.1) * 0.5,
+      );
+
+      let same_pair = match self.mode {
+        LightboxGestureMode::Pinch { ids, .. } => {
+          (ids.0 == a.id && ids.1 == b.id) || (ids.0 == b.id && ids.1 == a.id)
+        }
+        _ => false,
+      };
+      if !same_pair {
+        self.mode = LightboxGestureMode::Pinch {
+          ids: (a.id, b.id),
+          start_dist: dist,
+          start_mid: mid,
+          start_zoom: current_zoom.max(0.01),
+          start_pan: current_pan,
+        };
+        return None;
+      }
+
+      if let LightboxGestureMode::Pinch {
+        start_dist,
+        start_mid,
+        start_zoom,
+        start_pan,
+        ..
+      } = self.mode
+      {
+        let new_zoom = (start_zoom * (dist / start_dist)).clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+        let ratio = new_zoom / start_zoom;
+        let cx = canvas_size.0 * 0.5;
+        let cy = canvas_size.1 * 0.5;
+        // Keep the stage content point initially under `start_mid` pinned under `mid`.
+        let pan_x = start_pan.0 * ratio + (mid.0 - cx) - (start_mid.0 - cx) * ratio;
+        let pan_y = start_pan.1 * ratio + (mid.1 - cy) - (start_mid.1 - cy) * ratio;
+        return Some((new_zoom, (pan_x, pan_y)));
+      }
+    }
+
+    let p = active[0];
+    match self.mode {
+      LightboxGestureMode::Pan {
+        pointer_id,
+        start_page,
+        start_pan,
+      } if pointer_id == p.id => {
+        let next_pan = (
+          start_pan.0 + p.page.0 - start_page.0,
+          start_pan.1 + p.page.1 - start_page.1,
+        );
+        Some((current_zoom, next_pan))
+      }
+      _ => {
+        // Re-anchor cleanly whenever transitioning 0->1 or 2->1 fingers so lifting
+        // one finger after pinch never produces a sudden jump.
+        self.mode = LightboxGestureMode::Pan {
+          pointer_id: p.id,
+          start_page: p.page,
+          start_pan: current_pan,
+        };
+        None
+      }
+    }
+  }
+}
+
 /// Monotonic millisecond timestamp safe on both native desktop and `wasm32`.
 pub fn now_ms() -> f64 {
   #[cfg(not(target_arch = "wasm32"))]
@@ -737,5 +903,150 @@ mod tests {
     let below = resolve_doc_position_at_paper_point(&rows, &layouts, anchor, 100.0, 220.0, &fixed_measure)
       .expect("below clamps to end");
     assert_eq!(below, DocPosition::new(2, 9));
+  }
+
+  #[test]
+  fn pending_touch_tap_only_focuses_ime_on_clean_single_tap_not_link_or_multitap() {
+    assert!(should_request_keyboard_focus_on_touch_tap(1, false));
+    assert!(!should_request_keyboard_focus_on_touch_tap(1, true));
+    assert!(!should_request_keyboard_focus_on_touch_tap(2, false));
+    assert!(!should_request_keyboard_focus_on_touch_tap(3, false));
+    assert!(!should_request_keyboard_focus_on_touch_tap(0, false));
+  }
+
+  #[test]
+  fn lightbox_gesture_handles_pan_pinch_interleaved_moves_and_lift_without_jumps() {
+    use nsh_core::TouchPhase;
+    let mut g = LightboxGesture::new();
+    let canvas = (800.0, 600.0);
+
+    let pt = |id: u32, px: f32, py: f32, changed: bool| LightboxTouchPt {
+      id,
+      page: (px, py),
+      location: (px - 100.0, py - 50.0), // arbitrary offset stage origin (100, 50)
+      changed,
+    };
+
+    // 1. Single-finger start + pan
+    assert_eq!(
+      g.handle_touch(TouchPhase::Start, &[pt(1, 500.0, 350.0, true)], canvas, 1.0, (0.0, 0.0)),
+      None
+    );
+    let (z1, p1) = g
+      .handle_touch(TouchPhase::Move, &[pt(1, 540.0, 330.0, true)], canvas, 1.0, (0.0, 0.0))
+      .expect("single-finger move pans");
+    assert_eq!(z1, 1.0);
+    assert!((p1.0 - 40.0).abs() < 1e-4 && (p1.1 + 20.0).abs() < 1e-4);
+
+    // 2. Second finger lands -> enters Pinch with zero jump
+    assert_eq!(
+      g.handle_touch(
+        TouchPhase::Start,
+        &[pt(1, 540.0, 330.0, false), pt(2, 640.0, 330.0, true)],
+        canvas,
+        z1,
+        p1,
+      ),
+      None
+    );
+
+    // 3. Interleaved moves: first only finger 1 reports moved (distance doubles 100 -> 200),
+    // then only finger 2 reports moved (still 200 apart). Must NOT jump back and forth!
+    let (z2, p2) = g
+      .handle_touch(
+        TouchPhase::Move,
+        &[pt(1, 440.0, 330.0, true), pt(2, 640.0, 330.0, false)],
+        canvas,
+        z1,
+        p1,
+      )
+      .expect("pinch move updates zoom");
+    assert!((z2 - 2.0).abs() < 1e-4, "expected 2x zoom, got {z2}");
+
+    // Interleaved finger 2 move that leaves distance at 200px around shifted midpoint
+    let (z3, p3) = g
+      .handle_touch(
+        TouchPhase::Move,
+        &[pt(1, 440.0, 330.0, false), pt(2, 640.0, 330.0, true)],
+        canvas,
+        z2,
+        p2,
+      )
+      .expect("stable two-finger hold keeps zoom and pan");
+    assert!((z3 - 2.0).abs() < 1e-4);
+    assert!((p3.0 - p2.0).abs() < 1e-4 && (p3.1 - p2.1).abs() < 1e-4);
+
+    // 4. Off-center pinch preserves focus point: zoom centered at stage mid stays pinned
+    let mut g2 = LightboxGesture::new();
+    let mid_stage_a = (450.0, 350.0); // stage coords (350, 300), canvas center = (400, 300) => -50 on x
+    let mid_stage_b = (550.0, 350.0);
+    assert_eq!(
+      g2.handle_touch(
+        TouchPhase::Start,
+        &[
+          LightboxTouchPt { id: 1, page: mid_stage_a, location: (350.0, 300.0), changed: false },
+          LightboxTouchPt { id: 2, page: mid_stage_b, location: (450.0, 300.0), changed: true },
+        ],
+        canvas,
+        1.0,
+        (0.0, 0.0),
+      ),
+      None
+    );
+    // Double separation around stage center (400, 300): start_mid=(400,300), so pan stays (0,0)
+    let (zc, pc) = g2
+      .handle_touch(
+        TouchPhase::Move,
+        &[
+          LightboxTouchPt { id: 1, page: (400.0, 350.0), location: (300.0, 300.0), changed: true },
+          LightboxTouchPt { id: 2, page: (600.0, 350.0), location: (500.0, 300.0), changed: false },
+        ],
+        canvas,
+        1.0,
+        (0.0, 0.0),
+      )
+      .unwrap();
+    assert!((zc - 2.0).abs() < 1e-4);
+    assert!(pc.0.abs() < 1e-4 && pc.1.abs() < 1e-4);
+
+    // 5. Lifting finger 2 after pinch re-anchors to finger 1 cleanly (None on lift), then pans smoothly
+    assert_eq!(
+      g.handle_touch(
+        TouchPhase::End,
+        &[pt(1, 440.0, 330.0, false), pt(2, 640.0, 330.0, true)],
+        canvas,
+        z3,
+        p3,
+      ),
+      None
+    );
+    let (z4, p4) = g
+      .handle_touch(TouchPhase::Move, &[pt(1, 460.0, 345.0, true)], canvas, z3, p3)
+      .expect("single finger resumes panning cleanly from p3");
+    assert!((z4 - z3).abs() < 1e-4);
+    assert!((p4.0 - (p3.0 + 20.0)).abs() < 1e-4);
+    assert!((p4.1 - (p3.1 + 15.0)).abs() < 1e-4);
+
+    // 6. Pinch clamp check (min 0.25, max 6.0)
+    let (_, _) = (0.25_f32, 6.0_f32);
+    let (z_max, _) = g2
+      .handle_touch(
+        TouchPhase::Move,
+        &[
+          LightboxTouchPt { id: 1, page: (0.0, 350.0), location: (-100.0, 300.0), changed: true },
+          LightboxTouchPt { id: 2, page: (2000.0, 350.0), location: (1900.0, 300.0), changed: false },
+        ],
+        canvas,
+        2.0,
+        pc,
+      )
+      .unwrap();
+    assert_eq!(z_max, LightboxGesture::MAX_ZOOM);
+
+    // 7. Lifting final finger returns Idle
+    assert_eq!(
+      g.handle_touch(TouchPhase::End, &[pt(1, 460.0, 345.0, true)], canvas, z4, p4),
+      None
+    );
   }
 }

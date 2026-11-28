@@ -23,7 +23,7 @@
 mica_env:
   DOMAIN: "mica.cloudcele.com"
   S3_DOMAIN: "s3.mica.cloudcele.com"
-  MICA_REGISTRY: "registry.cn-shenzhen.aliyuncs.com/willspace"
+  MICA_REGISTRY: "registry-vpc.cn-shenzhen.aliyuncs.com/willspace"
 
   POSTGRES_USER: "mica"
   POSTGRES_DB: "mica"

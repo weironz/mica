@@ -61,6 +61,7 @@ find "$out" -mindepth 1 -delete
 mkdir -p "$out/mica_preview"
 cp clients/mica_rust/web/index.html "$out/index.html"
 cp clients/mica_rust/web/favicon.svg "$out/favicon.svg"
+cp clients/mica_rust/web/sw.js "$out/sw.js"
 cp "$nsh_js" "$out/nsh.js"
 
 # Generate wasm-bindgen glue for transitive crates and adapt to NSH's glue hook contract.
@@ -147,14 +148,14 @@ for kind in math mermaid; do
   echo "    mica_preview/${kind} gzip-9: wasm=${p_wasm} B js=${p_js} B total=${p_total} B (budget ${p_budget} B)"
 done
 
-# Stamp content hashes ONLY onto <link> preload tags and <meta name="mica-preview-version">
-# so the inline <script type="module"> remains byte-identical to source (CSP sha256 invariant).
+# Stamp content hashes ONLY onto <link> preload tags and <meta> tags so the
+# inline <script type="module"> remains byte-identical to source (CSP sha256 invariant).
 wasm_hash=$(sha256sum "$out/mica_rust_bg.wasm" | cut -c1-10)
 preview_hash=$(cat "$out/mica_preview/math_bg.wasm" "$out/mica_preview/mermaid_bg.wasm" | sha256sum | cut -c1-10)
-python3 - "$out/index.html" "$wasm_hash" "$preview_hash" <<'PY'
-import re, sys
-path, wh, ph = sys.argv[1], sys.argv[2], sys.argv[3]
-src = open(path, "r", encoding="utf-8").read()
+python3 - "$out/index.html" "$out/sw.js" "$wasm_hash" "$preview_hash" <<'PY'
+import sys
+html_path, sw_path, wh, ph = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+src = open(html_path, "r", encoding="utf-8").read()
 # Replace only inside <head> (never touch the inline <script type="module"> body).
 head_end = src.index("</head>")
 head, rest = src[:head_end], src[head_end:]
@@ -165,7 +166,15 @@ head = head.replace(
     '<meta name="mica-preview-version" content="">',
     f'<meta name="mica-preview-version" content="{ph}">',
 )
-open(path, "w", encoding="utf-8", newline="\n").write(head + rest)
+head = head.replace(
+    '<meta name="mica-sw-cache" content="">',
+    f'<meta name="mica-sw-cache" content="mica-shell-{wh}-{ph}">',
+)
+open(html_path, "w", encoding="utf-8", newline="\n").write(head + rest)
+
+sw_src = open(sw_path, "r", encoding="utf-8").read()
+sw_src = sw_src.replace("__WASM_HASH__", wh).replace("__PREVIEW_HASH__", ph)
+open(sw_path, "w", encoding="utf-8", newline="\n").write(sw_src)
 PY
 chmod -R a+rX "$out"
 

@@ -753,13 +753,28 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
     let pending_link_down = pending_link_click.clone();
     let pending_link_move = pending_link_click.clone();
     let pending_link_press = pending_link_click;
+    let pending_touch_tap: Rc<RefCell<Option<crate::touch_selection::PendingTouchTap>>> =
+      Rc::new(RefCell::new(None));
+    let pending_touch_down = pending_touch_tap.clone();
+    let pending_touch_lp = pending_touch_tap.clone();
+    let pending_touch_press = pending_touch_tap;
     let br_link_press = bridge.clone();
+    let br_touch_press = bridge.clone();
+    let layouts_touch_press = layouts.clone();
+    let bid_touch_press = block_id.clone();
+    let text_touch_press = text_str.clone();
+    let marks_touch_press = marks.clone();
+    let font_touch_press = css_font.clone();
+    let tap_tracker_press = env.touch_tap_tracker.clone();
+    let touch_sel_press = env.touch_selection_active;
+    let open_page_touch_press = open_page_cb.clone();
     let layout_rev = signal(0u64);
     let kind_color = kind.clone();
     let measure: TextMeasureFn = Rc::new(text_measurer());
     let measure_sel = measure.clone();
     let measure_click = measure.clone();
     let measure_lp = measure.clone();
+    let measure_touch_press = measure.clone();
     let measure_move = measure;
 
     let hit_page_w = env.page_width;
@@ -843,6 +858,23 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
       })
       .on_press_down(move |e: &PressEvent| {
         *pending_link_down.borrow_mut() = None;
+        *pending_touch_down.borrow_mut() = None;
+
+        // Touch/pen: defer caret placement and IME `request_focus()` until clean
+        // release (`on_press`) so finger-down to scroll a long document never
+        // pops up the mobile soft keyboard.
+        let is_touch = last_ptr_touch_down.get_untracked();
+        if is_touch {
+          *pending_touch_down.borrow_mut() = Some(crate::touch_selection::PendingTouchTap {
+            local_x: e.position.x.0,
+            local_y: e.position.y.0,
+            page_x: e.page_position.x.0,
+            page_y: e.page_position.y.0,
+            alt: e.modifiers.alt,
+          });
+          return;
+        }
+
         focused_code.set(None);
         focused_cell.set(None);
         table_sel.set(None);
@@ -857,17 +889,8 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         marquee_origin_page.set(None);
 
         let off = hit_offset(&layouts_click, &bid_click, &text_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
-        let is_touch = last_ptr_touch_down.get_untracked();
-        let click_count = if is_touch {
-          tap_tracker_down.borrow_mut().bump(
-            e.page_position.x.0,
-            e.page_position.y.0,
-            crate::touch_selection::now_ms(),
-          )
-        } else {
-          tap_tracker_down.borrow_mut().reset();
-          e.clicks.clamp(1, 3)
-        };
+        tap_tracker_down.borrow_mut().reset();
+        let click_count = e.clicks.clamp(1, 3);
         let _ = last_click;
         let idx = live_index(at);
 
@@ -875,15 +898,15 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
           inline_math_edit.set(None);
           let end_u16 = utf16_len(&text_click);
           let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, end_u16));
-          drag_anchor_d.set(if is_touch { None } else { Some(sel.anchor_pos()) });
-          touch_sel_down.set(is_touch && !sel.is_collapsed());
+          drag_anchor_d.set(Some(sel.anchor_pos()));
+          touch_sel_down.set(false);
           br_click.set_selection(sel);
         } else if click_count == 2 {
           inline_math_edit.set(None);
           let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
           let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
-          drag_anchor_d.set(if is_touch { None } else { Some(sel.anchor_pos()) });
-          touch_sel_down.set(is_touch && !sel.is_collapsed());
+          drag_anchor_d.set(Some(sel.anchor_pos()));
+          touch_sel_down.set(false);
           br_click.set_selection(sel);
         } else {
           // Arm link navigation on a clean single click (Alt+Click places caret
@@ -919,13 +942,94 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
             inline_math_edit.set(None);
           }
           let pos = DocPosition::new(idx, off);
-          drag_anchor_d.set(if is_touch { None } else { Some(pos) });
+          drag_anchor_d.set(Some(pos));
           touch_sel_down.set(false);
           br_click.set_selection(DocSelection::caret(idx, off));
         }
         br_click.request_focus();
       })
       .on_press(move || {
+        if let Some(tap) = pending_touch_press.borrow_mut().take() {
+          focused_code.set(None);
+          focused_cell.set(None);
+          table_sel.set(None);
+          table_drag.set(None);
+          marquee_sel_click.set(None);
+          sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+          blank_marquee_ready.set(false);
+          marquee_origin_page.set(None);
+          drag_anchor_d.set(None);
+
+          let off = hit_offset(
+            &layouts_touch_press,
+            &bid_touch_press,
+            &text_touch_press,
+            &font_touch_press,
+            &measure_touch_press,
+            tap.local_x,
+            tap.local_y,
+          );
+          let click_count = tap_tracker_press.borrow_mut().bump(
+            tap.page_x,
+            tap.page_y,
+            crate::touch_selection::now_ms(),
+          );
+          let idx = live_index(at);
+          let mut opened_link = false;
+
+          if click_count == 3 {
+            inline_math_edit.set(None);
+            let end_u16 = utf16_len(&text_touch_press);
+            let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, end_u16));
+            touch_sel_press.set(!sel.is_collapsed());
+            br_touch_press.set_selection(sel);
+          } else if click_count == 2 {
+            inline_math_edit.set(None);
+            let (ws, we) = crate::touch_selection::touch_word_bounds(&text_touch_press, off);
+            let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
+            touch_sel_press.set(!sel.is_collapsed());
+            br_touch_press.set_selection(sel);
+          } else {
+            if has_links
+              && !tap.alt
+              && let Some(href) = hit_link(
+                &layouts_touch_press,
+                &bid_touch_press,
+                &text_touch_press,
+                &marks_touch_press,
+                &font_touch_press,
+                &measure_touch_press,
+                tap.local_x,
+                tap.local_y,
+              )
+            {
+              opened_link = open_editor_link(&href, open_page_touch_press.as_ref());
+            }
+            if !opened_link {
+              if let Some(m) = marks_touch_press.iter().find(|m| {
+                m.kind == "math"
+                  && m.end > m.start
+                  && ((off > m.start && off < m.end) || (m.end - m.start == 1 && off == m.start))
+              }) {
+                inline_math_edit.set(Some(crate::editor_positioning::InlineMathEdit {
+                  block_index: idx,
+                  start: m.start,
+                  end: m.end,
+                  draft: utf16_slice(&text_touch_press, m.start, m.end).to_owned(),
+                }));
+              } else {
+                inline_math_edit.set(None);
+              }
+              touch_sel_press.set(false);
+              br_touch_press.set_selection(DocSelection::caret(idx, off));
+            }
+          }
+          if crate::touch_selection::should_request_keyboard_focus_on_touch_tap(click_count, opened_link) {
+            br_touch_press.request_focus();
+          }
+          return;
+        }
+
         let Some((href, _, _)) = pending_link_press.borrow_mut().take() else {
           return;
         };
@@ -934,6 +1038,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         }
       })
       .on_long_press(move |e: &PressEvent| {
+        *pending_touch_lp.borrow_mut() = None;
         // Mobile / touch long-press selects a 1-2 char CJK word or full Latin word
         // and raises teardrop drag handles (never hijacking desktop mouse drag-select).
         if !last_ptr_touch_lp.get_untracked() {
@@ -1706,14 +1811,14 @@ pub fn render_lightbox_modal(
 ) -> impl IntoElement {
   let zoom = signal(1.0_f32);
   let pan = signal((0.0_f32, 0.0_f32));
-  let dragging = signal(false);
-  let drag_start_page = signal((0.0_f32, 0.0_f32));
-  let drag_start_pan = signal((0.0_f32, 0.0_f32));
+  let gesture: Rc<RefCell<crate::touch_selection::LightboxGesture>> =
+    Rc::new(RefCell::new(crate::touch_selection::LightboxGesture::new()));
   let canvas_size = signal((960.0_f32, 580.0_f32));
   let show_source = signal(false);
 
   when(move || lightbox.get().is_some(), {
     let br = bridge.clone();
+    let gesture_root = gesture.clone();
     move || {
       let Some(content) = lightbox.get() else {
         return view().into_element();
@@ -1728,22 +1833,29 @@ pub fn render_lightbox_modal(
       let base_size = signal((780.0_f32, 500.0_f32));
       let apply_zoom = move |target: f32| {
         let old_z = zoom.get_untracked().max(0.01);
-        let new_z = target.clamp(0.25, 6.0);
+        let new_z = target.clamp(
+          crate::touch_selection::LightboxGesture::MIN_ZOOM,
+          crate::touch_selection::LightboxGesture::MAX_ZOOM,
+        );
         let ratio = new_z / old_z;
         let (ox, oy) = pan.get_untracked();
         zoom.set(new_z);
         pan.set((ox * ratio, oy * ratio));
       };
+      let gesture_close = gesture_root.clone();
+      let gesture_reset = gesture_root.clone();
+      let gesture_stage_base = gesture_root.clone();
       let close_dialog = move || {
         zoom.set(1.0);
         pan.set((0.0, 0.0));
-        dragging.set(false);
+        gesture_close.borrow_mut().reset();
         show_source.set(false);
         lightbox.set(None);
       };
 
       // Interactive zoom/pan canvas shared by Mermaid diagrams and images.
       let build_zoom_pan_stage = move |stage_content: AnyElement| {
+        let gesture_touch = gesture_stage_base.clone();
         view()
           .test_id("lightbox-pan-stage")
           .flex_1()
@@ -1772,23 +1884,31 @@ pub fn render_lightbox_modal(
               apply_zoom(zoom.get_untracked() * factor);
             }
           })
-          .claim_touches(TouchClaim::on_start())
+          .claim_touches(TouchClaim::on_start().block_native(true))
           .keep_touches(true)
-          .on_responder_grant(move |e: &ResponderEvent| {
-            dragging.set(true);
-            drag_start_page.set((f32::from(e.page.x), f32::from(e.page.y)));
-            drag_start_pan.set(pan.get_untracked());
-          })
-          .on_responder_move(move |e: &ResponderEvent| {
-            if !dragging.get_untracked() {
-              return;
+          .on_touch(move |e: &nsh_core::TouchEvent| {
+            let pts: Vec<crate::touch_selection::LightboxTouchPt> = e
+              .points
+              .iter()
+              .map(|p| crate::touch_selection::LightboxTouchPt {
+                id: p.id,
+                page: (f32::from(p.page.x), f32::from(p.page.y)),
+                location: (f32::from(p.location.x), f32::from(p.location.y)),
+                changed: p.changed,
+              })
+              .collect();
+            if let Some((next_zoom, next_pan)) = gesture_touch.borrow_mut().handle_touch(
+              e.phase,
+              &pts,
+              canvas_size.get_untracked(),
+              zoom.get_untracked(),
+              pan.get_untracked(),
+            ) {
+              if (next_zoom - zoom.get_untracked()).abs() > 1e-4 {
+                zoom.set(next_zoom);
+              }
+              pan.set(next_pan);
             }
-            let (sx, sy) = drag_start_page.get_untracked();
-            let (px0, py0) = drag_start_pan.get_untracked();
-            pan.set((px0 + f32::from(e.page.x) - sx, py0 + f32::from(e.page.y) - sy));
-          })
-          .on_responder_release(move |_: &ResponderEvent| {
-            dragging.set(false);
           })
           .child(
             view()
@@ -1821,7 +1941,7 @@ pub fn render_lightbox_modal(
               .border_color(move || palette(dark_mode.get()).border_subtle)
               .pointer_events(PointerEvents::None)
               .child(
-                text("滚轮缩放 · 按住拖拽平移")
+                text("双指捏合 / 滚轮缩放 · 拖拽平移")
                   .text_size(px(11.5))
                   .text_color(move || palette(dark_mode.get()).text_faint),
               ),
@@ -1842,7 +1962,7 @@ pub fn render_lightbox_modal(
             .accessibility_label("关闭预览弹窗")
             .absolute()
             .inset_0()
-            .on_press(close_dialog),
+            .on_press(close_dialog.clone()),
         )
         .child(
           view()
@@ -1924,6 +2044,7 @@ pub fn render_lightbox_modal(
                         .on_press(move || {
                           zoom.set(1.0);
                           pan.set((0.0, 0.0));
+                          gesture_reset.borrow_mut().reset();
                         })
                         .child(
                           text("重置")
