@@ -3744,3 +3744,70 @@ fn regression_new_page_focuses_title_and_new_folder_starts_inline_rename() {
     .unwrap();
   app.wait_for("margin").unwrap();
 }
+
+#[test]
+fn regression_divider_click_selects_without_scroll_jump_and_deletes() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("id:page-title-input").unwrap();
+
+  // Build a multi-paragraph document with a divider positioned well below the top
+  // of the viewport so any unwanted `ScrollMode::Jump` (`Percentage(0.2)`) would
+  // visibly move the divider's Y coordinate.
+  let mut md = String::new();
+  for i in 1..=10 {
+    md.push_str(&format!("段落上方第 {i} 行内容\n\n"));
+  }
+  md.push_str("---\n\n");
+  for i in 1..=14 {
+    md.push_str(&format!("段落下方第 {i} 行内容\n\n"));
+  }
+  let mut paste = nsh_core::PasteEvent::default();
+  paste.text = md;
+  app.paste("id:mica-editor-ime-sink", &paste).unwrap();
+  app.wait_for("id:node-view-divider").unwrap();
+  app.wait_for("段落上方第 1 行内容").unwrap();
+
+  let divider_y_before = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("node-view-divider"))
+    .expect("divider node missing before click")
+    .bounds
+    .origin
+    .y
+    .0;
+
+  // Clicking the divider must select it atomically without jumping the page.
+  app.press("id:node-view-divider").unwrap();
+  app.wait_for("id:divider-selected-indicator").unwrap();
+
+  let divider_y_after = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("node-view-divider"))
+    .expect("divider node missing after click")
+    .bounds
+    .origin
+    .y
+    .0;
+  assert!(
+    (divider_y_after - divider_y_before).abs() < 2.0,
+    "clicking a divider must not jump the viewport (before y={divider_y_before}, after y={divider_y_after})"
+  );
+
+  // Pressing Backspace while the divider is selected deletes it while keeping neighbors intact.
+  app.press_key("backspace").unwrap();
+  app
+    .wait_for_gone("id:node-view-divider", std::time::Duration::from_millis(800))
+    .unwrap();
+  app.wait_for("段落上方第 10 行内容").unwrap();
+  app.wait_for("段落下方第 1 行内容").unwrap();
+}

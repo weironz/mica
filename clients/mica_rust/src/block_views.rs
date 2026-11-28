@@ -1789,17 +1789,97 @@ pub(crate) fn mini_chip(label: &'static str, dark_mode: Signal<bool>, on_press: 
 fn render_divider_block_view(env: &BlockRenderEnv, at: Position) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let br = env.bridge.clone();
+  let sel_sig = env.bridge.selection_signal();
   let marquee_selected = env.marquee_selected;
-  button()
-    .test_id("node-view-divider")
-    .w_full()
-    .py_4()
-    .justify_center()
-    .on_press(move || {
+  let focused_code = env.focused_code_block;
+  let focused_cell = env.focused_table_cell;
+  let table_sel = env.table_selection;
+  let table_drag = env.table_drag_anchor;
+  let drag_anchor = env.drag_anchor;
+  let blank_marquee_ready = env.body_blank_marquee_ready;
+  let marquee_origin_page = env.marquee_origin_page;
+  let sink_clear_rev = env.sink_clear_rev;
+  let editor_focused = env.editor_focused;
+  let touch_sel = env.touch_selection_active;
+
+  let is_atom_selected = computed(move || {
+    let idx = at.index();
+    sel_sig
+      .get()
+      .is_some_and(|s| s.is_collapsed() && s.focus_node() == idx)
+  });
+
+  // Matches legacy Flutter `DividerRenderer.selectsWholeBlockOnClick`:
+  // clicking selects the divider atomically without triggering `ScrollMode::Jump`
+  // and paints a rounded selection tint + accent border (zero height shift).
+  let select_divider: Rc<dyn Fn()> = {
+    let br_sel = br.clone();
+    Rc::new(move || {
+      let idx = live_index(at);
+      focused_code.set(None);
+      focused_cell.set(None);
+      table_sel.set(None);
+      table_drag.set(None);
       marquee_selected.set(None);
-      br.focus_block(live_index(at), 0);
+      touch_sel.set(false);
+      blank_marquee_ready.set(false);
+      marquee_origin_page.set(None);
+      sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+      editor_focused.set(true);
+      drag_anchor.set(Some(DocPosition::new(idx, 0)));
+      br_sel.set_selection(DocSelection::block_atom(idx));
+      br_sel.request_focus();
     })
-    .child(view().w_full().h(px(1.5)).bg(move || palette(dark_mode.get()).quote_bar))
+  };
+  let select_on_down = select_divider.clone();
+  let select_on_press = select_divider;
+
+  view()
+    .test_id("node-view-divider")
+    .relative()
+    .w_full()
+    .py(px(7.0))
+    .px(px(4.0))
+    .rounded(px(6.0))
+    .border_1()
+    .border_color(move || {
+      if is_atom_selected.get() {
+        palette(dark_mode.get()).accent
+      } else {
+        TRANSPARENT_RGBA
+      }
+    })
+    .bg(move || {
+      if is_atom_selected.get() {
+        palette(dark_mode.get()).selection_bg
+      } else {
+        TRANSPARENT_RGBA
+      }
+    })
+    .cursor(nsh_core::Cursor::Pointer)
+    .justify_center()
+    .on_press_down(move |_: &nsh_core::PressEvent| select_on_down())
+    .on_press(move |_: &nsh_core::PressEvent| select_on_press())
+    .child(
+      view()
+        .w_full()
+        .h(px(1.5))
+        .bg(move || {
+          let p = palette(dark_mode.get());
+          if is_atom_selected.get() {
+            p.accent
+          } else {
+            p.quote_bar
+          }
+        }),
+    )
+    .child(when(move || is_atom_selected.get(), move || {
+      view()
+        .test_id("divider-selected-indicator")
+        .absolute()
+        .inset_0()
+        .pointer_events(nsh_core::PointerEvents::None)
+    }))
 }
 
 // ── 9. Floating Zoom & Pan Lightbox Dialog (Mermaid & Images) ────────────────
