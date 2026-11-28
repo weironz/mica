@@ -1162,6 +1162,8 @@ pub fn editor_view(
   let backlinks_slot = header.backlinks_panel_slot.clone();
   let header_width = signal(1000.0_f32);
   let header_single_row = computed(move || header_width.get() >= 1240.0);
+  let header_compact = computed(move || header_width.get() < 640.0);
+  let format_bar_scroll = computed(move || header_width.get() < 720.0);
 
   let render_format_bar: Rc<dyn Fn() -> AnyElement> = {
     let b_undo = b_undo.clone();
@@ -1518,7 +1520,7 @@ pub fn editor_view(
                 .flex_row()
                 .items_center()
                 .gap_1()
-                .child(when(move || !right_open.get(), {
+                .child(when(move || !header_compact.get() && !right_open.get(), {
                   let hb = header.clone();
                   move || {
                     let hb1 = hb.clone();
@@ -1583,7 +1585,13 @@ pub fn editor_view(
                   .truncate()
                 }),
             )
-            .child(crate::tooltip::with_tooltip(
+            .child(when(move || !header_compact.get(), {
+              let h_copy_id = h_copy_id.clone();
+              let b_copy_path = b_copy_path.clone();
+              move || {
+                let h_copy_id = h_copy_id.clone();
+                let b_copy_path = b_copy_path.clone();
+                crate::tooltip::with_tooltip(
               button()
                 .test_id("ed-copy-path")
                 .accessibility_label("复制页面路径")
@@ -1635,7 +1643,9 @@ pub fn editor_view(
                   }
                 })),
               "复制路径",
-            )),
+                )
+              }
+            })),
         )
         .child(when(move || show_format_bar.get() && header_single_row.get(), {
           let fb = fmt_bar_inline.clone();
@@ -1648,7 +1658,7 @@ pub fn editor_view(
             .flex_row()
             .items_center()
             .gap(px(2.0))
-            .child(when(move || !right_open.get(), move || {
+            .child(when(move || !header_compact.get() && !right_open.get(), move || {
               text(move || last_edited.get())
                 .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
                 .text_color(move || palette(dark_mode.get()).text_faint)
@@ -1661,14 +1671,20 @@ pub fn editor_view(
               move || (h_right.on_toggle_right_panel)(),
               mica_icons::sidebar_toggle_right,
             ))
-            .child(toolbar_btn(
-              "ed-open-board",
-              "无限白板",
-              dark_mode,
-              signal(false),
-              move || (h_board.on_open_board)(),
-              mica_icons::whiteboard,
-            ))
+            .child(when(move || !header_compact.get(), {
+              let hb = h_board.clone();
+              move || {
+                let hb = hb.clone();
+                toolbar_btn(
+                  "ed-open-board",
+                  "无限白板",
+                  dark_mode,
+                  signal(false),
+                  move || (hb.on_open_board)(),
+                  mica_icons::whiteboard,
+                )
+              }
+            }))
             .child(when(move || is_cloud.get(), {
               let hs = h_share.clone();
               move || {
@@ -1691,16 +1707,22 @@ pub fn editor_view(
                     .child(dynamic(move || {
                       lock_icon(palette(dark_mode.get()).text_muted_hex)
                     }))
-                    .child(
+                    .child(when(move || !header_compact.get(), move || {
                       text("共享")
                         .text_size(px(12.0))
-                        .text_color(move || palette(dark_mode.get()).text_primary),
-                    ),
+                        .text_color(move || palette(dark_mode.get()).text_primary)
+                    })),
                   "共享页面",
                 )
               }
             }))
-            .child(crate::tooltip::with_tooltip(
+            .child(when(move || !header_compact.get(), {
+              let hl = h_copy_link_id.clone();
+              let bl = b_copy_link.clone();
+              move || {
+                let hl = hl.clone();
+                let bl = bl.clone();
+                crate::tooltip::with_tooltip(
               button()
                 .test_id("ed-copy-link")
                 .accessibility_label("复制链接")
@@ -1712,10 +1734,10 @@ pub fn editor_view(
                 .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                 .on_press(move || {
                   crate::tooltip::hide_tooltip();
-                  let id = h_copy_link_id.page_id_str.get_untracked();
+                  let id = hl.page_id_str.get_untracked();
                   set_clipboard(format!("mica://page/{id}"));
                   copied_link.set(true);
-                  b_copy_link.set_status_flash("已复制链接");
+                  bl.set_status_flash("已复制链接");
                 })
                 .child(dynamic(move || {
                   let p = palette(dark_mode.get());
@@ -1726,7 +1748,9 @@ pub fn editor_view(
                   }
                 })),
               "复制页面链接",
-            ))
+                )
+              }
+            }))
             .child(crate::tooltip::with_dynamic_tooltip(
               button()
                 .test_id("ed-star")
@@ -1765,16 +1789,32 @@ pub fn editor_view(
         .child(when(move || show_format_bar.get() && !header_single_row.get(), {
           let fb = fmt_bar_second.clone();
           move || {
-            view()
-              .w_full()
-              .h(px(36.0))
-              .px_3()
-              .flex_row()
-              .items_center()
-              .justify_center()
-              .border_t_1()
-              .border_color(move || palette(dark_mode.get()).border_subtle)
-              .child(fb())
+            let fb = fb.clone();
+            dynamic(move || {
+              let scrollable = format_bar_scroll.get();
+              let row = view()
+                .w_full()
+                .h(px(36.0))
+                .px_3()
+                .flex_row()
+                .items_center()
+                .border_t_1()
+                .border_color(move || palette(dark_mode.get()).border_subtle);
+              if scrollable {
+                row.child(
+                  scroll()
+                    .test_id("ed-format-bar-scroll")
+                    .horizontal()
+                    .scrollbar(false)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .child(view().h_full().flex_row().items_center().child(fb())),
+                )
+              } else {
+                row.justify_center().child(fb())
+              }
+            })
           }
         })),
     )
@@ -1783,6 +1823,7 @@ pub fn editor_view(
         h_menu.clone(),
         b_copy_md.clone(),
         page_menu_open,
+        header_compact,
         &page_more_btn_ref,
         dark_mode,
       )

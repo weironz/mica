@@ -36,6 +36,8 @@ pub fn narrow_tab_switcher_button(
     .accessibility_label("切换打开的标签页")
     .h(px(26.0))
     .max_w(px(210.0))
+    .min_w(px(0.0))
+    .flex_shrink(1.0)
     .px_2()
     .flex_row()
     .items_center()

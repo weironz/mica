@@ -233,6 +233,8 @@ pub(crate) fn render_top_bar(props: TopBarProps) -> impl IntoElement {
           if is_narrow.get() {
             return view()
               .h_full()
+              .flex_1()
+              .min_w(px(0.0))
               .items_center()
               .justify_center()
               .window_drag(false)

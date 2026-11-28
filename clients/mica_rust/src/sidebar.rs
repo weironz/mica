@@ -1859,7 +1859,7 @@ pub fn workspace_switcher_popover(
   cb: Rc<WorkspaceSwitcherCallbacks>,
 ) -> impl IntoElement {
   let filter_query = signal(String::new());
-  let expanded_ws_menu: Signal<Option<Uuid>> = signal(None);
+  let expanded_ws_menu: Signal<Option<(Uuid, String, ElementRef)>> = signal(None);
   let creating_new = signal(false);
   let new_ws_name = signal(String::new());
   let import_expanded = signal(false);
@@ -1892,6 +1892,7 @@ pub fn workspace_switcher_popover(
       let cb_create_btn = cb_outer.clone();
       let cb_imp_zip = cb_outer.clone();
       let cb_imp_notion = cb_outer.clone();
+      let cb_row_outer = cb_outer.clone();
       let cb_ren = cb_rename_outer.clone();
 
       view()
@@ -1905,6 +1906,7 @@ pub fn workspace_switcher_popover(
           let cb_create_btn = cb_create_btn.clone();
           let cb_imp_zip = cb_imp_zip.clone();
           let cb_imp_notion = cb_imp_notion.clone();
+          let cb_row_inner = cb_row_outer.clone();
 
           view()
             .absolute().inset_0().z_index(44)
@@ -1978,7 +1980,7 @@ pub fn workspace_switcher_popover(
                   all
                 };
                 let cur_id = active_workspace_id.get();
-                let open_sub = expanded_ws_menu.get();
+                let open_sub = expanded_ws_menu.get().map(|x| x.0);
                 let p = palette(dark_mode.get());
                 if filtered.is_empty() {
                   return view().w_full().px_3().py_2().child(
@@ -1992,79 +1994,130 @@ pub fn workspace_switcher_popover(
                   let is_cur = ws_id == cur_id;
                   let cb_sel = cb_list.clone();
                   let cb_close_sel = cb_list.clone();
-                  let mut row_wrap = view().w_full().child(
-                    view().w_full().px_2().flex_row().items_center()
-                      .child(
-                        button()
-                          .test_id(&format!("workspace-item-{idx}"))
-                          .accessibility_label(format!("切换到工作区 {ws_name}"))
-                          .flex_1().min_w(px(0.0)).px_2().py_2().flex_row().items_center().gap_2().rounded(px(6.0))
-                          .bg(if is_cur { p.surface_hover } else { p.surface_overlay })
-                          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                          .on_press(move || {
-                            (cb_sel.on_select)(ws_id);
-                            (cb_close_sel.on_close)();
-                          })
-                          .child(if is_cur { mica_icons::check_icon(p.text_primary_hex) } else { mica_icons::cloud(p.text_faint_hex) })
-                          .child(
-                            view().flex_1().min_w(px(0.0))
-                              .child(
-                                text(ws.name.clone()).text_size(px(14.0))
-                                  .font_weight(if is_cur { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                                  .text_color(p.text_primary).truncate(),
+                  let menu_btn_ref = element_ref();
+                  let wn_menu = ws_name.clone();
+                  let row_view = view().w_full().px_2().flex_row().items_center()
+                    .child(
+                      button()
+                        .test_id(&format!("workspace-item-{idx}"))
+                        .accessibility_label(format!("切换到工作区 {ws_name}"))
+                        .flex_1().min_w(px(0.0)).px_2().py_2().flex_row().items_center().gap_2().rounded(px(6.0))
+                        .bg(if is_cur { p.surface_hover } else { p.surface_overlay })
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .on_press(move || {
+                          expanded_ws_menu.set(None);
+                          (cb_sel.on_select)(ws_id);
+                          (cb_close_sel.on_close)();
+                        })
+                        .child(if is_cur { mica_icons::check_icon(p.text_primary_hex) } else { mica_icons::cloud(p.text_faint_hex) })
+                        .child(
+                          view().flex_1().min_w(px(0.0))
+                            .child(
+                              text(ws.name.clone()).text_size(px(14.0))
+                                .font_weight(if is_cur { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                                .text_color(p.text_primary).truncate(),
+                            )
+                            .child(if ws.page_count > 0 {
+                              view().pt(px(2.0)).child(
+                                text(format!("{} 个页面", ws.page_count)).text_size(px(12.0)).text_color(p.text_faint),
                               )
-                              .child(if ws.page_count > 0 {
-                                view().pt(px(2.0)).child(
-                                  text(format!("{} 个页面", ws.page_count)).text_size(px(12.0)).text_color(p.text_faint),
-                                )
-                              } else {
-                                view()
-                              }),
-                          ),
-                      )
-                      .child(
-                        button()
-                          .test_id(&format!("ws-row-menu-{idx}"))
-                          .accessibility_label(format!("工作区 {ws_name} 菜单"))
-                          .w(px(28.0)).h(px(28.0)).flex_shrink_0().items_center().justify_center().rounded(px(6.0))
-                          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                          .on_press(move || {
-                            expanded_ws_menu.set(if expanded_ws_menu.get_untracked() == Some(ws_id) { None } else { Some(ws_id) });
-                          })
-                          .child(mica_icons::more_dots(p.text_muted_hex)),
-                      ),
-                  );
-
-                  if open_sub == Some(ws_id) {
-                    let (cb_bk, cb_md, cb_if, cb_id, cb_del) = (cb_list.clone(), cb_list.clone(), cb_list.clone(), cb_list.clone(), cb_list.clone());
-                    let rename_init = ws.name.clone();
-                    row_wrap = row_wrap.child(
-                      view().mx_3().mb_1().py_1().rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_sunken)
-                        .child(menu_item_row("ws-action-rename", "重命名", dark_mode, false, move || {
-                          expanded_ws_menu.set(None); rename_ws_id.set(Some(ws_id)); rename_ws_initial.set(rename_init.clone()); rename_ws_open.set(true);
-                        }))
-                        .child(menu_item_row("ws-action-export-backup", "导出：备份(Mica 格式)", dark_mode, false, move || {
-                          expanded_ws_menu.set(None); (cb_bk.on_close)(); (cb_bk.on_export_backup)(ws_id);
-                        }))
-                        .child(menu_item_row("ws-action-export-md", "导出：Markdown", dark_mode, false, move || {
-                          expanded_ws_menu.set(None); (cb_md.on_close)(); (cb_md.on_export_markdown)(ws_id);
-                        }))
-                        .child(menu_item_row("ws-action-import-files", "导入：文件(.md/.zip)", dark_mode, false, move || {
-                          expanded_ws_menu.set(None); (cb_if.on_close)(); (cb_if.on_import_files)(ws_id);
-                        }))
-                        .child(menu_item_row("ws-action-import-folder", "导入：文件夹", dark_mode, false, move || {
-                          expanded_ws_menu.set(None); (cb_id.on_close)(); (cb_id.on_import_folder)(ws_id);
-                        }))
-                        .child(menu_divider(dark_mode))
-                        .child(menu_item_row("ws-action-delete", "删除", dark_mode, true, move || {
-                          expanded_ws_menu.set(None); (cb_del.on_close)(); (cb_del.on_delete)(ws_id);
-                        })),
+                            } else {
+                              view()
+                            }),
+                        ),
+                    )
+                    .child(
+                      button()
+                        .element_ref(&menu_btn_ref)
+                        .test_id(&format!("ws-row-menu-{idx}"))
+                        .accessibility_label(format!("工作区 {ws_name} 菜单"))
+                        .w(px(28.0)).h(px(28.0)).flex_shrink_0().items_center().justify_center().rounded(px(6.0))
+                        .bg(if open_sub == Some(ws_id) { p.surface_hover } else { p.surface_overlay })
+                        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                        .on_press(move || {
+                          let cur_open = expanded_ws_menu.get_untracked().map(|x| x.0);
+                          if cur_open == Some(ws_id) {
+                            expanded_ws_menu.set(None);
+                          } else {
+                            expanded_ws_menu.set(Some((ws_id, wn_menu.clone(), menu_btn_ref)));
+                          }
+                        })
+                        .child(mica_icons::more_dots(p.text_muted_hex)),
                     );
-                  }
-                  col = col.child(row_wrap);
+                  col = col.child(row_view);
                 }
                 col
               })))
+              .child(when(move || expanded_ws_menu.get().is_some(), {
+                let cb_row = cb_row_inner.clone();
+                move || {
+                  let Some((ws_id, rename_init, anchor_ref)) = expanded_ws_menu.get() else {
+                    return view().into_element();
+                  };
+                  let (cb_bk, cb_md, cb_if, cb_id, cb_del) = (
+                    cb_row.clone(),
+                    cb_row.clone(),
+                    cb_row.clone(),
+                    cb_row.clone(),
+                    cb_row.clone(),
+                  );
+                  let mut menu = view()
+                    .test_id("ws-row-action-menu")
+                    .w(px(210.0))
+                    .py_1()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(move || palette(dark_mode.get()).border_normal)
+                    .bg(move || palette(dark_mode.get()).surface_overlay)
+                    .shadow_md()
+                    .child(menu_item_row("ws-action-rename", "重命名", dark_mode, false, move || {
+                      expanded_ws_menu.set(None);
+                      rename_ws_id.set(Some(ws_id));
+                      rename_ws_initial.set(rename_init.clone());
+                      rename_ws_open.set(true);
+                    }))
+                    .child(menu_item_row("ws-action-export-backup", "导出：备份(Mica 格式)", dark_mode, false, move || {
+                      expanded_ws_menu.set(None);
+                      (cb_bk.on_close)();
+                      (cb_bk.on_export_backup)(ws_id);
+                    }))
+                    .child(menu_item_row("ws-action-export-md", "导出：Markdown", dark_mode, false, move || {
+                      expanded_ws_menu.set(None);
+                      (cb_md.on_close)();
+                      (cb_md.on_export_markdown)(ws_id);
+                    }))
+                    .child(menu_item_row("ws-action-import-files", "导入：文件(.md/.zip)", dark_mode, false, move || {
+                      expanded_ws_menu.set(None);
+                      (cb_if.on_close)();
+                      (cb_if.on_import_files)(ws_id);
+                    }));
+                  if !crate::web_runtime::is_web() {
+                    menu = menu.child(menu_item_row("ws-action-import-folder", "导入：文件夹", dark_mode, false, move || {
+                      expanded_ws_menu.set(None);
+                      (cb_id.on_close)();
+                      (cb_id.on_import_folder)(ws_id);
+                    }));
+                  }
+                  menu = menu
+                    .child(menu_divider(dark_mode))
+                    .child(menu_item_row("ws-action-delete", "删除", dark_mode, true, move || {
+                      expanded_ws_menu.set(None);
+                      (cb_del.on_close)();
+                      (cb_del.on_delete)(ws_id);
+                    }));
+
+                  overlay()
+                    .anchor(&anchor_ref)
+                    .placement(Placement::Bottom)
+                    .align(Align::End)
+                    .offset(px(4.0))
+                    .margin(px(8.0))
+                    .on_press_outside(move |_: &Point<Points>| expanded_ws_menu.set(None))
+                    .on_cancel(move || expanded_ws_menu.set(None))
+                    .child(menu)
+                    .into_element()
+                }
+              }))
               .child(menu_divider(dark_mode))
               .child(when(move || !creating_new.get(), move || {
                 button()

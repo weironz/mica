@@ -614,6 +614,15 @@ fn regression_narrow_viewport_drawers_and_touch_bar() {
   app.wait_for("id:touch-sel-copy").unwrap();
   app.wait_for("id:touch-handle-start").unwrap();
   app.wait_for("id:touch-handle-end").unwrap();
+
+  // 4. Pressing `touch-sel-copy` copies selection, clears it, and dismisses bar + handles.
+  app.press("id:touch-sel-copy").unwrap();
+  app
+    .wait_for_gone("id:touch-selection-bar", std::time::Duration::from_millis(600))
+    .unwrap();
+  app
+    .wait_for_gone("id:touch-handle-start", std::time::Duration::from_millis(600))
+    .unwrap();
 }
 
 #[test]
@@ -3087,4 +3096,96 @@ mod wave2_settings_tests {
       );
     }
   }
+}
+
+#[test]
+fn regression_mobile_editor_toolbar_scrolls_format_bar_and_moves_overflow_to_more_menu() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(390.0), px(844.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.wait_for("id:ed-format-bar-scroll").unwrap();
+  app.wait_for("id:ed-more").unwrap();
+
+  let screen = app.screen();
+  let nodes = screen.layout_nodes();
+  for hidden_on_row1 in ["ed-open-board", "ed-copy-link", "ed-copy-path"] {
+    assert!(
+      nodes
+        .iter()
+        .all(|n| n.test_id.as_deref() != Some(hidden_on_row1)),
+      "{hidden_on_row1} should move into `⋯` menu on < 640px mobile header"
+    );
+  }
+  let more_btn = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("ed-more"))
+    .expect("ed-more missing");
+  assert!(
+    more_btn.bounds.origin.x.0 + more_btn.bounds.size.width.0 <= 390.0,
+    "ed-more overflowed 390px: {:?}",
+    more_btn.bounds
+  );
+
+  app.press("id:ed-more").unwrap();
+  app.wait_for("id:page-more-menu").unwrap();
+  app.wait_for("id:page-menu-board").unwrap();
+  app.wait_for("id:page-menu-copy-link").unwrap();
+  app.wait_for("id:page-menu-copy-path").unwrap();
+}
+
+#[test]
+fn regression_workspace_row_menu_floats_in_overlay_without_pushing_rows() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("Mica 本地工作区").unwrap();
+
+  // Create a second workspace so row 1 is visible below row 0.
+  app.press("id:workspace-switcher-btn").unwrap();
+  app.wait_for("id:ws-create-trigger").unwrap();
+  app.press("id:ws-create-trigger").unwrap();
+  app.type_text("id:ws-create-input", "第二工作区").unwrap();
+  app.press("id:ws-create-confirm").unwrap();
+  app
+    .wait_for_gone("id:workspace-switcher-popover", std::time::Duration::from_millis(600))
+    .unwrap();
+
+  app.press("id:workspace-switcher-btn").unwrap();
+  app.wait_for("id:workspace-item-0").unwrap();
+  app.wait_for("id:workspace-item-1").unwrap();
+
+  let y_before = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("workspace-item-1"))
+    .expect("workspace-item-1 missing")
+    .bounds
+    .origin
+    .y
+    .0;
+
+  app.press("id:ws-row-menu-0").unwrap();
+  app.wait_for("id:ws-row-action-menu").unwrap();
+
+  let y_after = app
+    .screen()
+    .layout_nodes()
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("workspace-item-1"))
+    .expect("workspace-item-1 missing after opening menu")
+    .bounds
+    .origin
+    .y
+    .0;
+
+  assert!(
+    (y_after - y_before).abs() < 1.0,
+    "ws-row-action-menu shifted sibling workspace row instead of floating: before={y_before}, after={y_after}"
+  );
 }

@@ -144,11 +144,13 @@ pub(crate) fn page_more_menu_view(
   header: Rc<EditorHeaderProps>,
   bridge: Rc<MicaDocumentBridge>,
   page_menu_open: Signal<bool>,
+  compact: Memo<bool>,
   anchor_ref: &ElementRef,
   dark_mode: Signal<bool>,
 ) -> impl IntoElement + use<> {
   let comments_vis = header.comments_visible;
   let props_vis = header.show_properties;
+  let on_board = header.on_open_board.clone();
   let on_comments = header.on_toggle_comments.clone();
   let on_props = header.on_toggle_properties.clone();
   let on_zip = header.on_export_zip.clone();
@@ -158,6 +160,56 @@ pub(crate) fn page_more_menu_view(
   let on_ver = header.on_open_version_history.clone();
   let on_snap = header.on_save_snapshot.clone();
   let on_trash = header.on_trash_page.clone();
+  let page_id_sig = header.page_id_str;
+  let ws_name_sig = header.workspace_name;
+  let folder_name_sig = header.folder_name;
+  let is_compact = compact.get_untracked();
+
+  let mut menu = view()
+    .test_id("page-more-menu")
+    .w(px(220.0))
+    .p_1()
+    .gap(px(2.0))
+    .rounded(px(8.0))
+    .border_1()
+    .border_color(move || palette(dark_mode.get()).border_normal)
+    .bg(move || palette(dark_mode.get()).surface_overlay)
+    .shadow_md();
+
+  if is_compact {
+    let br_link = bridge.clone();
+    let br_path = bridge.clone();
+    menu = menu
+      .child(menu_row("page-menu-board", "打开无限白板", dark_mode, move || {
+        on_board();
+        page_menu_open.set(false);
+      }))
+      .child(menu_row("page-menu-copy-link", "复制页面链接", dark_mode, move || {
+        let id = page_id_sig.get_untracked();
+        set_clipboard(format!("mica://page/{id}"));
+        br_link.set_status_flash("已复制链接");
+        page_menu_open.set(false);
+      }))
+      .child(menu_row("page-menu-copy-path", "复制页面路径", dark_mode, move || {
+        let mut segs: Vec<String> = Vec::new();
+        let ws = ws_name_sig.get_untracked();
+        if !ws.trim().is_empty() {
+          segs.push(ws.trim().to_string());
+        }
+        for part in folder_name_sig.get_untracked().split(" > ") {
+          let p = part.trim();
+          if !p.is_empty() {
+            segs.push(p.to_string());
+          }
+        }
+        if !segs.is_empty() {
+          set_clipboard(segs.join("/"));
+          br_path.set_status_flash("已复制页面路径");
+        }
+        page_menu_open.set(false);
+      }))
+      .child(menu_sep(dark_mode));
+  }
 
   overlay()
     .anchor(anchor_ref)
@@ -168,16 +220,7 @@ pub(crate) fn page_more_menu_view(
     .on_press_outside(move |_: &Point<Points>| page_menu_open.set(false))
     .on_cancel(move || page_menu_open.set(false))
     .child(
-      view()
-        .test_id("page-more-menu")
-        .w(px(220.0))
-        .p_1()
-        .gap(px(2.0))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(move || palette(dark_mode.get()).border_normal)
-        .bg(move || palette(dark_mode.get()).surface_overlay)
-        .shadow_md()
+      menu
         .child(menu_check_row(
           "page-menu-comments",
           "评论",

@@ -702,6 +702,7 @@ pub fn touch_selection_bar_view(
       Rc::new(move || {
         if let Some(payload) = b_copy.copy_selection() {
           set_clipboard(payload.plain);
+          b_copy.clear_selection();
           b_copy.set_status_flash("已复制所选内容");
         }
       }),
