@@ -475,6 +475,112 @@ pub async fn put_presigned_bytes(
   Ok(resp.status())
 }
 
+/// Send an authenticated `PUT` request with raw binary `body` and `Content-Type`
+/// (`credentials: "same-origin"` + optional `Authorization: Bearer`) and decode
+/// the JSON response body (used for `PUT /api/auth/me/avatar`).
+#[cfg(target_arch = "wasm32")]
+pub async fn fetch_put_bytes(
+  url: &str,
+  bearer_token: Option<&str>,
+  content_type: &str,
+  body: &[u8],
+  timeout_secs: u64,
+) -> Result<String, String> {
+  use wasm_bindgen::JsCast;
+  use wasm_bindgen::closure::Closure;
+  use wasm_bindgen_futures::JsFuture;
+  use web_sys::{AbortController, Headers, Request, RequestCredentials, RequestInit, Response};
+
+  struct TimeoutGuard {
+    window: web_sys::Window,
+    timer_id: i32,
+    _cb: Closure<dyn FnMut()>,
+  }
+  impl Drop for TimeoutGuard {
+    fn drop(&mut self) {
+      self.window.clear_timeout_with_handle(self.timer_id);
+    }
+  }
+
+  let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
+  let controller =
+    AbortController::new().map_err(|e| format!("failed to construct AbortController: {e:?}"))?;
+  let ctrl_abort = controller.clone();
+  let timed_out = std::rc::Rc::new(std::cell::Cell::new(false));
+  let timed_out_cb = std::rc::Rc::clone(&timed_out);
+  let abort_cb = Closure::<dyn FnMut()>::new(move || {
+    timed_out_cb.set(true);
+    ctrl_abort.abort();
+  });
+  let timeout_ms = timeout_secs.clamp(1, 600).saturating_mul(1000) as i32;
+  let timer_id = window
+    .set_timeout_with_callback_and_timeout_and_arguments_0(
+      abort_cb.as_ref().unchecked_ref(),
+      timeout_ms,
+    )
+    .map_err(|e| format!("failed to schedule PUT timeout: {e:?}"))?;
+  let _guard = TimeoutGuard {
+    window: window.clone(),
+    timer_id,
+    _cb: abort_cb,
+  };
+
+  let headers = Headers::new().map_err(|e| format!("failed to construct Headers: {e:?}"))?;
+  let _ = headers.set("Accept", "application/json");
+  let _ = headers.set("Content-Type", content_type);
+  if let Some(tok) = bearer_token.map(str::trim).filter(|t| !t.is_empty()) {
+    let _ = headers.set("Authorization", &format!("Bearer {tok}"));
+  }
+
+  let init = RequestInit::new();
+  init.set_method("PUT");
+  init.set_headers(&headers);
+  init.set_credentials(RequestCredentials::SameOrigin);
+  init.set_signal(Some(&controller.signal()));
+  let arr = js_sys::Uint8Array::from(body);
+  init.set_body(&arr);
+
+  let request = Request::new_with_str_and_init(url, &init)
+    .map_err(|e| format!("PUT {url} request init failed: {e:?}"))?;
+  let resp_val = JsFuture::from(window.fetch_with_request(&request))
+    .await
+    .map_err(|e| {
+      if timed_out.get() {
+        format!("PUT {url} timed out after {timeout_secs}s")
+      } else {
+        format!("PUT {url} network error: {e:?}")
+      }
+    })?;
+  let resp: Response = resp_val
+    .dyn_into()
+    .map_err(|_| format!("PUT {url} returned non-Response object"))?;
+  let status = resp.status();
+  let text_promise = resp
+    .text()
+    .map_err(|e| format!("PUT {url} response.text() failed: {e:?}"))?;
+  let text = JsFuture::from(text_promise)
+    .await
+    .map_err(|e| {
+      if timed_out.get() {
+        format!("PUT {url} body timed out after {timeout_secs}s")
+      } else {
+        format!("PUT {url} body read failed: {e:?}")
+      }
+    })?
+    .as_string()
+    .unwrap_or_default();
+
+  if (200..300).contains(&status) {
+    return Ok(text);
+  }
+  let detail = extract_server_error_message(&text);
+  if detail.is_empty() {
+    Err(format!("HTTP {status}"))
+  } else {
+    Err(format!("HTTP {status}: {detail}"))
+  }
+}
+
 /// Trigger a real browser file download (`Blob` + `<a download>` + `URL.revokeObjectURL`)
 /// on `wasm32`. Returns an error on native desktop (which uses OS Save-As dialogs).
 pub fn web_download_bytes(filename: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {

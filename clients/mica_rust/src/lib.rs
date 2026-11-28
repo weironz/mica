@@ -237,12 +237,19 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     ws_id = views[0].workspace_id;
     let folder = views.iter().find(|v| v.object_type == "folder" && !v.is_deleted);
     default_folder_id = folder.map(|v| v.id).unwrap_or_else(Uuid::new_v4);
-    initial_folder_name = folder
-      .map(|v| v.name.clone())
-      .unwrap_or_else(|| "工作区".to_string());
+    let fallback_folder_name = folder.map(|v| v.name.clone()).unwrap_or_default();
     if let Some(page) = views.iter().find(|v| cloud_sync::is_page_view(v) && !v.is_deleted) {
       initial_doc_id = Some(page.object_id);
       initial_title = page.name.clone();
+      initial_folder_name = page
+        .parent_view_id
+        .and_then(|pid| {
+          views
+            .iter()
+            .find(|v| v.id == pid && v.object_type == "folder" && !v.is_deleted)
+            .map(|v| v.name.clone())
+        })
+        .unwrap_or_default();
     } else {
       let doc_id = Uuid::new_v4();
       let doc_view = make_view(ws_id, doc_id, "未命名页面", "page", Some(default_folder_id), "0000000010");
@@ -251,6 +258,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       views.push(doc_view);
       initial_doc_id = Some(doc_id);
       initial_title = "未命名页面".to_string();
+      initial_folder_name = fallback_folder_name;
     }
   }
 
@@ -1040,9 +1048,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         &title,
       ));
 
-      if let Some(parent_name) = resolve_parent_folder_name(&tree_ref.borrow(), doc_id) {
-        active_folder_name.set(parent_name);
-      }
+      active_folder_name.set(
+        resolve_parent_folder_name(&tree_ref.borrow(), doc_id).unwrap_or_default(),
+      );
 
       let mut tabs = open_tabs.get_untracked();
       if force_new_tab {
@@ -1771,14 +1779,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       workspace_menu_open.set(false);
       let mut ws_views = v.list_workspace_views(&entry.origin, entry.id);
       if cloud_sync::is_cloud_origin(&entry.origin) {
-        cs.apply_workspace_views(
-          entry.origin.clone(),
-          entry.id,
-          entry.name.clone(),
-          ws_views,
-          None,
-          false,
-        );
+        if ws_views.is_empty() {
+          cs.begin_cloud_workspace_switch(entry.origin.clone(), entry.id, entry.name.clone());
+        } else {
+          cs.apply_workspace_views(
+            entry.origin.clone(),
+            entry.id,
+            entry.name.clone(),
+            ws_views,
+            None,
+            false,
+          );
+        }
         cs.refresh_workspace(entry.origin, entry.id, entry.name, None);
         return;
       }
@@ -3659,8 +3671,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                   },
                   {
                     let retry_open = open_doc_internal.clone();
+                    let retry_cs = cloud_session.clone();
                     move || {
                       let retry_open = retry_open.clone();
+                      let retry_cs = retry_cs.clone();
                       app_chrome::render_doc_load_error_overlay(
                         active_title,
                         doc_load_error,
@@ -3677,6 +3691,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                         Rc::new(move || {
                           if let Some(did) = active_doc.get_untracked() {
                             retry_open(did, active_title.get_untracked(), false, false);
+                          } else {
+                            let origin = active_origin.get_untracked();
+                            let ws_id = active_workspace_id.get_untracked();
+                            let ws_name = workspace_name.get_untracked();
+                            if cloud_sync::is_cloud_origin(&origin) && !ws_id.is_nil() {
+                              retry_cs.begin_cloud_workspace_switch(
+                                origin.clone(),
+                                ws_id,
+                                ws_name.clone(),
+                              );
+                              retry_cs.refresh_workspace(origin, ws_id, ws_name, None);
+                            }
                           }
                         }),
                       )

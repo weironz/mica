@@ -24,6 +24,7 @@ use std::time::Duration;
 const HEALTH_TIMEOUT_SECS: u64 = 5;
 const LOGIN_TIMEOUT_SECS: u64 = 10;
 const API_TIMEOUT_SECS: u64 = 15;
+const VIEWS_TIMEOUT_SECS: u64 = 30;
 const AI_TIMEOUT_SECS: u64 = 60;
 
 /// Serializable cloud connection & session configuration.
@@ -49,6 +50,8 @@ pub struct CloudUser {
   pub email: String,
   pub display_name: String,
   pub verified: bool,
+  #[serde(default)]
+  pub avatar_version: Option<String>,
 }
 
 /// Public share link status for a cloud document.
@@ -202,6 +205,23 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
   out
 }
 
+/// Build the public user avatar URL `<origin>/api/users/{user_id}/avatar?v={version}`
+/// (matching `GET /api/users/{id}/avatar`). Returns `None` when `origin`,
+/// `user_id`, or `version` is blank so clients never fetch a guaranteed 404.
+pub fn build_avatar_url(origin: &str, user_id: &str, version: Option<&str>) -> Option<String> {
+  let base = origin.trim().trim_end_matches('/');
+  let uid = user_id.trim();
+  let ver = version.map(str::trim).filter(|v| !v.is_empty())?;
+  if base.is_empty() || uid.is_empty() {
+    return None;
+  }
+  Some(format!(
+    "{base}/api/users/{}/avatar?v={}",
+    percent_encode_path_segment(uid),
+    percent_encode_path_segment(ver)
+  ))
+}
+
 /// Build the stable, never-expiring Mica blob URL for `(origin, workspace_id, file_id, name)`.
 ///
 /// Matches server route `GET /api/workspaces/{ws}/files/{file_id}/blob[/{name}]`
@@ -334,6 +354,7 @@ pub struct CloudConnector {
   config: CloudConfig,
   user_id: Option<String>,
   display_name: Option<String>,
+  avatar_version: Option<String>,
   refresh_token: Option<String>,
   endpoints: ApiEndpoints,
   claims: ClaimTracker,
@@ -363,6 +384,7 @@ impl CloudConnector {
       config,
       user_id: None,
       display_name: None,
+      avatar_version: None,
       refresh_token: None,
       endpoints,
       claims: ClaimTracker::new(origin),
@@ -400,6 +422,23 @@ impl CloudConnector {
   pub fn display_name(&self) -> Option<&str> {
     self
       .display_name
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+  }
+
+  /// Attach the authenticated user's avatar version token (if known).
+  pub fn with_avatar_version(mut self, avatar_version: Option<String>) -> Self {
+    self.avatar_version = avatar_version
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
+    self
+  }
+
+  /// Authenticated user's avatar version token, if known.
+  pub fn avatar_version(&self) -> Option<&str> {
+    self
+      .avatar_version
       .as_deref()
       .map(str::trim)
       .filter(|s| !s.is_empty())
@@ -565,6 +604,11 @@ impl CloudConnector {
     self.user_id = Some(auth.user.id.to_string());
     self.display_name = (!auth.user.display_name.trim().is_empty())
       .then(|| auth.user.display_name.trim().to_string());
+    self.avatar_version = auth
+      .user
+      .avatar_version
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
     self.refresh_token = (!auth.refresh_token.trim().is_empty()).then_some(auth.refresh_token);
     self.config.email = Some(auth.user.email.clone());
     self.claims.switch_account(WorldOrigin::Cloud {
@@ -597,12 +641,110 @@ impl CloudConnector {
       .and_then(Value::as_str)
       .unwrap_or(&email)
       .to_string();
+    let avatar_version = j_opt_str(user_obj, "avatar_version")
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
     Ok(CloudUser {
       id: Some(id),
       email,
       display_name,
       verified: true,
+      avatar_version,
     })
+  }
+
+  /// Update the authenticated user's display name (`PATCH /api/auth/me`).
+  pub async fn update_me(&self, display_name: &str) -> Result<CloudUser, String> {
+    let trimmed = display_name.trim();
+    if trimmed.is_empty() {
+      return Err("display name must not be empty".to_string());
+    }
+    let body = self
+      .authed_patch_json(
+        "/api/auth/me",
+        &json!({ "display_name": trimmed }),
+        LOGIN_TIMEOUT_SECS,
+      )
+      .await?;
+    let val: Value =
+      serde_json::from_str(&body).map_err(|e| format!("invalid /api/auth/me response: {e}"))?;
+    let user_obj = val.get("user").unwrap_or(&val);
+    let id = j_opt_str(user_obj, "id");
+    let email = j_opt_str(user_obj, "email").unwrap_or_default();
+    let updated_name = j_opt_str(user_obj, "display_name").unwrap_or_else(|| trimmed.to_string());
+    let avatar_version = j_opt_str(user_obj, "avatar_version")
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
+    Ok(CloudUser {
+      id,
+      email,
+      display_name: updated_name,
+      verified: true,
+      avatar_version,
+    })
+  }
+
+  /// Change the authenticated user's password (`POST /api/auth/password`).
+  pub async fn change_password(
+    &self,
+    current_password: &str,
+    new_password: &str,
+  ) -> Result<(), String> {
+    let _ = self
+      .authed_post_json(
+        "/api/auth/password",
+        &json!({
+          "current_password": current_password,
+          "new_password": new_password,
+        }),
+        LOGIN_TIMEOUT_SECS,
+      )
+      .await?;
+    Ok(())
+  }
+
+  /// Permanently delete the authenticated user's account (`DELETE /api/auth/me`).
+  pub async fn delete_account(&self, password: &str) -> Result<(), String> {
+    let _ = self
+      .authed_delete_json(
+        "/api/auth/me",
+        &json!({ "password": password }),
+        LOGIN_TIMEOUT_SECS,
+      )
+      .await?;
+    Ok(())
+  }
+
+  /// Upload a new user avatar (`PUT /api/auth/me/avatar` with raw image bytes and
+  /// `Content-Type`), returning the updated `avatar_version` token.
+  pub async fn upload_avatar(
+    &self,
+    bytes: &[u8],
+    mime_type: &str,
+  ) -> Result<Option<String>, String> {
+    if bytes.is_empty() {
+      return Err("avatar file is empty".to_string());
+    }
+    let ct = mime_type.trim();
+    let content_type = if ct.is_empty() { "image/png" } else { ct };
+    let body = self
+      .authed_put_bytes("/api/auth/me/avatar", content_type, bytes, 30)
+      .await?;
+    let val: Value =
+      serde_json::from_str(&body).map_err(|e| format!("invalid avatar response: {e}"))?;
+    Ok(
+      j_opt_str(&val, "avatar_version")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()),
+    )
+  }
+
+  /// Remove the authenticated user's avatar (`DELETE /api/auth/me/avatar`).
+  pub async fn delete_avatar(&self) -> Result<(), String> {
+    let _ = self
+      .authed_delete("/api/auth/me/avatar", LOGIN_TIMEOUT_SECS)
+      .await?;
+    Ok(())
   }
 
   /// Rotate an expired JWT access token via `POST /api/auth/refresh`.
@@ -629,6 +771,11 @@ impl CloudConnector {
     if !auth.user.display_name.trim().is_empty() {
       self.display_name = Some(auth.user.display_name.trim().to_string());
     }
+    self.avatar_version = auth
+      .user
+      .avatar_version
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
     if !auth.refresh_token.trim().is_empty() {
       self.refresh_token = Some(auth.refresh_token);
     }
@@ -650,6 +797,11 @@ impl CloudConnector {
     self.user_id = Some(auth.user.id.to_string());
     self.display_name = (!auth.user.display_name.trim().is_empty())
       .then(|| auth.user.display_name.trim().to_string());
+    self.avatar_version = auth
+      .user
+      .avatar_version
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
     self.refresh_token = None;
     self.config.email = Some(email.clone());
     self.claims.switch_account(WorldOrigin::Cloud {
@@ -747,7 +899,7 @@ impl CloudConnector {
     let body = self
       .authed_get(
         &format!("/api/workspaces/{workspace_id}/views"),
-        API_TIMEOUT_SECS,
+        VIEWS_TIMEOUT_SECS,
       )
       .await?;
     decode_views(&body).map_err(|e| format!("invalid views response: {e}"))
@@ -1729,6 +1881,7 @@ impl CloudConnector {
     self.config.access_token = None;
     self.user_id = None;
     self.display_name = None;
+    self.avatar_version = None;
     self.refresh_token = None;
     self.config.email = None;
     self.phase = SyncPhase::Offline;
@@ -1874,15 +2027,21 @@ impl CloudConnector {
     Ok(base)
   }
 
-  fn require_auth(&self) -> Result<(&str, &str), String> {
+  fn require_auth(&self) -> Result<(&str, Option<&str>), String> {
     let base = self.require_server()?;
     let token = self
       .config
       .access_token
       .as_deref()
       .map(str::trim)
-      .filter(|t| !t.is_empty())
-      .ok_or_else(|| "authentication required".to_string())?;
+      .filter(|t| !t.is_empty());
+    // On Web (`wasm32`), sibling browser tabs may clear a stale in-memory
+    // Bearer token after rotating shared `HttpOnly` cookies; `fetch_request` /
+    // `fetch_put_bytes` include `credentials: "same-origin"` so requests without
+    // an Authorization header still carry the fresh cookie.
+    if token.is_none() && !cfg!(target_arch = "wasm32") {
+      return Err("authentication required".to_string());
+    }
     Ok((base, token))
   }
 
@@ -1891,7 +2050,7 @@ impl CloudConnector {
     send_http(
       "GET",
       &format!("{base}{path}"),
-      Some(token),
+      token,
       None,
       timeout_secs,
     )
@@ -1909,7 +2068,7 @@ impl CloudConnector {
     send_http(
       "POST",
       &format!("{base}{path}"),
-      Some(token),
+      token,
       Some(payload),
       timeout_secs,
     )
@@ -1927,7 +2086,7 @@ impl CloudConnector {
     send_http(
       "PATCH",
       &format!("{base}{path}"),
-      Some(token),
+      token,
       Some(payload),
       timeout_secs,
     )
@@ -1940,12 +2099,49 @@ impl CloudConnector {
     send_http(
       "DELETE",
       &format!("{base}{path}"),
-      Some(token),
+      token,
       None,
       timeout_secs,
     )
     .await
     .map_err(|e| format!("DELETE {path} failed: {e}"))
+  }
+
+  async fn authed_delete_json(
+    &self,
+    path: &str,
+    payload: &Value,
+    timeout_secs: u64,
+  ) -> Result<String, String> {
+    let (base, token) = self.require_auth()?;
+    send_http(
+      "DELETE",
+      &format!("{base}{path}"),
+      token,
+      Some(payload),
+      timeout_secs,
+    )
+    .await
+    .map_err(|e| format!("DELETE {path} failed: {e}"))
+  }
+
+  async fn authed_put_bytes(
+    &self,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+    timeout_secs: u64,
+  ) -> Result<String, String> {
+    let (base, token) = self.require_auth()?;
+    send_put_bytes(
+      &format!("{base}{path}"),
+      token,
+      content_type,
+      body,
+      timeout_secs,
+    )
+    .await
+    .map_err(|e| format!("PUT {path} failed: {e}"))
   }
 }
 
@@ -2014,7 +2210,13 @@ fn send_http_blocking(
       if let Some(ref h) = auth_header {
         req = req.header("Authorization", h);
       }
-      req.call().map_err(|e| e.to_string())?
+      match json_body {
+        Some(payload) => req
+          .force_send_body()
+          .send_json(payload)
+          .map_err(|e| e.to_string())?,
+        None => req.call().map_err(|e| e.to_string())?,
+      }
     }
     "POST" => {
       let mut req = agent.post(url).config().timeout_global(timeout).build();
@@ -2064,6 +2266,53 @@ async fn send_http(
     timeout_secs,
   )
   .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn send_put_bytes(
+  url: &str,
+  bearer_token: Option<&str>,
+  content_type: &str,
+  body: &[u8],
+  timeout_secs: u64,
+) -> Result<String, String> {
+  let url_owned = url.to_string();
+  let token_owned = bearer_token.map(str::to_string);
+  let ct_owned = content_type.to_string();
+  let body_owned = body.to_vec();
+  run_blocking(move || {
+    let agent = shared_http_agent();
+    let timeout = Some(Duration::from_secs(timeout_secs));
+    let mut req = agent
+      .put(&url_owned)
+      .config()
+      .timeout_global(timeout)
+      .build();
+    if let Some(tok) = token_owned
+      .as_deref()
+      .map(str::trim)
+      .filter(|t| !t.is_empty())
+    {
+      req = req.header("Authorization", &format!("Bearer {tok}"));
+    }
+    req = req.header("Content-Type", &ct_owned);
+    let mut resp = req
+      .send(body_owned.as_slice())
+      .map_err(|e| e.to_string())?;
+    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+  })
+  .await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn send_put_bytes(
+  url: &str,
+  bearer_token: Option<&str>,
+  content_type: &str,
+  body: &[u8],
+  timeout_secs: u64,
+) -> Result<String, String> {
+  crate::web_runtime::fetch_put_bytes(url, bearer_token, content_type, body, timeout_secs).await
 }
 
 fn parse_uploaded_file_value(val: &Value, fallback_name: &str) -> Result<UploadedFile, String> {
@@ -2228,6 +2477,7 @@ fn parse_register_user(raw_body: &str, email: &str, display_name: &str) -> Cloud
       email: email.into(),
       display_name: fallback.into(),
       verified: false,
+      avatar_version: None,
     };
   };
   if let Some(u) = val.get("user") {
@@ -2236,6 +2486,9 @@ fn parse_register_user(raw_body: &str, email: &str, display_name: &str) -> Cloud
       email: j_opt_str(u, "email").unwrap_or_else(|| email.into()),
       display_name: j_opt_str(u, "display_name").unwrap_or_else(|| fallback.into()),
       verified: val.get("verified").and_then(Value::as_bool).unwrap_or(true),
+      avatar_version: j_opt_str(u, "avatar_version")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()),
     };
   }
   CloudUser {
@@ -2246,6 +2499,9 @@ fn parse_register_user(raw_body: &str, email: &str, display_name: &str) -> Cloud
       .get("verified")
       .and_then(Value::as_bool)
       .unwrap_or(false),
+    avatar_version: j_opt_str(&val, "avatar_version")
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty()),
   }
 }
 
@@ -2616,7 +2872,8 @@ mod tests {
     let addr = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
       let (mut stream, _) = listener.accept().unwrap();
-      let (mut raw, mut buf, mut hdr_end, mut clen) = (Vec::new(), [0u8; 4096], None, 0usize);
+      let (mut raw, mut buf, mut hdr_end, mut clen, mut chunked) =
+        (Vec::new(), [0u8; 4096], None, 0usize, false);
       loop {
         let n = stream.read(&mut buf).unwrap_or(0);
         if n == 0 {
@@ -2628,17 +2885,25 @@ mod tests {
         {
           hdr_end = Some(pos + 4);
           for line in String::from_utf8_lossy(&raw[..pos + 4]).lines() {
-            if let Some((k, v)) = line.split_once(':')
-              && k.eq_ignore_ascii_case("content-length")
-            {
-              clen = v.trim().parse().unwrap_or(0);
+            if let Some((k, v)) = line.split_once(':') {
+              if k.eq_ignore_ascii_case("content-length") {
+                clen = v.trim().parse().unwrap_or(0);
+              } else if k.eq_ignore_ascii_case("transfer-encoding")
+                && v.to_ascii_lowercase().contains("chunked")
+              {
+                chunked = true;
+              }
             }
           }
         }
-        if let Some(end) = hdr_end
-          && raw.len() >= end + clen
-        {
-          break;
+        if let Some(end) = hdr_end {
+          if chunked {
+            if raw[end..].windows(5).any(|w| w == b"0\r\n\r\n") {
+              break;
+            }
+          } else if raw.len() >= end + clen {
+            break;
+          }
         }
       }
       let resp = format!(
@@ -3182,5 +3447,87 @@ mod tests {
     assert_eq!(rep.dangling_links, 1);
     assert!(rep.removed_source);
     assert!(!rep.dry_run);
+  }
+
+  #[test]
+  fn build_avatar_url_formats_valid_inputs_and_skips_empty() {
+    assert_eq!(
+      build_avatar_url("https://mica.cloudcele.com/", "u-1", Some("abc123")),
+      Some("https://mica.cloudcele.com/api/users/u-1/avatar?v=abc123".to_string())
+    );
+    assert_eq!(build_avatar_url("https://mica.cloudcele.com", "u-1", None), None);
+    assert_eq!(build_avatar_url("https://mica.cloudcele.com", "u-1", Some("   ")), None);
+    assert_eq!(build_avatar_url("", "u-1", Some("abc123")), None);
+    assert_eq!(build_avatar_url("https://mica.cloudcele.com", "", Some("abc123")), None);
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn avatar_and_account_management_endpoints_round_trip() {
+    block_on_test(async {
+      // 1. fetch_me / apply_preauth_response retain avatar_version
+      let (me_conn, _, me_h) = mock_conn(
+        "200 OK",
+        r#"{"user":{"id":"u1","email":"a@mica.dev","display_name":"Alice","created_at":"2026-01-01T00:00:00Z","avatar_version":"ver123"}}"#,
+        true,
+      );
+      let me = me_conn.fetch_me().await.unwrap();
+      assert_eq!(me.avatar_version.as_deref(), Some("ver123"));
+      assert!(me_h.join().unwrap().starts_with("GET /api/auth/me "));
+
+      let mut pre = CloudConnector::new(CloudConfig {
+        server_url: "https://mica.example.com".into(),
+        access_token: None,
+        email: None,
+      });
+      pre
+        .apply_preauth_response(
+          r#"{"access_token":"jwt-1","token_type":"Bearer","expires_at":"2026-12-31T00:00:00Z","refresh_token":"","user":{"id":"00000000-0000-0000-0000-000000000001","email":"a@mica.dev","display_name":"Alice","created_at":"2026-01-01T00:00:00Z","avatar_version":"hex16"}}"#,
+        )
+        .unwrap();
+      assert_eq!(pre.avatar_version(), Some("hex16"));
+
+      // 2. upload_avatar sends raw bytes with Content-Type and Bearer header
+      let (up_conn, _, up_h) = mock_conn("200 OK", r#"{"avatar_version":"deadbeef12345678"}"#, true);
+      let ver = up_conn.upload_avatar(b"\x89PNG\r\n\x1a\n", "image/png").await.unwrap();
+      assert_eq!(ver.as_deref(), Some("deadbeef12345678"));
+      let up_req = up_h.join().unwrap();
+      assert!(up_req.starts_with("PUT /api/auth/me/avatar "));
+      let up_lower = up_req.to_ascii_lowercase();
+      assert!(up_lower.contains("content-type: image/png"));
+      assert!(up_lower.contains("authorization: bearer jwt"));
+
+      // 3. delete_avatar calls DELETE /api/auth/me/avatar
+      let (del_conn, _, del_h) = mock_conn("200 OK", r#"{"avatar_version":null}"#, true);
+      del_conn.delete_avatar().await.unwrap();
+      assert!(del_h.join().unwrap().starts_with("DELETE /api/auth/me/avatar "));
+
+      // 4. update_me calls PATCH /api/auth/me
+      let (upd_conn, _, upd_h) = mock_conn(
+        "200 OK",
+        r#"{"user":{"id":"u1","email":"a@mica.dev","display_name":"New Name","created_at":"2026-01-01T00:00:00Z","avatar_version":"hex16"}}"#,
+        true,
+      );
+      let updated = upd_conn.update_me("New Name").await.unwrap();
+      assert_eq!(updated.display_name, "New Name");
+      assert_eq!(updated.avatar_version.as_deref(), Some("hex16"));
+      let upd_req = upd_h.join().unwrap();
+      assert!(upd_req.starts_with("PATCH /api/auth/me "), "upd_req: {upd_req}");
+      assert!(upd_req.contains("\"New Name\""), "upd_req: {upd_req}");
+
+      // 5. change_password calls POST /api/auth/password
+      let (pw_conn, _, pw_h) = mock_conn("204 No Content", "", true);
+      pw_conn.change_password("old-secret-1", "new-secret-2").await.unwrap();
+      let pw_req = pw_h.join().unwrap();
+      assert!(pw_req.starts_with("POST /api/auth/password "), "pw_req: {pw_req}");
+      assert!(pw_req.contains("\"old-secret-1\""), "pw_req: {pw_req}");
+
+      // 6. delete_account calls DELETE /api/auth/me with JSON password body
+      let (da_conn, _, da_h) = mock_conn("204 No Content", "", true);
+      da_conn.delete_account("confirm-pass").await.unwrap();
+      let da_req = da_h.join().unwrap();
+      assert!(da_req.starts_with("DELETE /api/auth/me "), "da_req: {da_req}");
+      assert!(da_req.contains("\"confirm-pass\""), "da_req: {da_req}");
+    });
   }
 }

@@ -951,12 +951,6 @@ impl CloudSessionHandles {
       }
     }
 
-    let first_folder = views.iter().find(|r| r.object_type == "folder" && !r.is_deleted);
-    let fid = first_folder.map(|r| r.id).unwrap_or(Uuid::nil());
-    let fname = first_folder
-      .map(|r| r.name.clone())
-      .unwrap_or_else(|| ws_name.clone());
-
     let opening_page = initial_doc
       .as_ref()
       .and_then(|(did, _)| {
@@ -995,6 +989,17 @@ impl CloudSessionHandles {
 
     // Every workspace open / switch starts with all folders collapsed by default.
     let next_tree = PageTreeModel::new(views.clone());
+    // Derive breadcrumb folder strictly from `opening_page`'s real parent chain;
+    // never fall back to `ws_name` (which produced `compute > compute > 暂无页面`).
+    let (fid, fname) = if let Some(page) = opening_page {
+      (
+        page.parent_view_id.unwrap_or_else(Uuid::nil),
+        crate::app_modals::resolve_parent_folder_name(&next_tree, page.object_id)
+          .unwrap_or_default(),
+      )
+    } else {
+      (Uuid::nil(), String::new())
+    };
     *self.tree.borrow_mut() = next_tree;
     *self.docs_store.borrow_mut() = next_docs.clone();
     *self.favorites.borrow_mut() = self.vault.favorites_for(ws_id);
@@ -1164,7 +1169,48 @@ impl CloudSessionHandles {
     });
   }
 
+  /// Put the UI shell into an immediate, clean loading state when switching to an
+  /// uncached cloud workspace (instead of clearing to a misleading "暂无页面" empty
+  /// state while `GET /views` is still in flight).
+  pub(crate) fn begin_cloud_workspace_switch(&self, origin: String, ws_id: Uuid, ws_name: String) {
+    self.bridge.flush_pending_persist();
+    self
+      .views_refresh_gen
+      .set(self.views_refresh_gen.get_untracked().wrapping_add(1));
+    self.pending_view_ops.borrow_mut().clear_all_pending_titles();
+    self.doc_sync.close();
+    self.views_watcher.stop();
+
+    *self.tree.borrow_mut() = PageTreeModel::new(Vec::new());
+    *self.docs_store.borrow_mut() = HashMap::new();
+    *self.favorites.borrow_mut() = self.vault.favorites_for(ws_id);
+
+    self.active_workspace_id.set(ws_id);
+    self.active_origin.set(origin);
+    self.workspace_name.set(ws_name.clone());
+    self.active_folder_id.set(Uuid::nil());
+    self.active_folder_name.set(String::new());
+    self.root_focused.set(false);
+    self.focused_nav_id.set(None);
+    self.active_doc.set(None);
+    self.active_doc_id_str.set(String::new());
+    self.active_title.set(format!("正在加载 {ws_name}…"));
+    self.active_is_favorite.set(false);
+    self.doc_load_error.set(None);
+    self.doc_loading.set(true);
+    self.bridge.load_markdown("");
+    self.open_tabs.set(Vec::new());
+    self.active_tab_idx.set(0);
+    self.active_mode.set(MODE_DOC);
+    (self.refresh_favorite_pages)();
+    (self.sync_tree_snapshots)();
+  }
+
   /// Refresh a single cloud workspace's tree and opening document asynchronously.
+  ///
+  /// Fetches `list_views` + `list_trash` first and renders the sidebar tree
+  /// immediately upon arrival (so 1,000+ page workspaces do not block on opening
+  /// document Markdown); the opening page then streams through `doc_sync`.
   pub(crate) fn refresh_workspace(
     &self,
     origin: String,
@@ -1173,19 +1219,25 @@ impl CloudSessionHandles {
     preferred_doc: Option<Uuid>,
   ) {
     if !is_cloud_origin(&origin) || !self.is_cloud_signed_in.get_untracked() {
+      self.doc_loading.set(false);
       return;
     }
     let epoch = self.cloud_load_gen.get_untracked().wrapping_add(1);
     self.cloud_load_gen.set(epoch);
+    self.doc_load_error.set(None);
     self.cloud_status.set(format!("正在同步云端工作区：{ws_name}…"));
     let srv_url = self.server_url.get_untracked();
     let email = self.account_email.get_untracked();
     let mut conn = self.cloud_connector.borrow().clone();
     let h = self.clone();
     self.spawn_on_app(async move {
-      let res = fetch_cloud_workspace_snapshot(&mut conn, ws_id, preferred_doc)
-        .await
-        .map(|s| (conn, s));
+      let res = with_auto_refresh(&mut conn, move |c| async move {
+        let live = c.list_views(ws_id).await?;
+        let trash = c.list_trash(ws_id).await.unwrap_or_default();
+        Ok(merge_live_and_trash(live, trash, ws_id))
+      })
+      .await
+      .map(|(views, rot)| (conn, views, rot));
       if h.cloud_load_gen.get_untracked() != epoch
         || h.active_origin.get_untracked() != origin
         || h.active_workspace_id.get_untracked() != ws_id
@@ -1193,13 +1245,12 @@ impl CloudSessionHandles {
         return;
       }
       match res {
-        Ok((conn, snap)) => {
+        Ok((conn, merged, rot)) => {
           *h.cloud_connector.borrow_mut() = conn;
           if h.allow_local {
-            persist_refreshed_tokens(&h.vault, &srv_url, &email, snap.refreshed_tokens);
+            persist_refreshed_tokens(&h.vault, &srv_url, &email, rot);
           }
-          let page_cnt = snap
-            .views
+          let page_cnt = merged
             .iter()
             .filter(|v| is_page_view(v) && !v.is_deleted)
             .count();
@@ -1210,14 +1261,23 @@ impl CloudSessionHandles {
             }
           }
           h.workspaces.set(all);
-          h.apply_workspace_views(origin, ws_id, ws_name.clone(), snap.views, snap.initial_doc, true);
+          let initial_hint = preferred_doc.and_then(|did| {
+            h.vault
+              .load_markdown(&origin, did)
+              .map(|md| (did, md))
+          });
+          h.apply_workspace_views(origin, ws_id, ws_name.clone(), merged, initial_hint, true);
           h.cloud_status.set(format!("已同步云端工作区：{ws_name}"));
         }
         Err(err) => {
+          h.doc_loading.set(false);
           if CloudConnector::is_unauthorized_error(&err) {
             h.mark_cloud_session_expired(&srv_url, false);
           } else {
-            h.cloud_status.set(format!("同步云端工作区失败：{err}"));
+            let msg = format!("同步云端工作区「{ws_name}」失败：{err}");
+            h.cloud_status.set(msg.clone());
+            h.doc_load_error.set(Some(msg));
+            h.bridge.set_status_flash("同步云端工作区失败");
           }
         }
       }
@@ -2717,5 +2777,38 @@ mod tests {
       "expected POST batch-trash after menu closed, got: {hits:?}"
     );
     let _ = server_thread.join();
+  }
+
+  #[test]
+  fn breadcrumb_folder_resolver_never_falls_back_to_workspace_name() {
+    let ws_id = Uuid::new_v4();
+    let folder_id = Uuid::new_v4();
+    let folder = crate::app_modals::make_view(ws_id, folder_id, "网络", "folder", None, "0000000010");
+    let root_page =
+      crate::app_modals::make_view(ws_id, Uuid::new_v4(), "根页面", "page", None, "0000000020");
+    let nested_page = crate::app_modals::make_view(
+      ws_id,
+      Uuid::new_v4(),
+      "VPN 配置",
+      "page",
+      Some(folder_id),
+      "0000000030",
+    );
+
+    let empty_tree = PageTreeModel::new(Vec::new());
+    assert_eq!(crate::app_modals::resolve_parent_folder_name(&empty_tree, root_page.object_id), None);
+
+    let root_only_tree = PageTreeModel::new(vec![folder.clone(), root_page.clone()]);
+    assert_eq!(
+      crate::app_modals::resolve_parent_folder_name(&root_only_tree, root_page.object_id),
+      None,
+      "root-level page must not inherit unrelated workspace folder name"
+    );
+
+    let nested_tree = PageTreeModel::new(vec![folder, root_page, nested_page.clone()]);
+    assert_eq!(
+      crate::app_modals::resolve_parent_folder_name(&nested_tree, nested_page.object_id).as_deref(),
+      Some("网络")
+    );
   }
 }
