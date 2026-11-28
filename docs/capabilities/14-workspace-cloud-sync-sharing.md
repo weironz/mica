@@ -23,13 +23,22 @@
   - **Web 端（`allow_local == false`）**：取消深色营销左栏与多服务器下拉，在暖灰纸张底色上展示 `396px` 居中单卡片登录页（Mica 图标 + 标题 + 当前同源服务器健康状态条 + 干净登录/注册/忘记密码表单 + 365 天滑动会话说明），未登录时隐藏关闭按钮。
 
 ### 工作区管理、跨工作区迁移与成员邀请
-- **`CAP-14-03` 工作区下拉切换菜单**：`320px` 宽工作区菜单（超过 8 个工作区自动出现搜索过滤框）、显示页面计数、每行 `⋯` 菜单支持重命名、导出（Mica 备份 / Markdown ZIP）、导入（文件/文件夹）、删除；底部提供「+ 新建工作区」与默认折叠的「导入工作区」（点击展开两行去括号紧凑选项：`从 ZIP 导入` + 右侧浅灰 `Mica / Markdown`，以及 `从 Notion 导入` + 右侧浅灰 `Markdown & CSV`）。
+- **`CAP-14-03` 工作区下拉切换菜单**：`320px` 宽工作区菜单（超过 8 个工作区自动出现搜索过滤框）、显示页面计数、每行 `⋯` 菜单通过顶层 `overlay()` 浮层锚定弹出，绝不挤压或遮挡下方工作区列表，支持重命名、导出（Mica 备份 / Markdown ZIP）、导入（Web 端隐藏本地文件夹导入）、删除；底部提供「+ 新建工作区」与默认折叠的「导入工作区」（点击展开两行去括号紧凑选项：`从 ZIP 导入` + 右侧浅灰 `Mica / Markdown`，以及 `从 Notion 导入` + 右侧浅灰 `Markdown & CSV`）。切换云端工作区时必须同时适配桌面 Bearer 与 Web HttpOnly Cookie-only 会话，防止误判未登录导致新工作区侧栏及正文空白。
 - **`CAP-14-04` 跨工作区移动与复制**：支持将单页、文件夹子树或目录树多选批量项通过目标树选择器移动/复制到另一工作区指定目录。
 - **`CAP-14-05` 工作区设置与成员邀请**：展示角色、工作区 ID、存储用量、重命名与成员管理；添加成员走「发送邀请 → 对方接受后加入」契约（见 `docs/features/workspace-invitations.md`）。
 
-### 公开分享与 API 令牌
+### 公开分享、API 令牌与云端账户治理
 - **`CAP-14-06` 公开分享（Publish-to-Web）**：云端页面提供「共享」按钮与弹窗，支持开启/关闭公开访问、生成并一键复制 `/s/{token}` 公开只读链接（绿勾反馈）。
 - **`CAP-14-07` API 令牌管理**：在设置页「账户 → API 令牌」支持创建、展示一次性令牌与吊销，供 CLI (`mica-cli`) 与 MCP Server (`mica-mcp`) 访问。
+- **`CAP-14-08` 账号头像与云端账户治理**：支持云端用户上传/更换/移除头像（图片上传走 MIME 校验并自动追加 `?v=` 防浏览器缓存），且在左侧栏底栏、账号菜单卡片、设置账户页、工作区成员列表 4 处统一展示（无头像时自动退回姓名/邮箱首字母）；设置页个人资料编辑、修改密码、退出/注销账户、PAT 令牌管理与云端 AI 配置绑定真实云端 API（切换工作区/账号时按 `origin` 同步刷新状态）。
+
+---
+
+## 历史踩坑与反例
+
+- **反例 1（Web Cookie-only 会话切换工作区变成空白页）**：`require_auth` 仅检查内存中是否存在 Bearer `token`，而 Web 端鉴权依赖 `HttpOnly` Cookie，内存 `token` 为空字符串，导致切到其他云端工作区时直接跳过拉取返回空树；且同账号或同 `origin` 缓存覆盖也会造成视图串台。
+- **反例 2（工作区行内 `⋯` 菜单嵌入行布局遮挡其他工作区）**：菜单作为行内子元素展开时，会挤压并完全盖住下方的工作区列表。必须使用顶层 `overlay()` 按点击位置悬浮渲染。
+- **反例 3（临时 `when`/`dynamic` 子 `Owner` 内派生异步网络任务被取消）**：如 `share_dialog_modal` 开关触发状态变更重建作用域时立即取消 `POST /share` 请求。弹窗/菜单类的云端变更须通过长生命周期 `app_owner` 派发。
 
 ---
 
@@ -38,9 +47,10 @@
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
 | `CAP-14-01` / `02` 账号菜单与多服务器世界切换 | P0 | 桌面/Web | ✅ | `world_switcher::tests` + `net::tests` + `app_flows` |
-| `CAP-14-03` / `04` 工作区菜单与跨工作区移动/复制 | P0 | 全端 | ✅ | `workspace_views::tests` + `transfer_dialog::tests` + `storage::tests` |
+| `CAP-14-03` / `04` 工作区菜单、浮层 `⋯` 与跨工作区移动/复制 | P0 | 全端 | ✅ | `workspace_views::tests` + `transfer_dialog::tests` + `storage::tests` + `app_flows::regression_workspace_row_menu_floats_in_overlay_without_pushing_rows` |
 | `CAP-14-05` 工作区设置与成员邀请 | P1 | 桌面/Web | 🟡 | UI 与 `net::tests` 本地 mock 已通；`e2e/web_e2e.mjs` `[10/10]` 已补工作区设置弹窗黑盒检查（待下次 CI 实跑转绿） |
 | `CAP-14-06` / `07` 公开分享与 API 令牌 | P1 | 桌面/Web | 🟡 | `share_dialog::tests` + `net::tests` 已通；`e2e/web_e2e.mjs` `[10/10]` 已补 `/s/{token}` 开关→200→关闭→404 黑盒测试（待下次 CI 实跑转绿） |
+| `CAP-14-08` 账号头像与云端账户治理 | P1 | 桌面/Web | ✅ | `user_avatar::tests` + `wave2_settings_tests::regression_settings_web_mode_hides_desktop_only_controls_and_exposes_avatar_actions` |
 
 ---
 

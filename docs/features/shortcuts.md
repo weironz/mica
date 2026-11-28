@@ -2,9 +2,8 @@
 
 Mica 全部键盘快捷键的**权威清单**。加/改快捷键时三处必须同步(否则会漂):
 
-1. 实现:编辑器库的 key handler(编辑器内)
-   + `clients/mica_flutter/lib/main_workspace_view.dart` 的 `_appShortcuts()`(应用级)。
-2. 设置面板:`clients/mica_flutter/lib/ui/dialogs.dart` 的 `_shortcutsSection`。
+1. 实现：编辑器库的 key handler（`crates/mica-editor` + `clients/mica_rust/src/editor_view.rs`）+ `clients/mica_rust/src/lib.rs` / `zoom_controller.rs`（应用级）。
+2. 设置面板：`clients/mica_rust/src/settings_view.rs`。
 3. 本文档。
 
 > macOS 上一律用 **⌘** 代替 **Ctrl**(代码里 Control/Meta 两个变体都绑了)。

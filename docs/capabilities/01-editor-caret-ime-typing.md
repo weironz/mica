@@ -20,7 +20,7 @@
 
 ### 中文 IME 与连续打字
 - **`CAP-01-04` 连续打字零重复、零吞字符**：快速输入普通字母（如 `test`）、标点与特殊符号（特别是反引号 `` ` ``、单双引号、中文标点）时，字符逐一准确落盘，绝不出现首字双写（如 `ttest`）或反引号无响应。
-- **`CAP-01-05` 中文 / CJK 组合预编辑（Composition）**：拼写中文（如微软拼音、搜狗、macOS 拼音）时，实时在光标处渲染带下划线的预编辑文本（preedit）；组合期间 `Enter`/`Backspace`/`Esc` 归输入法候选窗消费，不误删正文、不误拆分段落；上屏后预编辑消失、正文一次性落盘。
+- **`CAP-01-05` 中文 / CJK 组合预编辑（Composition）**：拼写中文（如微软拼音、搜狗、macOS 拼音）时，实时在光标处渲染带下划线的预编辑文本（preedit）并将原生 IME 代理锚定在光标附近；代理控件必须采用单行输入框（`multiline(false)` + 充足单行宽度 `240px`），确保 Windows 微软拼音（TSF）候选词浮窗始终紧贴输入光标而不随拼音变长逐行下移；组合期间 `Enter`/`Backspace`/`Esc` 归输入法候选窗消费，不误删正文、不误拆分段落；上屏后预编辑消失、正文一次性落盘。
 - **`CAP-01-06` 跨块选中后直接中文输入**：选中跨多块内容后直接用中文 IME 拼写上屏，能完整替换跨块选区并保留新输入内容，不双写预编辑文本（对齐原版 `ProseInputSession` 语义）。
 
 ### 块级键盘结构规则
@@ -33,7 +33,7 @@
   - 顶层列表/待办/引用/空标题偏移 `0` 按 `Backspace`：先剥离块样式转为普通段落，不直接与上一段合并。
   - 普通段落偏移 `0` 按 `Backspace`：与上一段落合并（若上一块是原子块如图片/分割线，空行先删空行并选中原子块，防止一键误删图片）。
 - **`CAP-01-09` 页面标题与首行双向切换（回车下移 / 回退聚焦标题末尾）**：
-  - 在页面标题按 `Enter`：若正文首行已有内容（或为非普通段落块），在索引 `0` 插入一个新空普通段落并将原首行下移至索引 `1`，光标落在新空行 `(0, 0)`；若文档本身为空白页（仅 1 个空段落），直接聚焦 `(0, 0)`。
+  - 在页面标题按 `Enter`：若正文首行已有内容（或为非普通段落块），在索引 `0` 插入一个新空普通段落并将原首行下移至索引 `1`，光标落在新空行 `(0, 0)`；若文档本身为空白页（仅 1 个空段落），直接聚焦 `(0, 0)`；同时须具备单 tick 回车去重守卫，阻止 Web 端同一次 `keydown(Enter)` 冒泡到正文触发 `SplitBlock` 插入多余空行。
   - 光标折叠在正文第 0 块普通段落偏移 `0` 按 `Backspace`（Windows 空代理下含 `Delete`）：若第 0 块为空且下方有块，先清理该首行空行让正文上移，随后将焦点交给页面标题并将光标定位到**标题末尾**（`set_selection(end, end)`）；若第 0 块非空或为唯一块，直接跳至标题末尾。
 - **`CAP-01-10` 点击正文底部空白自动新建下一行**：点击正文最后一块下方的空白区域时，若末块已是空段落则直接聚焦它；若末块非空或为非文本块（表格、代码块、图片、分割线、公式等），自动在文档末尾追加一个新空段落并聚焦。
 - **`CAP-01-11` 空白文档无占位提示文案**：新建空白页面直接呈现干净编辑画布，不显示「输入正文，或输入 / 唤出命令...」类冗余占位文字。
@@ -49,6 +49,8 @@
 - **反例 1（`ttest` 与吞反引号）**：在 `selection_sig` 的响应式副作用中每次输入都清空隐藏 `input()` 的 `value`，与 Windows `WM_CHAR`/`EN_CHANGE` 竞争，导致连续键入产生 `ttest` 并且 `` ` `` 被吞掉。应允许缓冲自然累积至 `SINK_LIMIT`（如 64B），仅在点击跳光标、结构按键、粘贴或失焦时清空。
 - **反例 2（切页残留焦点锁死正文快捷键）**：从含聚焦代码块的页面切换到另一页面后，未清理旧 `block_id` 的 `focused_code_block`，导致新页面上 `Ctrl+A` 等全部正文快捷键失效。结构变更时必须按当前存活 `block_id` 裁剪焦点状态。
 - **反例 3（光标滞后一帧）**：输入字符后先算光标位置，下一帧平台 `TextLayout` 回调才更新行宽，导致光标停在 `ttes|t`。必须在 `TextLayout` 回调行几何变化时主动通知光标层重绘。
+- **反例 4（微软拼音候选框随拼音变长不断下移）**：`mica-editor-ime-sink` 若设为 `1px` 宽 `multiline(true)` 输入框，Windows TSF 会按单个字母竖向折行撑高代理控件，导致系统输入法候选框每打一个拼音字母就向下漂移一行。必须保持单行足够宽度（`240px`，`multiline(false)` + `SubmitBehavior::Submit`）。
+- **反例 5（浏览器 Web 端在标题末尾回车跳转正文多出一个空行）**：标题 `on_submit` 将焦点切入 `mica-editor-ime-sink` 后，浏览器在同一事件帧继续向新聚焦输入控件派发 `Enter` 键事件，触发 `SplitBlock` 在第 0 行多插空段落。必须通过 `title_enter_dedup` 单 tick 去重守卫拦截同帧重复回车。
 
 ---
 
@@ -60,11 +62,11 @@
 | `CAP-01-02` 点击命中与字形校准 | P0 | 全端 | ✅ | `text_geometry::tests::caret_selection_and_hit_test_work_for_cjk_ascii_and_emoji_surrogates` |
 | `CAP-01-03` 连续上下方向键保持列 | P1 | 桌面/Web | ✅ | `editor_positioning::move_caret_vertical_preserving_x`（跨行+跨块保持 `preferred_x`）+ `text_geometry::tests::multi_line_vertical_navigation_and_selection_span_lines` |
 | `CAP-01-04` 连续打字与反引号不丢失 | P0 | 桌面/Web | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
-| `CAP-01-05` CJK IME 预编辑与上屏 | P0 | 全端 | ✅ | `editor_positioning::schedule_ime_sink_pos_update`（实时跟随光标定位原生 IME 代理）+ `mica-editor::ime_update_handles_cjk_composition_commit_and_input_rules` |
+| `CAP-01-05` CJK IME 预编辑与上屏 | P0 | 全端 | ✅ | `editor_positioning::schedule_ime_sink_pos_update` + `mica-editor::ime_update_handles_cjk_composition_commit_and_input_rules` + `app_flows::regression_ime_sink_single_line_width_and_title_enter_no_extra_blank_line` |
 | `CAP-01-06` 跨块选中后直接中文输入 | P1 | 桌面/Web | ✅ | `mica-editor` 内核测试 + 2026-11-28 实机跨块选区中文 IME 原位替换验收通过 |
 | `CAP-01-07` Enter / Shift+Enter 规则 | P0 | 全端 | ✅ | `mica-editor::insert_text_split_and_backspace_merge_with_undo_redo` |
 | `CAP-01-08` Backspace 阶梯退化 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` |
-| `CAP-01-09` 第一行 Backspace 回退标题 | P1 | 桌面/Web | ✅ | `editor_view.rs::try_backspace_to_title`（待真机复测光标落标题末尾） |
+| `CAP-01-09` 标题回车下移与首行回退标题 | P1 | 桌面/Web | ✅ | `editor_view.rs::try_backspace_to_title` + `app_flows::regression_ime_sink_single_line_width_and_title_enter_no_extra_blank_line` |
 | `CAP-01-10` 底部点击自动新建空行 | P0 | 全端 | ✅ | `app_flows::regression_fifteen_editor_ux_fixes` |
 | `CAP-01-11` 无冗余空页占位提示 | P1 | 全端 | ✅ | `app_flows::regression_fifteen_editor_ux_fixes` |
 | `CAP-01-12` / `13` Markdown 输入规则 | P0 | 全端 | ✅ | `mica-editor::input_rules_match_headings_lists_quotes_code_and_inline_marks` |

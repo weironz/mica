@@ -33,12 +33,12 @@
 | 编号 | 能力文档 | 覆盖范围 |
 | --- | --- | --- |
 | 01 | [01-editor-caret-ime-typing.md](01-editor-caret-ime-typing.md) | 光标闪烁与命中、CJK IME 组合输入、打字与 Markdown 输入规则、`Enter`/`Backspace`/`Delete` 块级结构规则、首行回退标题、点击底部追加行 |
-| 02 | [02-editor-selection-marquee.md](02-editor-selection-marquee.md) | 文本选区（单/双/三击）、跨块自由拖选与边缘滚屏、页边距与正文空白处框选（Marquee）、点击外区释放选区、多块批量操作 |
+| 02 | [02-editor-selection-marquee.md](02-editor-selection-marquee.md) | 文本选区（单/双/三击）、跨块自由拖选与边缘滚屏、页边距与正文空白处框选（Marquee）、点击外区释放选区、正文右键菜单与多块批量操作 |
 | 03 | [03-editor-clipboard-paste.md](03-editor-clipboard-paste.md) | 同应用无损 Markdown+HTML 复制粘贴、Windows `CF_HTML` 切片与跨应用（含 v0.14.11/浏览器/Word/Excel）粘贴、剪贴板截图/文件图片粘贴、粘贴围栏修复 |
 | 04 | [04-editor-blocks-and-marks.md](04-editor-blocks-and-marks.md) | 段落/标题/嵌套列表/待办/单层引用与 5 种 GFM Callout/分割线、行内 marks、光标锚定 22 项 `/` 斜杠菜单、贴近选区的浮动气泡栏、页内查找 `Ctrl+F` |
 | 05 | [05-editor-tables.md](05-editor-tables.md) | GFM 表格模型、内容自适应列宽与手动调宽、自由上下左右拖选多单元格、多格复制/剪切/清空、单格 WYSIWYG marks 编辑、键盘导航与行列增删 |
 | 06 | [06-editor-code-blocks.md](06-editor-code-blocks.md) | 无框暖灰代码块与悬停工具条、顶层防遮挡语言选择器、换行/行号/标题/AI 助手、`min_rows(1)`、`(0,0)` 按 Backspace 删除代码块、大文档懒挂载 |
-| 07 | [07-editor-media-math-mermaid.md](07-editor-media-math-mermaid.md) | 图片自然比例渲染/对齐/缩放/全屏灯箱/缓存、RaTeX 块级与行内公式（含原子选区保护）、Mermaid 宿主机主题渲染/全屏灯箱/源码编辑 |
+| 07 | [07-editor-media-math-mermaid.md](07-editor-media-math-mermaid.md) | 图片自然比例渲染/紧凑纯图标浮条/对齐/缩放/无框全视口灯箱/缓存、RaTeX 块级与行内公式（含原子选区保护）、Mermaid 宿主机主题渲染/全屏灯箱/源码编辑 |
 | 08 | [08-editor-scroll-layout-virtualization.md](08-editor-scroll-layout-virtualization.md) | 长文档（141KB+/数千块）视口虚拟化与信号隔离红线、编辑期零跳滚策略（`Jump` vs `KeepVisible`）、窗口最右侧自适应比例滚动条、标题与正文间距、11 档对称拖拽页宽 |
 | 09 | [09-editor-undo-crdt-collab.md](09-editor-undo-crdt-collab.md) | 单栈 CRDT 兼容撤销/重做、输入聚合、远端 yrs 更新合并保护本地未提交编辑、选区自动重定位（`SelectionReconcile`）、离线容错与断线重试 |
 
@@ -48,11 +48,11 @@
 | --- | --- | --- |
 | 10 | [10-whiteboard-and-embedded-board.md](10-whiteboard-and-embedded-board.md) | 飞书式无限白板（工具坞、图形/架构图标库、上下文检查器、思维导图自动布局、自由画笔、导入导出）与文档内嵌单层画板卡片、缩放手柄、三路合并写回 |
 | 11 | [11-sidebar-tree-tabs-shell.md](11-sidebar-tree-tabs-shell.md) | 34px 无边框顶栏、应用菜单、浏览器式多标签与单标签历史、目录树 `folder` 唯一容器与防环、30/40/30 拖拽排序与跨层弹出、多选批量菜单、收藏、Emoji、子树回收站 |
-| 12 | [12-page-chrome-outline-properties-backlinks.md](12-page-chrome-outline-properties-backlinks.md) | 页面顶栏与真实路径复制、页面标题联动、YAML Front-Matter 属性面板、右侧大纲/评论双标签、页底反向链接、980×640 双栏块级 Diff 版本历史与检查点 |
+| 12 | [12-page-chrome-outline-properties-backlinks.md](12-page-chrome-outline-properties-backlinks.md) | 页面顶栏与真实路径复制、页面标题联动、锚定顶层浮层页面菜单、YAML Front-Matter 属性面板、右侧大纲/评论双标签、页底反向链接、980×640 双栏块级 Diff 版本历史与检查点 |
 | 13 | [13-search-graph-and-ai.md](13-search-graph-and-ai.md) | 全局搜索（工作区/文件夹/页面 + 高亮片段 + 最近编辑）、力导向知识关系图谱、全局/行内/代码块 AI 改写与多服务商配置 |
-| 14 | [14-workspace-cloud-sync-sharing.md](14-workspace-cloud-sync-sharing.md) | 本地离线 Vault 与多云端服务器共存（世界切换分屏）、工作区设置与成员邀请、公开分享 `/s/{token}`、API 令牌 |
+| 14 | [14-workspace-cloud-sync-sharing.md](14-workspace-cloud-sync-sharing.md) | 本地离线 Vault 与多云端服务器共存（世界切换分屏）、工作区切换与浮层菜单、成员邀请、账号头像与云端账户治理、公开分享 `/s/{token}`、API 令牌 |
 | 15 | [15-import-export-and-vault.md](15-import-export-and-vault.md) | `.mica.zip` 无损备份、Markdown+图片 ZIP、Notion 导入、文件夹递归导入、HTML/PDF 导出、CommonMark/GFM 规范化往返不变量 |
-| 16 | [16-settings-shortcuts-accessibility-mobile.md](16-settings-shortcuts-accessibility-mobile.md) | 8 标签设置中心与实时外观预览、全量快捷键体系、浅/深色主题与字号缩放、移动端触摸选区/抽屉导航/阅读优先适配 |
+| 16 | [16-settings-shortcuts-accessibility-mobile.md](16-settings-shortcuts-accessibility-mobile.md) | 9 标签设置中心与实时外观预览、全量快捷键与 `Ctrl+滚轮` 全局缩放、浅/深色主题、Web 端精简适配、移动端工具栏/设置/触摸选区与抽屉导航 |
 
 ---
 

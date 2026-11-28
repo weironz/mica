@@ -33,6 +33,9 @@
 - **`CAP-02-06` 连续块范围命中与高亮**：框选矩形与任意顶层块相交时，取最小到最大命中的连续顶层块区间 `[lo, hi]`，为区间内每个块绘制 `6px` 圆角整块选区底色。
 - **`CAP-02-07` 多块批量键盘操作**：框选结束后保持高亮，支持 `Mod+C`（复制规范 Markdown + HTML）、`Mod+X`（剪切并删除）、`Delete`/`Backspace`（一次性删除所选块并保持文档非空）、`Esc`（取消框选）。
 
+### 正文上下文右键菜单
+- **`CAP-02-08` 桌面与 Web 端统一正文右键菜单**：在正文段落、选区或空白区右击时，桌面与 Web 浏览器端均屏蔽浏览器原生右键菜单，改为在点击坐标上方按视口边界钳位弹出应用内右键菜单，按当前选区与环境动态提供「复制」「剪切」「添加评论」（云端选中文本时可用）「粘贴」「粘贴为纯文本」「全选」，点击外区或执行任意操作后立即收起。
+
 ---
 
 ## 历史踩坑与反例
@@ -57,6 +60,7 @@
 | `CAP-02-05` 页边距与正文内空白启动框选 | P0 | 桌面/Web | ✅ | `block_marquee::tests::starts_marquee_margin_grip_gutter_scrollbar_rules` + `editor_view.rs` |
 | `CAP-02-06` 连续块范围命中与高亮 | P1 | 桌面/Web | ✅ | `block_marquee::tests::hit_block_range_returns_contiguous_bounds` |
 | `CAP-02-07` 多块批量复制/剪切/删除 | P0 | 桌面/Web | ✅ | `editor_view.rs` marquee shortcuts + `editor_bridge.rs::copy_block_range_payload` |
+| `CAP-02-08` 桌面与 Web 端统一正文右键菜单 | P1 | 桌面/Web | ✅ | `app_flows::regression_editor_body_context_menu_opens_and_selects_all` |
 
 ---
 
@@ -65,3 +69,4 @@
 - **2026-11-23**：沉淀跨块全宽拖选、正文内空白区左键框选升级、点击外区即时释放选区等契约（对应 `72d84877` / `ff104b87`）。
 - **2026-11-23（根因修复）**：修复 `nsh-core` 中 `PressDown` 不向父级冒泡导致正文范围内空白区、行间隙、列表前缀槽与底部区域均无法启动框选的根因，改为通过 `marquee_origin_page` 统一透传起点并自动快照块矩形。
 - **2026-11-27（`TextLayout` 缺失/退化导致拖选仅选中首字符修复）**：新增 `text_geometry::resolve_lines_for_block` 与纯 Rust `synthesize_wrapped_lines` 折行兜底，接入正文/代码块/行外层拖选与选区定位全链路，并补充单元与无头 UI 回归测试。
+- **2026-11-28（正文上下文右键菜单）**：为正文编辑器补充 `on_context_menu` 与顶层锚定右键菜单（复制/剪切/添加评论/粘贴/纯文本粘贴/全选），桌面与 Web 浏览器统一屏蔽系统默认右键菜单（`CAP-02-08`）。
