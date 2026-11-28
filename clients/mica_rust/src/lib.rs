@@ -2281,24 +2281,62 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   }
   {
     let close_p = close_all_popovers.clone();
-    on_key_with(
-      "escape",
-      KeyOptions { when: When::Always, pass_through: true, ..KeyOptions::default() },
-      move |_| {
-        close_p();
-        search_modal_open.set(false);
-        settings_modal_open.set(false);
-        about_modal_open.set(false);
-        workspace_settings_open.set(false);
-        graph_modal_open.set(false);
-        version_modal_open.set(false);
-        share_modal_open.set(false);
-        transfer_modal_open.set(false);
-        global_ai_open.set(false);
-        inline_ai_open.set(false);
-        world_switcher_open.set(false);
-      },
-    );
+    let any_app_overlay_open = computed(move || {
+      settings_modal_open.get()
+        || search_modal_open.get()
+        || about_modal_open.get()
+        || workspace_settings_open.get()
+        || graph_modal_open.get()
+        || version_modal_open.get()
+        || share_modal_open.get()
+        || transfer_modal_open.get()
+        || global_ai_open.get()
+        || inline_ai_open.get()
+        || world_switcher_open.get()
+        || app_menu_open.get()
+        || workspace_menu_open.get()
+        || account_menu_open.get()
+        || new_tab_menu_open.get()
+    });
+    effect(move || {
+      if !any_app_overlay_open.get() {
+        return;
+      }
+      let close_p = close_p.clone();
+      on_key_with(
+        "escape",
+        KeyOptions {
+          when: When::Always,
+          repeat: false,
+          pass_through: true,
+          ..KeyOptions::default()
+        },
+        move |_| {
+          if about_modal_open.get_untracked() {
+            about_modal_open.set(false);
+            return;
+          }
+          if app_menu_open.get_untracked()
+            || workspace_menu_open.get_untracked()
+            || account_menu_open.get_untracked()
+            || new_tab_menu_open.get_untracked()
+          {
+            close_p();
+            return;
+          }
+          search_modal_open.set(false);
+          settings_modal_open.set(false);
+          workspace_settings_open.set(false);
+          graph_modal_open.set(false);
+          version_modal_open.set(false);
+          share_modal_open.set(false);
+          transfer_modal_open.set(false);
+          global_ai_open.set(false);
+          inline_ai_open.set(false);
+          world_switcher_open.set(false);
+        },
+      );
+    });
   }
 
   // Sidebar callbacks (full 1:1 right-click + DnD + multi-select + Emoji + folder import/export)
@@ -2838,6 +2876,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
     })
   };
+
+  if allow_local {
+    provide_context(sidebar::SidebarUpdateState {
+      available_update,
+      update_busy,
+      update_status,
+      on_click_update: Rc::new(move || {
+        about_modal_open.set(true);
+      }),
+    });
+  }
 
   // Gentle non-intrusive startup update check on desktop (5s delay).
   #[cfg(not(target_arch = "wasm32"))]

@@ -425,3 +425,11 @@ pub fn caption_icon(color: &str) -> Svg {
 pub fn close_icon(color: &str) -> Svg {
   stroked(16.0, color, r##"<path d="M5 5L15 15M15 5L5 15"/>"##)
 }
+
+pub fn circle_arrow_up(color: &str) -> Svg {
+  stroked(
+    16.0,
+    color,
+    r##"<circle cx="10" cy="10" r="6.8"/><path d="M10 13.5V6.8M7.2 9.5L10 6.7L12.8 9.5"/>"##,
+  )
+}

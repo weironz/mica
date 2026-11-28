@@ -42,6 +42,7 @@
 - **反例 2（手机端顶栏与格式栏图标过多被截断、无法看到完整按钮）**：窄屏未折叠次要页眉动作、格式工具栏也未提供横向滚动。根治方案：`<640px` 页眉收敛入 `⋯` 菜单，`<720px` 格式栏开启横向滚动。
 - **反例 3（移动端点击触摸选区「复制」后浮动操作条与水滴手柄未自动退出）**：复制回调仅写剪贴板未清空选区状态，导致气泡菜单一直遮挡正文。
 - **反例 4（Web 端设置页暴露仅桌面端可用的诊断/托盘/本地路径及已无效的浏览器快捷键）**：未按 `allow_local` / `wasm32` 条件精简设置项并遗漏 `.md` 上传入口。
+- **反例 5（打开设置页后按 `Esc` 无法自动关闭）**：应用根壳在挂载早期静态注册的全局 `escape` 快捷键被后挂载的 `editor_view` `escape` 绑定按 `nsh_core::keymap::Keymap` 逆序命中规则遮蔽，导致即使设置了 `pass_through: true` 也无法回到应用级浮层处理。根治方案：设置弹窗与关于弹窗挂载时直接注册局部 `When::Always` 的 `escape` 处理，且应用级浮层 `escape` 绑定改为由浮层打开状态驱动的响应式 `effect` 动态置顶。
 
 ---
 
@@ -50,7 +51,7 @@
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
 | `CAP-16-01` / `02` / `03` 9 标签设置中心、多端自适应与色板 | P0 | 全端 | ✅ | `settings_view::tests` + `usage_stats_view::tests` + `app_flows::regression_usage_statistics_dashboard_and_live_updates` + `wave2_settings_tests::regression_settings_mobile_responsive_layout_shows_full_width_detail_pane` + `wave2_settings_tests::regression_settings_web_mode_hides_desktop_only_controls_and_exposes_avatar_actions` + `storage::tests::prefs_round_trip_and_persist_to_json_file` |
-| `CAP-16-04` 快捷键体系、`Ctrl+滚轮` 全局缩放与设置页清单 | P0 | 桌面/Web | ✅ | [docs/features/shortcuts.md](../features/shortcuts.md) + `zoom_controller::tests::snap_zoom_clamps_and_quantizes_to_five_percent_steps` + `app_flows::regression_ctrl_wheel_and_shortcuts_zoom_within_bounds` |
+| `CAP-16-04` 快捷键体系、`Ctrl+滚轮` 全局缩放与设置页清单 | P0 | 桌面/Web | ✅ | [docs/features/shortcuts.md](../features/shortcuts.md) + `zoom_controller::tests::snap_zoom_clamps_and_quantizes_to_five_percent_steps` + `app_flows::regression_ctrl_wheel_and_shortcuts_zoom_within_bounds` + `app_flows::regression_escape_closes_settings_and_layered_about_modal` |
 | `CAP-16-05` 移动端 `<768px` 抽屉、`<640px` 溢出菜单与 `<720px` 横滑工具栏 | P1 | 移动端/窄屏 | ✅ | `responsive_shell.rs` + `app_flows::regression_narrow_viewport_drawers_and_touch_bar` + `app_flows::regression_mobile_editor_toolbar_scrolls_format_bar_and_moves_overflow_to_more_menu` |
 | `CAP-16-06` 触摸选区、水滴手柄、操作栏与复制后自动收起 | P1 | 移动端/Web | ✅ | `touch_selection::tests` + `app_flows::regression_narrow_viewport_drawers_and_touch_bar` + `on_long_press` / `touch-handle-start` / `touch-handle-end` |
 | `CAP-16-07` 移动端流畅阅读与灯箱缩放 | P1 | 移动端 | 🟡 | 虚拟滚动、触摸防误弹键盘（滚动滑动不触发 `request_focus`，仅干脆单击落光标唤起输入法）与多指捏合状态机（`touch_selection::LightboxGesture` + `touch_selection::tests`）已落地，待下一版发版后 iOS/Android 实机复测 |
@@ -64,3 +65,4 @@
 - **2026-11-24（使用统计与可观测性 #191）**：设置中心扩展为 9 标签新增「使用统计」（同步在左下角账号菜单提供直达入口），接入 L1 统一 `mica_core::word_count` / `usage_stats`、本地 SQLite 小时桶活跃表与云端 `/api/stats/overview` `/api/stats/activity` + Prometheus `/metrics` 业务指标。
 - **2026-11-28（真机体验修复 `CAP-16-07` & Web 离线 PWA 外壳）**：① 正文/代码块/图片在触摸指针（`Touch`/`Pen`）下不再于 `on_press_down` 提前 `request_focus()`，改为仅干脆单击 `on_press` 时才聚焦 IME，根治长文档下滑刚触屏就弹出输入法；② 放大灯箱改为 `TouchClaim::on_start().block_native(true)` + 基于指针 ID 的 `LightboxGesture` 状态机，支持以双指中点为锚点的顺滑缩放与单/双指切换零跳动，修复双指缩放在区域内来回跳动；③ 新增构建期内容哈希版 `sw.js`（HTML 首页 Network-First 离线兜底、`?v=` 静态 JS/WASM Cache-First、`/api/*` `/ws/*` `/s/*` 严格直通）支持 Web 端离线按 F5 刷新秒开本机缓存。
 - **2026-11-28（移动工具栏、移动设置适配、Web 精简、正文右键与全局缩放）**：① `<640px` 顶部页眉仅保留标题与高频动作并把次高频入口收入 `⋯` 菜单，`<720px` 格式栏支持横向滑动触控不裁切；② 移动端 `<720px` 设置弹窗改为顶部横向胶囊导航 + 全宽详情滚动区与单列表单；③ 触摸选区点击「复制」后立即清选区并收起操作条与水滴手柄；④ Web 端隐藏诊断、窗口关闭行为、本地目录导入/路径框/镜像缓存及浏览器占用的快捷键说明，补齐 `.md` 上传按钮；⑤ 桌面与 Web 端统一支持正文右键菜单（复制/剪切/添加评论/粘贴/纯文本粘贴/全选）及 `Ctrl+滚轮`、`Ctrl+=/−/0` 全局缩放（75%–150%）。
+- **2026-11-28（修复 `Esc` 无法关闭设置页与分级弹窗关闭）**：修复 `nsh_core::keymap` 逆序绑定被 `editor_view` 静态 `escape` 遮蔽的问题，确保打开设置页后（含焦点位于设置页输入框内时）按 `Esc` 立即关闭设置弹窗，以及打开「关于」等应用弹窗后按 `Esc` 稳定退出。

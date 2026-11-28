@@ -29,6 +29,7 @@
 - **`CAP-11-07` 收藏区**：按收藏先后顺序持久化，独立限高滚动，显示页面自身 Emoji/文档图标，支持右键取消收藏。
 - **`CAP-11-08` Emoji 图标选择器**：支持中英双语搜索（Enter 选首项）、7 分类网格与移除图标，目录树、收藏区、回收站统一渲染。
 - **`CAP-11-09` 子树聚合回收站**：删文件夹时聚合为子树根条目（展示原路径、所含子文件夹/子页数、删除时间），支持一键恢复整棵子树、确认永久删除与清空回收站；入口统一收口于设置页（不冗余占用主侧栏底部常态高度，按用户偏好控制显隐）。
+- **`CAP-11-10` 侧边栏左下角可用更新提示按钮（仅桌面端）**：仅在桌面端启动检查或手动检查发现可用新版本（或更新下载/校验进行中）时，在左侧边栏底部页脚设置按钮左侧显式显示圆形上箭头更新按钮（`sidebar-update-btn`，悬浮提示具体目标版本号，忙碌时切换为刷新图标；无新版本及 Web 端默认隐藏，避免常驻噪点），点击直达更新弹窗安装。
 
 ---
 
@@ -50,6 +51,7 @@
 | `CAP-11-05` / `06` 30/40/30 拖拽排序与树多选 | P0 | 桌面/Web | ✅ | `tree_dnd::tests`（8 项全绿） + `sidebar::tests::tree_row_bg_preserves_blue_selection_tint_on_hover` + `cloud_sync::tests` + `app_flows::regression_sidebar_multi_select_preserves_blue_bg_on_hover` + `app_flows::regression_untitled_placeholder_folder_rename_and_batch_delete` + `storage::tests::reorder_views_renumbers_reparents_and_enforces_tree_rules` |
 | `CAP-11-07` / `08` 收藏区与 Emoji 选择器 | P1 | 全端 | ✅ | `emoji_picker::tests` |
 | `CAP-11-09` 子树聚合回收站 | P1 | 全端 | ✅ | `settings_view::tests::trash_root_entries_collapse_subtrees_and_resolve_live_path` + `storage::tests::trash_restore_promote_purge_and_build_trash_entries` |
+| `CAP-11-10` 左下角可用更新按钮（#193） | P1 | 桌面端 | ✅ | `app_flows::regression_sidebar_update_button_shows_when_update_available_and_triggers_action` |
 
 ---
 
@@ -63,3 +65,4 @@
 - **2026-11-27**：恢复侧边栏新建页面/新建文件夹的定位放置逻辑（对齐 `v0.14.11` 契约）——在 `tree_dnd` 中抽出纯函数 `resolve_located_row` / `placement_for_located` / `placement_in_folder` / `ordered_siblings_placing_after` / `next_sibling_position`，在侧边栏接入 `focused_nav_id`（支持页面与文件夹行高亮定位）与 `root_focused`（点击树下方空白区取消行定位并指向根目录），本地与云端创建（含 `ViewOpGuard` 防 WS 跳动）统一支持：定位文件夹→建于文件夹内、定位页面→插在同级下一行、定位根目录→建于根目录末尾、文件夹行内 `+`/`folder+` 若当前页直属该文件夹则插在该页下一行。
 - **2026-11-28**：彻底修复瞬间作用域（`when(...)` 弹窗/右键菜单/浮层）关闭取消云端视图变更任务的根因——`CloudSessionHandles` 持有长生命周期 `app_owner` 并新增 `spawn_on_app`，使文件夹重命名 `PATCH /views/{id}`、单个删除 `DELETE /views/{id}` 与 Shift 多选批量删除 `POST /views/batch-trash` 在弹窗或右键菜单关闭后不再被取消，杜绝后续新建文件夹/页面触发 `views_changed` 时还原文件夹名称或复活已删除页面/文件夹；`on_rename_view` 同步接入 `pending_title_renames` 防并发回声覆盖，`on_batch_trash` 对所选 `view_ids` 幂等去重并清理失效的 `focused_nav_id`。
 - **2026-11-28（拖拽定位线弯钩修复 `c98b3449`）**：移除 `drop_indicator` 左端跨界 `8×8` 空心圆环并将 `DropMode::Before`/`After` 对齐至 `0px` 行边界内，消除 `virtual_list` 单元格裁剪造成的“线条开头弯钩”视觉缺陷（`CAP-11-05`）。
+- **2026-11-28（左下角可用更新按钮 #193）**：在桌面端（`allow_local`）左下角侧栏页脚增加条件式圆形上箭头更新按钮 `sidebar-update-btn`（`SidebarUpdateState`），仅在发现可用更新或更新任务进行中显示，悬浮显示目标版本号，无更新及 Web 端保持隐藏（`CAP-11-10`）。

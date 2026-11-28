@@ -10,8 +10,9 @@ use std::rc::Rc;
 use nsh_base::button;
 use nsh_core::{
   color::rgba,
-  element::{ImageSrc, Svg, svg},
+  element::{ImageSrc, KeyOptions, Svg, on_key_with, svg},
   geometry::px,
+  keymap::When,
   prelude::*,
 };
 
@@ -539,6 +540,16 @@ pub fn about_modal_view(props: AboutModalProps) -> impl IntoElement {
     move || {
       let check_cb = on_check_update.clone();
       let install_cb = on_install_update.clone();
+      on_key_with(
+        "escape",
+        KeyOptions {
+          when: When::Always,
+          repeat: false,
+          pass_through: true,
+          ..KeyOptions::default()
+        },
+        move |_| open.set(false),
+      );
 
       view()
         .test_id("about-modal-backdrop")

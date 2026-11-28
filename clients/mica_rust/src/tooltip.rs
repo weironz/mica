@@ -93,10 +93,11 @@ pub fn with_tooltip<E: IntoElement + 'static>(el: E, label: &'static str) -> imp
 }
 
 /// Wrap any icon button element with a dynamic hover tooltip label (e.g., `"收藏"` / `"取消收藏"`).
-pub fn with_dynamic_tooltip<E, F>(el: E, label_fn: F) -> impl IntoElement
+pub fn with_dynamic_tooltip<E, F, S>(el: E, label_fn: F) -> impl IntoElement
 where
   E: IntoElement + 'static,
-  F: Fn() -> &'static str + 'static,
+  S: AsRef<str>,
+  F: Fn() -> S + 'static,
 {
   let host = use_context::<TooltipHost>();
   let box_size = signal((28.0_f32, 28.0_f32));
@@ -117,7 +118,8 @@ where
       let Some(host) = host else {
         return;
       };
-      let label = label_fn();
+      let raw = label_fn();
+      let label = raw.as_ref();
       if label.trim().is_empty() {
         return;
       }

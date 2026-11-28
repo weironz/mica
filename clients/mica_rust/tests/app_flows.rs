@@ -3466,3 +3466,155 @@ fn regression_image_compact_hover_toolbar_and_frameless_lightbox() {
     .wait_for_gone("id:mica-lightbox-modal", std::time::Duration::from_millis(600))
     .unwrap();
 }
+
+#[test]
+fn regression_escape_closes_settings_and_layered_about_modal() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Open Settings from bottom-left gear and verify Esc closes it even though editor_view is mounted.
+  app.press("id:open-settings-btn").unwrap();
+  app.wait_for("id:settings-panel").unwrap();
+
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone("id:settings-panel", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 2. Re-open Settings, focus a text input inside Data tab, and verify Esc still closes Settings.
+  app.press("id:open-settings-btn").unwrap();
+  app.wait_for("id:settings-panel").unwrap();
+  app.press("id:settings-tab-data").unwrap();
+  app.wait_for("id:settings-import-path-input").unwrap();
+  app.type_text("id:settings-import-path-input", "test").unwrap();
+
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone("id:settings-panel", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 3. Open About from Settings footer and verify Esc closes About modal too.
+  app.press("id:open-settings-btn").unwrap();
+  app.wait_for("id:settings-about-footer").unwrap();
+  app.press("id:settings-about-footer").unwrap();
+  app.wait_for("id:about-modal").unwrap();
+
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone("id:about-modal", std::time::Duration::from_millis(800))
+    .unwrap();
+}
+
+mod sidebar_update_tests {
+  use std::{cell::RefCell, rc::Rc};
+
+  use mica_client::PageTreeModel;
+  use nsh_base::button;
+  use nsh_core::prelude::*;
+
+  #[derive(Default)]
+  pub(super) struct SidebarUpdateHarness;
+
+  impl Component for SidebarUpdateHarness {
+    type Props = ();
+    type Event = NoEvent;
+
+    fn view(_props: Self::Props, _scope: Scope<Self::Event>) -> impl IntoElement {
+      let available_update: Signal<Option<mica_rust::updater::UpdateInfo>> = signal(None);
+      let update_busy = signal(false);
+      let update_status = signal(String::new());
+      let click_count = signal(0usize);
+
+      mica_rust::tooltip::install_tooltip_host(signal(1280.0));
+      provide_context(mica_rust::sidebar::SidebarUpdateState {
+        available_update,
+        update_busy,
+        update_status,
+        on_click_update: Rc::new(move || {
+          click_count.set(click_count.get_untracked() + 1);
+        }),
+      });
+
+      let tree = Rc::new(RefCell::new(PageTreeModel::default()));
+      let cb = Rc::new(mica_rust::sidebar::SidebarCallbacks::default());
+
+      view()
+        .w_full()
+        .h_full()
+        .flex_row()
+        .child(mica_rust::sidebar::sidebar_view(
+          tree,
+          signal(0),
+          signal(None),
+          signal(None),
+          signal(false),
+          signal(Vec::new()),
+          signal(280.0),
+          signal("本地工作区".to_string()),
+          signal("local".to_string()),
+          signal(false),
+          cb,
+        ))
+        .child(
+          view()
+            .p_4()
+            .gap_2()
+            .child(
+              button()
+                .test_id("test-publish-update")
+                .on_press(move || {
+                  update_status.set("发现新版本 v0.99.0".to_string());
+                  available_update.set(Some(mica_rust::updater::UpdateInfo {
+                    version: "0.99.0".to_string(),
+                    download_url: "https://example.com/Mica-Setup-0.99.0.exe".to_string(),
+                    asset_name: "Mica-Setup-0.99.0.exe".to_string(),
+                    notes: None,
+                    size: Some(1024),
+                    sha256: Some("a".repeat(64)),
+                    sha256_file_url: None,
+                  }));
+                })
+                .child(text("publish")),
+            )
+            .child(
+              button()
+                .test_id("test-clear-update")
+                .on_press(move || {
+                  available_update.set(None);
+                  update_busy.set(false);
+                })
+                .child(text("clear")),
+            )
+            .child(text(move || format!("update-clicks-{}", click_count.get()))),
+        )
+    }
+  }
+}
+
+#[test]
+fn regression_sidebar_update_button_shows_when_update_available_and_triggers_action() {
+  let mut config = EngineConfig::new(Root::of::<sidebar_update_tests::SidebarUpdateHarness>());
+  config.viewport = size(px(900.0), px(720.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("update-clicks-0").unwrap();
+  assert!(
+    !app.shows("id:sidebar-update-btn"),
+    "bottom-left update button must stay hidden when no update is available"
+  );
+
+  app.press("id:test-publish-update").unwrap();
+  app.wait_for("id:sidebar-update-btn").unwrap();
+  app.press("id:sidebar-update-btn").unwrap();
+  app.wait_for("update-clicks-1").unwrap();
+
+  app.press("id:test-clear-update").unwrap();
+  app
+    .wait_for_gone("id:sidebar-update-btn", std::time::Duration::from_millis(800))
+    .unwrap();
+}

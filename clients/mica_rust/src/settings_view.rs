@@ -15,7 +15,9 @@ use mica_api_types::View as MicaView;
 use nsh_base::{button, input};
 use nsh_core::{
   SubmitBehavior,
+  element::{KeyOptions, on_key_with},
   geometry::{Bounds, Points, px},
+  keymap::When,
   prelude::*,
 };
 use uuid::Uuid;
@@ -555,6 +557,23 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
   let panel_width = signal(1120.0_f32);
   let compact = computed(move || panel_width.get() < 720.0);
   provide_context(SettingsCompact(compact));
+  let close_esc = props.on_close.clone();
+  on_key_with(
+    "escape",
+    KeyOptions {
+      when: When::Always,
+      repeat: false,
+      pass_through: true,
+      ..KeyOptions::default()
+    },
+    move |_| {
+      if about_open.get_untracked() {
+        about_open.set(false);
+      } else {
+        close_esc();
+      }
+    },
+  );
   let close_bg = props.on_close.clone();
   let close_btn = props.on_close.clone();
   let on_about = props.on_open_about.clone();

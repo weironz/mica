@@ -1776,6 +1776,16 @@ pub(crate) fn format_footer_account_label(raw: &str) -> String {
   t.to_string()
 }
 
+/// Ambient desktop update state rendered in the bottom-left sidebar footer
+/// when a newer release is available or an update check/download is in flight.
+#[derive(Clone)]
+pub struct SidebarUpdateState {
+  pub available_update: Signal<Option<crate::updater::UpdateInfo>>,
+  pub update_busy: Signal<bool>,
+  pub update_status: Signal<String>,
+  pub on_click_update: Rc<dyn Fn()>,
+}
+
 fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<SidebarCallbacks>) -> impl IntoElement {
   let cb_acct = cb.clone();
   let cb_set = cb;
@@ -1785,6 +1795,7 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
       email: signal(String::new()),
     }
   });
+  let update_ctx = use_context::<SidebarUpdateState>();
   view()
     .h(px(44.0)).px_2().flex_row().items_center().justify_between().gap_1()
     .border_t_1().border_color(move || palette(dark_mode.get()).border_subtle)
@@ -1811,12 +1822,84 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
         ),
     )
     .child(
-      button()
-        .test_id("open-settings-btn").accessibility_label("打开设置")
-        .w(px(28.0)).h(px(28.0)).flex_shrink_0().items_center().justify_center().rounded(px(6.0))
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-        .on_press(move || (cb_set.on_open_settings)())
-        .child(dynamic(move || mica_icons::settings_gear(palette(dark_mode.get()).text_muted_hex))),
+      view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .flex_shrink_0()
+        .child(when(
+          {
+            let update_vis = update_ctx.clone();
+            move || {
+              update_vis
+                .as_ref()
+                .is_some_and(|u| u.available_update.get().is_some() || u.update_busy.get())
+            }
+          },
+          {
+            let update_btn = update_ctx.clone();
+            move || {
+              let Some(u) = update_btn.as_ref() else {
+                return view().into_element();
+              };
+              let u_tip = u.clone();
+              let u_icon = u.clone();
+              let on_click = u.on_click_update.clone();
+              crate::tooltip::with_dynamic_tooltip(
+                button()
+                  .test_id("sidebar-update-btn")
+                  .accessibility_label("发现新版本，点击更新")
+                  .w(px(28.0))
+                  .h(px(28.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded_full()
+                  .bg(move || palette(dark_mode.get()).accent_soft)
+                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                  .on_press(move || {
+                    crate::tooltip::hide_tooltip();
+                    (on_click)();
+                  })
+                  .child(dynamic(move || {
+                    let hex = palette(dark_mode.get()).accent_hex;
+                    if u_icon.update_busy.get() {
+                      mica_icons::refresh_icon(hex)
+                    } else {
+                      mica_icons::circle_arrow_up(hex)
+                    }
+                  })),
+                move || {
+                  if u_tip.update_busy.get_untracked() {
+                    let status = u_tip.update_status.get_untracked();
+                    if status.trim().is_empty() {
+                      "正在检查更新…".to_string()
+                    } else {
+                      status
+                    }
+                  } else if let Some(info) = u_tip.available_update.get_untracked() {
+                    format!("发现新版本 v{}，点击更新", info.version)
+                  } else {
+                    "检查更新".to_string()
+                  }
+                },
+              )
+              .into_element()
+            }
+          },
+        ))
+        .child(crate::tooltip::with_tooltip(
+          button()
+            .test_id("open-settings-btn").accessibility_label("打开设置")
+            .w(px(28.0)).h(px(28.0)).flex_shrink_0().items_center().justify_center().rounded(px(6.0))
+            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+            .on_press(move || {
+              crate::tooltip::hide_tooltip();
+              (cb_set.on_open_settings)();
+            })
+            .child(dynamic(move || mica_icons::settings_gear(palette(dark_mode.get()).text_muted_hex))),
+          "设置",
+        )),
     )
 }
 
