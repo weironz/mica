@@ -13,7 +13,11 @@ use std::rc::Rc;
 use chrono::{DateTime, Utc};
 use mica_api_types::View as MicaView;
 use nsh_base::{button, input};
-use nsh_core::{SubmitBehavior, geometry::px, prelude::*};
+use nsh_core::{
+  SubmitBehavior,
+  geometry::{Bounds, Points, px},
+  prelude::*,
+};
 use uuid::Uuid;
 
 use crate::{mica_icons, mica_theme::palette, transfer};
@@ -143,9 +147,17 @@ pub struct SettingsCallbacks {
   pub on_close: Rc<dyn Fn()>,
 }
 
+pub type SettingsResultCb = Rc<dyn Fn(Result<(), String>)>;
+pub type SettingsStringCb = Rc<dyn Fn(Result<String, String>)>;
+pub type SettingsModelsCb = Rc<dyn Fn(Result<Vec<String>, String>)>;
+
+#[derive(Clone, Copy)]
+struct SettingsCompact(Memo<bool>);
+
 /// Full 1:1 Settings props covering all 8 tabs + pinned About footer.
 #[allow(clippy::type_complexity)]
 pub struct SettingsViewProps {
+  pub allow_local: bool,
   pub dark_mode: Signal<bool>,
   pub locale_zh: Signal<bool>,
   pub page_width_px: Signal<u32>,
@@ -165,18 +177,22 @@ pub struct SettingsViewProps {
   pub cloud_status: Signal<String>,
   pub account_email: Signal<String>,
   pub account_name: Signal<String>,
+  pub avatar_url: Signal<Option<String>>,
+  pub avatar_busy: Signal<bool>,
   pub is_cloud_signed_in: Signal<bool>,
   pub on_check_server: Rc<dyn Fn(String)>,
   pub on_cloud_login: Rc<dyn Fn(String, String, String)>,
   pub on_cloud_logout: Rc<dyn Fn()>,
   pub on_sync_now: Rc<dyn Fn()>,
-  pub on_update_profile: Option<Rc<dyn Fn(String) -> Result<(), String>>>,
-  pub on_change_password: Option<Rc<dyn Fn(String, String) -> Result<(), String>>>,
-  pub on_delete_account: Option<Rc<dyn Fn(String) -> Result<(), String>>>,
+  pub on_upload_avatar: Option<Rc<dyn Fn(SettingsResultCb)>>,
+  pub on_delete_avatar: Option<Rc<dyn Fn(SettingsResultCb)>>,
+  pub on_update_profile: Option<Rc<dyn Fn(String, SettingsResultCb)>>,
+  pub on_change_password: Option<Rc<dyn Fn(String, String, SettingsResultCb)>>,
+  pub on_delete_account: Option<Rc<dyn Fn(String, SettingsResultCb)>>,
 
   pub tokens: Signal<Vec<ApiTokenItem>>,
-  pub on_create_token: Option<Rc<dyn Fn(String, bool, Option<u32>) -> Result<String, String>>>,
-  pub on_revoke_token: Option<Rc<dyn Fn(String) -> Result<(), String>>>,
+  pub on_create_token: Option<Rc<dyn Fn(String, bool, Option<u32>, SettingsStringCb)>>,
+  pub on_revoke_token: Option<Rc<dyn Fn(String, SettingsResultCb)>>,
 
   pub export_preview: Signal<String>,
   pub cache_stats: Signal<LocalCacheStatsView>,
@@ -186,6 +202,7 @@ pub struct SettingsViewProps {
   pub on_export_mica_zip: Option<Rc<dyn Fn()>>,
   pub on_export_markdown_zip: Option<Rc<dyn Fn()>>,
   pub on_import_markdown: Rc<dyn Fn(String)>,
+  pub on_import_markdown_web: Option<Rc<dyn Fn()>>,
   pub on_import_zip: Option<Rc<dyn Fn(bool)>>,
   pub on_import_folder: Option<Rc<dyn Fn()>>,
   pub on_save_snapshot: Rc<dyn Fn()>,
@@ -200,10 +217,10 @@ pub struct SettingsViewProps {
 
   pub ai_enabled: Signal<bool>,
   pub ai_providers: Signal<Vec<AiProviderEntry>>,
-  pub on_save_ai_provider: Option<Rc<dyn Fn(AiProviderEntry, Option<String>) -> Result<(), String>>>,
-  pub on_delete_ai_provider: Option<Rc<dyn Fn(String) -> Result<(), String>>>,
+  pub on_save_ai_provider: Option<Rc<dyn Fn(AiProviderEntry, Option<String>, SettingsResultCb)>>,
+  pub on_delete_ai_provider: Option<Rc<dyn Fn(String, SettingsResultCb)>>,
   pub on_fetch_ai_models:
-    Option<Rc<dyn Fn(String, String, String, Option<String>) -> Result<Vec<String>, String>>>,
+    Option<Rc<dyn Fn(String, String, String, Option<String>, SettingsModelsCb)>>,
 
   pub diagnostics_enabled: Signal<bool>,
   pub diagnostics_dir: String,
@@ -244,6 +261,7 @@ impl SettingsViewProps {
     ];
     let initial_name = cb.account_email.get_untracked();
     Self {
+      allow_local: !crate::web_runtime::is_web(),
       dark_mode,
       locale_zh,
       page_width_px: signal(PAGE_WIDTH_DEFAULT),
@@ -270,11 +288,15 @@ impl SettingsViewProps {
       cloud_status: cb.cloud_status,
       account_email: cb.account_email,
       account_name: signal(initial_name),
+      avatar_url: signal(None),
+      avatar_busy: signal(false),
       is_cloud_signed_in: cb.is_cloud_signed_in,
       on_check_server: cb.on_check_server.clone(),
       on_cloud_login: cb.on_cloud_login.clone(),
       on_cloud_logout: cb.on_cloud_logout.clone(),
       on_sync_now: cb.on_sync_now.clone(),
+      on_upload_avatar: None,
+      on_delete_avatar: None,
       on_update_profile: None,
       on_change_password: None,
       on_delete_account: None,
@@ -289,6 +311,7 @@ impl SettingsViewProps {
       on_export_mica_zip: None,
       on_export_markdown_zip: None,
       on_import_markdown: cb.on_import_markdown.clone(),
+      on_import_markdown_web: None,
       on_import_zip: None,
       on_import_folder: None,
       on_save_snapshot: cb.on_save_snapshot.clone(),
@@ -525,6 +548,13 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
   let ai_status_err = signal(false);
 
   let dm = props.dark_mode;
+  let allow_local = props.allow_local;
+  if !allow_local && active_tab.get_untracked() == TAB_DIAGNOSTICS {
+    active_tab.set(TAB_APPEARANCE);
+  }
+  let panel_width = signal(1120.0_f32);
+  let compact = computed(move || panel_width.get() < 720.0);
+  provide_context(SettingsCompact(compact));
   let close_bg = props.on_close.clone();
   let close_btn = props.on_close.clone();
   let on_about = props.on_open_about.clone();
@@ -560,6 +590,12 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
         .bg(move || palette(dm.get()).surface_overlay)
         .overflow_hidden()
         .z_index(51)
+        .on_layout(move |bounds: &Bounds<Points>| {
+          let w = f32::from(bounds.size.width);
+          if w > 1.0 && (w - panel_width.get_untracked()).abs() > 1.0 {
+            panel_width.set(w);
+          }
+        })
         .child(
           // Full-width top header spanning BOTH nav rail and detail pane
           view()
@@ -598,26 +634,31 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                 .child(dynamic(move || mica_icons::close_sm(palette(dm.get()).text_faint_hex))),
             ),
         )
-        .child(
-          // Two-column body: 200px left rail + scrollable right detail pane
-          view()
-            .flex_1()
-            .w_full()
-            .flex_row()
-            .overflow_hidden()
-            .child(left_nav_rail(
-              active_tab,
-              about_open,
-              dm,
-              on_about,
-              props.usage_stats.as_ref().map(|u| u.on_refresh.clone()),
-            ))
-            .child(
+        .child(dynamic({
+          let p_body = p_body.clone();
+          let on_about = on_about.clone();
+          move || {
+            let is_compact = compact.get();
+            let stats_ref = p_body.usage_stats.as_ref().map(|u| u.on_refresh.clone());
+            let mut body = view().flex_1().w_full().min_h(px(0.0)).overflow_hidden();
+            body = if is_compact { body.flex_col() } else { body.flex_row() };
+            body = body.child(if is_compact {
+              mobile_nav_tabs(active_tab, about_open, dm, allow_local, on_about.clone(), stats_ref)
+                .into_element()
+            } else {
+              left_nav_rail(active_tab, about_open, dm, allow_local, on_about.clone(), stats_ref)
+                .into_element()
+            });
+            let pad = if is_compact { 16.0 } else { 28.0 };
+            body.child(
               scroll()
+                .test_id("settings-detail-scroll")
                 .flex_1()
+                .min_w(px(0.0))
+                .w_full()
                 .h_full()
                 .bg(move || palette(dm.get()).surface_base)
-                .p(px(28.0))
+                .p(px(pad))
                 .child(
                   view()
                     .w_full()
@@ -628,7 +669,7 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                         .text_color(move || palette(dm.get()).text_primary),
                     )
                     .child(
-                      view().pt_2().pb(px(28.0)).child(
+                      view().pt_2().pb(px(if is_compact { 18.0 } else { 28.0 })).child(
                         text(move || tab_description(active_tab.get()))
                           .text_size(px(13.0))
                           .text_color(move || palette(dm.get()).text_muted),
@@ -642,7 +683,7 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                       move || appearance_tab(p.clone(), theme_choice, lang_choice)
                     }))
                     .child(when(move || active_tab.get() == TAB_SHORTCUTS, move || {
-                      shortcuts_tab(dm)
+                      shortcuts_tab(dm, allow_local)
                     }))
                     .child(when(move || active_tab.get() == TAB_ACCOUNT, {
                       let p = p_body.clone();
@@ -703,7 +744,7 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                         )
                       }
                     }))
-                    .child(when(move || active_tab.get() == TAB_DIAGNOSTICS, {
+                    .child(when(move || allow_local && active_tab.get() == TAB_DIAGNOSTICS, {
                       let p = p_body.clone();
                       move || diagnostics_tab(p.clone())
                     }))
@@ -718,15 +759,125 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                       }
                     })),
                 ),
-            ),
-        ),
+            )
+          }
+        })),
     )
+}
+
+fn mobile_nav_tabs(
+  active_tab: Signal<u8>,
+  about_open: Signal<bool>,
+  dm: Signal<bool>,
+  allow_local: bool,
+  on_about: Option<Rc<dyn Fn()>>,
+  on_refresh_stats: Option<Rc<dyn Fn()>>,
+) -> impl IntoElement {
+  let tabs: &[(&'static str, &'static str, &'static str, u8)] = if allow_local {
+    &[
+      ("settings-tab-appearance", "外观", "Appearance", TAB_APPEARANCE),
+      ("settings-tab-about", "快捷键", "Shortcuts", TAB_SHORTCUTS),
+      ("settings-tab-account", "账户", "Account", TAB_ACCOUNT),
+      ("settings-tab-tokens", "API 令牌", "Tokens", TAB_TOKENS),
+      ("settings-tab-data", "数据", "Data", TAB_DATA),
+      ("settings-tab-usage-stats", "使用统计", "Stats", TAB_USAGE_STATS),
+      ("settings-tab-trash", "回收站", "Trash", TAB_TRASH),
+      ("settings-tab-ai", "AI 服务商", "AI", TAB_AI),
+      ("settings-tab-diagnostics", "诊断", "Diagnostics", TAB_DIAGNOSTICS),
+    ]
+  } else {
+    &[
+      ("settings-tab-appearance", "外观", "Appearance", TAB_APPEARANCE),
+      ("settings-tab-about", "快捷键", "Shortcuts", TAB_SHORTCUTS),
+      ("settings-tab-account", "账户", "Account", TAB_ACCOUNT),
+      ("settings-tab-tokens", "API 令牌", "Tokens", TAB_TOKENS),
+      ("settings-tab-data", "数据", "Data", TAB_DATA),
+      ("settings-tab-usage-stats", "使用统计", "Stats", TAB_USAGE_STATS),
+      ("settings-tab-trash", "回收站", "Trash", TAB_TRASH),
+      ("settings-tab-ai", "AI 服务商", "AI", TAB_AI),
+    ]
+  };
+  let mut strip = view().flex_row().items_center().gap_1();
+  for &(tid, zh, en, tab_id) in tabs {
+    let on_ref = on_refresh_stats.clone();
+    strip = strip.child(
+      button()
+        .test_id(tid)
+        .accessibility_label(zh)
+        .px_3()
+        .py_1()
+        .rounded(px(999.0))
+        .bg(move || {
+          if active_tab.get() == tab_id {
+            palette(dm.get()).surface_hover
+          } else {
+            palette(dm.get()).surface_raised
+          }
+        })
+        .on_press(move || {
+          active_tab.set(tab_id);
+          if tab_id == TAB_USAGE_STATS
+            && let Some(ref cb) = on_ref
+          {
+            cb();
+          }
+        })
+        .child(
+          text(move || crate::mica_theme::tr(zh, en))
+            .text_size(px(12.5))
+            .font_weight(if active_tab.get_untracked() == tab_id {
+              FontWeight::SEMIBOLD
+            } else {
+              FontWeight::NORMAL
+            })
+            .text_color(move || {
+              if active_tab.get() == tab_id {
+                palette(dm.get()).text_primary
+              } else {
+                palette(dm.get()).text_muted
+              }
+            }),
+        ),
+    );
+  }
+  strip = strip.child(
+    button()
+      .test_id("settings-about-footer")
+      .accessibility_label("关于 Mica")
+      .px_3()
+      .py_1()
+      .rounded(px(999.0))
+      .bg(move || palette(dm.get()).surface_raised)
+      .on_press(move || {
+        if let Some(cb) = &on_about {
+          cb();
+        } else {
+          about_open.set(!about_open.get_untracked());
+        }
+      })
+      .child(
+        text(move || crate::mica_theme::tr("关于", "About"))
+          .text_size(px(12.5))
+          .text_color(move || palette(dm.get()).text_muted),
+      ),
+  );
+  view()
+    .test_id("settings-mobile-nav")
+    .w_full()
+    .flex_shrink_0()
+    .px_3()
+    .py_2()
+    .border_b_1()
+    .border_color(move || palette(dm.get()).border_subtle)
+    .bg(move || palette(dm.get()).surface_raised)
+    .child(scroll().horizontal().scrollbar(false).w_full().child(strip))
 }
 
 fn left_nav_rail(
   active_tab: Signal<u8>,
   about_open: Signal<bool>,
   dm: Signal<bool>,
+  allow_local: bool,
   on_about: Option<Rc<dyn Fn()>>,
   on_refresh_stats: Option<Rc<dyn Fn()>>,
 ) -> impl IntoElement {
@@ -800,7 +951,9 @@ fn left_nav_rail(
           .child(nav_item("settings-tab-trash", "回收站", "Recycle Bin", TAB_TRASH, active_tab, dm, mica_icons::trash_icon))
           .child(nav_group("其他", "Other", false, dm))
           .child(nav_item("settings-tab-ai", "AI 服务商", "AI Providers", TAB_AI, active_tab, dm, mica_icons::sparkles_icon))
-          .child(nav_item("settings-tab-diagnostics", "诊断", "Diagnostics", TAB_DIAGNOSTICS, active_tab, dm, mica_icons::outline_icon)),
+          .child(when(move || allow_local, move || {
+            nav_item("settings-tab-diagnostics", "诊断", "Diagnostics", TAB_DIAGNOSTICS, active_tab, dm, mica_icons::outline_icon)
+          })),
       ),
     )
     .child(
@@ -1144,8 +1297,7 @@ fn appearance_tab(
     .child(pref_group_heading("粘贴与图片", dm))
     .child(switch_row("settings-switch-rehost-images", "转存网络图片", "粘贴的图片链接会被保存到 Mica 存储中。关闭时：保留为标准的外部 Markdown 链接。", props.rehost_images, dm));
 
-  #[cfg(not(target_arch = "wasm32"))]
-  {
+  if props.allow_local {
     let cb = props.close_behavior;
     col = col
       .child(pref_group_heading("关闭窗口时", dm))
@@ -1322,8 +1474,8 @@ fn appearance_preview_card(
 
 // ── Tab 1: 快捷键 (25 rows in 3 groups) ──────────────────────────────────────
 
-fn shortcuts_tab(dm: Signal<bool>) -> impl IntoElement {
-  const APP_ROWS: &[(&str, &str)] = &[
+fn shortcuts_tab(dm: Signal<bool>, allow_local: bool) -> impl IntoElement {
+  const APP_ROWS_DESKTOP: &[(&str, &str)] = &[
     ("Ctrl + N", "新建页面"),
     ("Ctrl + F", "页内查找"),
     ("F3 / Shift + F3", "查找下一个 / 上一个（在查找栏内）"),
@@ -1333,6 +1485,16 @@ fn shortcuts_tab(dm: Signal<bool>) -> impl IntoElement {
     ("Ctrl + T", "在新标签页打开页面"),
     ("Ctrl + W", "关闭当前标签页"),
     ("Ctrl + Tab / Ctrl + Shift + Tab", "下一个 / 上一个标签页"),
+    ("Ctrl + Click", "侧栏：把这一行加进多选／取出"),
+    ("Shift + Click", "侧栏：选中同一父级下的一段连续行"),
+    ("Esc", "侧栏：清空多选（点侧栏外任意处同样清空）"),
+  ];
+  const APP_ROWS_WEB: &[(&str, &str)] = &[
+    ("Ctrl + F", "页内查找"),
+    ("F3 / Shift + F3", "查找下一个 / 上一个（在查找栏内）"),
+    ("Ctrl + Shift + F", "搜索工作区"),
+    ("Ctrl + ,", "打开设置"),
+    ("F2", "重命名选中的页面/文件夹"),
     ("Ctrl + Click", "侧栏：把这一行加进多选／取出"),
     ("Shift + Click", "侧栏：选中同一父级下的一段连续行"),
     ("Esc", "侧栏：清空多选（点侧栏外任意处同样清空）"),
@@ -1357,6 +1519,13 @@ fn shortcuts_tab(dm: Signal<bool>) -> impl IntoElement {
     ("/", "斜杠命令菜单"),
   ];
 
+  let app_rows = if allow_local { APP_ROWS_DESKTOP } else { APP_ROWS_WEB };
+  let footer_note = if allow_local {
+    "在 macOS 上用 ⌘ 代替 Ctrl。标题快捷键遵循 Notion/Word 约定（Ctrl+Alt+N）。\n注意：Ctrl+, 可能被中文输入法吞掉（标点切换）；若无响应，请切换到英文输入。"
+  } else {
+    "在 macOS 上用 ⌘ 代替 Ctrl。标题快捷键遵循 Notion/Word 约定（Ctrl+Alt+N）—— 浏览器会拦截 Ctrl+N/T/W/Tab。\n注意：Ctrl+, 可能被中文输入法吞掉（标点切换）；若无响应，请切换到英文输入。"
+  };
+
   view()
     .w_full()
     .gap_4()
@@ -1366,14 +1535,10 @@ fn shortcuts_tab(dm: Signal<bool>) -> impl IntoElement {
         .font_weight(FontWeight::MEDIUM)
         .text_color(move || palette(dm.get()).text_primary),
     )
-    .child(shortcut_group("应用", APP_ROWS, dm))
+    .child(shortcut_group("应用", app_rows, dm))
     .child(shortcut_group("编辑器 —— 格式", FMT_ROWS, dm))
     .child(shortcut_group("编辑器 —— 编辑", EDIT_ROWS, dm))
-    .child(
-      text("在 macOS 上用 ⌘ 代替 Ctrl。标题快捷键遵循 Notion/Word 约定（Ctrl+Alt+N）—— Web 版无法捕获单独的 Ctrl+N，它被浏览器用于切换标签页。\n注意：Ctrl+, 可能被中文输入法吞掉（标点切换）；若无响应，请切换到英文输入。")
-        .text_size(px(12.0))
-        .text_color(move || palette(dm.get()).text_faint),
-    )
+    .child(text(footer_note).text_size(px(12.0)).text_color(move || palette(dm.get()).text_faint))
 }
 
 fn shortcut_group(
@@ -1481,14 +1646,32 @@ fn cloud_login_card(
         .flex_row()
         .items_center()
         .gap_2()
-        .child(
+        .child(if props.allow_local {
           styled_input(dm)
             .test_id("settings-server-url")
             .placeholder("https://your-mica-server.example.com")
             .flex_1()
             .value(move || server_url.get())
-            .on_change(move |v: &str| server_url.set(v.to_owned())),
-        )
+            .on_change(move |v: &str| server_url.set(v.to_owned()))
+            .into_element()
+        } else {
+          view()
+            .test_id("settings-server-url-readonly")
+            .flex_1()
+            .px_3()
+            .py_2()
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(move || palette(dm.get()).border_subtle)
+            .bg(move || palette(dm.get()).surface_sunken)
+            .child(
+              text(move || server_url.get())
+                .text_size(px(12.5))
+                .text_color(move || palette(dm.get()).text_muted)
+                .truncate(),
+            )
+            .into_element()
+        })
         .child(action_pill("settings-check-server", "检测连接", dm, move || {
           on_check(server_url.get_untracked());
         })),
@@ -1546,10 +1729,14 @@ fn cloud_signed_in_section(
   let dm = props.dark_mode;
   let email = props.account_email;
   let name = props.account_name;
+  let avatar_url = props.avatar_url;
+  let avatar_busy = props.avatar_busy;
   let server_url = props.server_url;
   let cloud_status = props.cloud_status;
   let on_sync = props.on_sync_now.clone();
   let on_logout = props.on_cloud_logout.clone();
+  let on_up_av = props.on_upload_avatar.clone();
+  let on_del_av = props.on_delete_avatar.clone();
   let on_prof = props.on_update_profile.clone();
   let on_pass = props.on_change_password.clone();
   let on_del = props.on_delete_account.clone();
@@ -1563,32 +1750,24 @@ fn cloud_signed_in_section(
         .child(
           view()
             .flex_row()
+            .flex_wrap()
             .items_center()
             .justify_between()
+            .gap_3()
             .child(
               view()
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .child(
-                  view()
-                    .w(px(44.0))
-                    .h(px(44.0))
-                    .rounded(px(22.0))
-                    .items_center()
-                    .justify_center()
-                    .bg(move || palette(dm.get()).accent_soft)
-                    .child(
-                      text(move || {
-                        let s = name.get();
-                        let src = if s.trim().is_empty() { email.get() } else { s };
-                        src.trim().chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "M".into())
-                      })
-                      .text_size(px(18.0))
-                      .font_weight(FontWeight::SEMIBOLD)
-                      .text_color(move || palette(dm.get()).accent),
-                    ),
-                )
+                .child(crate::user_avatar::user_avatar(
+                  dm,
+                  avatar_url,
+                  name,
+                  email,
+                  44.0,
+                  18.0,
+                  Some(palette(dm.get_untracked()).accent_soft),
+                ))
                 .child(
                   view()
                     .gap_1()
@@ -1609,6 +1788,59 @@ fn cloud_signed_in_section(
                 text("云端已连接").text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).success),
               ),
             ),
+        )
+        .child(
+          view()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(action_pill("settings-change-avatar-btn", "更换头像", dm, move || {
+              if avatar_busy.get_untracked() {
+                return;
+              }
+              if let Some(cb) = &on_up_av {
+                cb(Rc::new(move |res| match res {
+                  Ok(()) => {
+                    account_msg.set("头像已更新".into());
+                    account_msg_err.set(false);
+                  }
+                  Err(e) => {
+                    account_msg.set(e);
+                    account_msg_err.set(true);
+                  }
+                }));
+              } else {
+                account_msg.set("当前环境不支持修改头像".into());
+                account_msg_err.set(true);
+              }
+            }))
+            .child(when(move || avatar_url.get().is_some(), {
+              let del_cb = on_del_av.clone();
+              move || {
+                let dcb = del_cb.clone();
+                danger_outline_btn("settings-remove-avatar-btn", "移除头像", dm, move || {
+                  if avatar_busy.get_untracked() {
+                    return;
+                  }
+                  if let Some(cb) = &dcb {
+                    cb(Rc::new(move |res| match res {
+                      Ok(()) => {
+                        account_msg.set("头像已移除".into());
+                        account_msg_err.set(false);
+                      }
+                      Err(e) => {
+                        account_msg.set(e);
+                        account_msg_err.set(true);
+                      }
+                    }));
+                  }
+                })
+              }
+            }))
+            .child(when(move || avatar_busy.get(), move || {
+              text("正在上传头像…").text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted)
+            })),
         )
         .child(
           view().px_3().py_2().rounded(px(6.0)).bg(move || palette(dm.get()).surface_base).border_1().border_color(move || palette(dm.get()).border_subtle).child(
@@ -1647,15 +1879,19 @@ fn cloud_signed_in_section(
             )
             .child(action_pill("settings-save-profile-btn", "保存名称", dm, move || {
               let next = display_name_draft.get_untracked().trim().to_string();
+              if next.is_empty() {
+                account_msg.set("显示名称不能为空".into());
+                account_msg_err.set(true);
+                return;
+              }
               if let Some(cb) = &on_prof {
-                match cb(next.clone()) {
-                  Ok(()) => { name.set(next); account_msg.set("已保存".into()); account_msg_err.set(false); }
+                cb(next, Rc::new(move |res| match res {
+                  Ok(()) => { account_msg.set("已保存".into()); account_msg_err.set(false); }
                   Err(e) => { account_msg.set(e); account_msg_err.set(true); }
-                }
+                }));
               } else {
-                name.set(next);
-                account_msg.set("已更新本地显示名称".into());
-                account_msg_err.set(false);
+                account_msg.set("需要连接云端账号后才能修改个人资料".into());
+                account_msg_err.set(true);
               }
             })),
         ))
@@ -1676,13 +1912,13 @@ fn cloud_signed_in_section(
                 return;
               }
               if let Some(cb) = &on_pass {
-                match cb(cur_pass_draft.get_untracked(), np) {
+                cb(cur_pass_draft.get_untracked(), np, Rc::new(move |res| match res {
                   Ok(()) => { cur_pass_draft.set(String::new()); new_pass_draft.set(String::new()); account_msg.set("密码已修改，请重新登录所有设备".into()); account_msg_err.set(false); }
                   Err(e) => { account_msg.set(e); account_msg_err.set(true); }
-                }
+                }));
               } else {
-                account_msg.set("当前处于本地模式，连接云端后可修改密码".into());
-                account_msg_err.set(false);
+                account_msg.set("需要连接云端账号后才能修改密码".into());
+                account_msg_err.set(true);
               }
             })),
         )
@@ -1722,10 +1958,10 @@ fn cloud_signed_in_section(
                 .child(styled_input(dm).test_id("settings-delete-account-pass").placeholder("输入当前密码确认").masked(true).flex_1().value(move || delete_pass_draft.get()).on_change(move |v: &str| delete_pass_draft.set(v.to_owned())))
                 .child(danger_solid_btn("settings-delete-account-confirm", "确认注销", dm, move || {
                   if let Some(cb) = &del_cb {
-                    match cb(delete_pass_draft.get_untracked()) {
+                    cb(delete_pass_draft.get_untracked(), Rc::new(move |res| match res {
                       Ok(()) => { delete_pass_draft.set(String::new()); delete_confirm_open.set(false); }
                       Err(e) => { account_msg.set(e); account_msg_err.set(true); }
-                    }
+                    }));
                   } else {
                     account_msg.set("需要连接云端账号后才能执行注销操作".into());
                     account_msg_err.set(true);
@@ -1806,26 +2042,12 @@ fn tokens_tab(
           token_err.set(String::new());
           let (w, exp) = (write_draft.get_untracked(), expiry_days.get_untracked());
           if let Some(cb) = &on_create {
-            match cb(name, w, exp) {
+            cb(name, w, exp, Rc::new(move |res| match res {
               Ok(sec) => { name_draft.set(String::new()); write_draft.set(false); created_secret.set(Some(sec)); }
               Err(e) => token_err.set(e),
-            }
+            }));
           } else {
-            let id = Uuid::new_v4().to_string();
-            let sec = format!("mica_pat_{}", &id.replace('-', "")[..24]);
-            let mut list = tokens.get_untracked();
-            list.insert(0, ApiTokenItem {
-              id,
-              name,
-              can_write: w,
-              last_used_label: "从未".into(),
-              expires_label: exp.map(|d| format!("{d} 天后")).unwrap_or_else(|| "永不".into()),
-              expired: false,
-            });
-            tokens.set(list);
-            name_draft.set(String::new());
-            write_draft.set(false);
-            created_secret.set(Some(sec));
+            token_err.set("请先登录云端账号后创建 API 令牌".into());
           }
         }))
         .child(when(move || !token_err.get().is_empty(), move || {
@@ -1899,7 +2121,13 @@ fn tokens_tab(
                 dm,
                 move || confirm_revoke_id.set(None),
                 move || {
-                  if let Some(cb) = &rcb2 { let _ = cb(tdo2.clone()); } else {
+                  if let Some(cb) = &rcb2 {
+                    cb(tdo2.clone(), Rc::new(move |res| {
+                      if let Err(e) = res {
+                        token_err.set(e);
+                      }
+                    }));
+                  } else {
                     let mut next = tokens.get_untracked();
                     next.retain(|x| x.id != tdo2);
                     tokens.set(next);
@@ -1944,7 +2172,9 @@ fn data_tab(
   );
   let on_clear_cache = props.on_clear_mirror_cache.clone();
 
-  view()
+  let allow_local = props.allow_local;
+  let on_imp_web = props.on_import_markdown_web.clone();
+  let mut col = view()
     .w_full()
     .gap_4()
     .child(text("从 ZIP 导入工作区 —— Mica 导出或 Notion「Markdown & CSV」导出。页面树、排序和图片都会被重建。").text_size(px(12.5)).text_color(move || palette(dm.get()).text_muted))
@@ -1974,12 +2204,13 @@ fn data_tab(
         .child(text("导入工作区(ZIP)").text_size(px(14.0)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
         .child(text("选择 Mica 导出的 ZIP，或 Notion 的「Markdown & CSV」导出包").text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted)),
     )
-    .child(
-      view().flex_row().flex_wrap().gap_2()
+    .child({
+      let mut row = view().flex_row().flex_wrap().gap_2()
         .child(action_pill("settings-import-notion-btn", "从 Notion 导入 (Markdown & CSV ZIP)", dm, move || {
           if let Some(cb) = &on_imp_notion { cb(true); } else { spawn_zip_import_preview(true, export_preview); }
-        }))
-        .child(action_pill("settings-import-folder-btn", "导入本地 Markdown 文件夹", dm, move || {
+        }));
+      if allow_local {
+        row = row.child(action_pill("settings-import-folder-btn", "导入本地 Markdown 文件夹", dm, move || {
           if let Some(cb) = &on_imp_folder { cb(); } else {
             spawn(async move {
               match transfer::pick_import_folder().await {
@@ -1992,8 +2223,10 @@ fn data_tab(
               }
             });
           }
-        })),
-    )
+        }));
+      }
+      row
+    })
     .child(
       setting_card(dm)
         .gap_3()
@@ -2016,49 +2249,77 @@ fn data_tab(
         .child(
           text(move || {
             let p = export_preview.get();
-            if p.is_empty() { "本地数据以 SQLite Vault 实时落盘，离线可用。".into() } else { p }
+            if p.is_empty() {
+              if allow_local {
+                "本地数据以 SQLite Vault 实时落盘，离线可用。".into()
+              } else {
+                "数据实时同步至当前 Mica 云端工作区。".into()
+              }
+            } else {
+              p
+            }
           })
           .text_size(px(12.0))
           .text_color(move || palette(dm.get()).text_muted),
         ),
-    )
-    .child(
-      setting_card(dm)
-        .gap_2()
-        .child(text("导入本地 Markdown 文件").text_size(px(13.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
-        .child(text("选择或输入本地 .md 文件路径，导入为当前工作区的新页面").text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted))
-        .child(
-          view().flex_row().items_center().gap_2()
-            .child(
-              styled_input(dm)
-                .test_id("settings-import-path-input")
-                .placeholder("输入本地 .md 文件路径，例如 C:\\notes\\demo.md")
-                .submit_behavior(SubmitBehavior::Submit)
-                .flex_1()
-                .value(move || import_path_draft.get())
-                .on_change(move |v: &str| import_path_draft.set(v.to_owned()))
-                .on_submit(move |_: &str| on_imp_sub(import_path_draft.get_untracked())),
-            )
-            .child(action_pill("settings-pick-md-btn", "选择文件…", dm, move || {
-              let imp = on_imp_pick.clone();
-              spawn(async move {
-                match transfer::pick_import_files("Markdown", &["md", "markdown"], false).await {
-                  Ok(paths) if !paths.is_empty() => {
-                    let s = paths[0].display().to_string();
-                    import_path_draft.set(s.clone());
-                    imp(s);
-                  }
-                  Ok(_) => {}
-                  Err(e) => export_preview.set(e),
+    );
+  col = col.child(if allow_local {
+    setting_card(dm)
+      .gap_2()
+      .child(text("导入本地 Markdown 文件").text_size(px(13.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
+      .child(text("选择或输入本地 .md 文件路径，导入为当前工作区的新页面").text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted))
+      .child(
+        view().flex_row().flex_wrap().items_center().gap_2()
+          .child(
+            styled_input(dm)
+              .test_id("settings-import-path-input")
+              .placeholder("输入本地 .md 文件路径，例如 C:\\notes\\demo.md")
+              .submit_behavior(SubmitBehavior::Submit)
+              .flex_1()
+              .min_w(px(180.0))
+              .value(move || import_path_draft.get())
+              .on_change(move |v: &str| import_path_draft.set(v.to_owned()))
+              .on_submit(move |_: &str| on_imp_sub(import_path_draft.get_untracked())),
+          )
+          .child(action_pill("settings-pick-md-btn", "选择文件…", dm, move || {
+            let imp = on_imp_pick.clone();
+            spawn(async move {
+              match transfer::pick_import_files("Markdown", &["md", "markdown"], false).await {
+                Ok(paths) if !paths.is_empty() => {
+                  let s = paths[0].display().to_string();
+                  import_path_draft.set(s.clone());
+                  imp(s);
                 }
-              });
-            }))
-            .child(primary_btn("settings-import-md-btn", "导入 Markdown", dm, move || {
-              on_imp_btn(import_path_draft.get_untracked());
-            })),
+                Ok(_) => {}
+                Err(e) => export_preview.set(e),
+              }
+            });
+          }))
+          .child(primary_btn("settings-import-md-btn", "导入 Markdown", dm, move || {
+            on_imp_btn(import_path_draft.get_untracked());
+          })),
+      )
+      .into_element()
+  } else {
+    setting_card(dm)
+      .gap_2()
+      .child(text("导入 Markdown 文件").text_size(px(13.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
+      .child(text("从浏览器选择本地 .md 文件上传并导入到当前云端工作区。").text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted))
+      .child(
+        view().flex_row().items_center().child(
+          primary_btn("settings-upload-md-web-btn", "上传 Markdown 文件 (.md)", dm, move || {
+            if let Some(cb) = &on_imp_web {
+              cb();
+            } else {
+              export_preview.set("请从工作区左侧栏选择导入目标位置".into());
+            }
+          }),
         ),
-    )
-    .child(
+      )
+      .into_element()
+  });
+  if allow_local {
+    col = col.child(
       setting_card(dm)
         .gap_2()
         .child(text("本机存储与镜像缓存").text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
@@ -2100,12 +2361,13 @@ fn data_tab(
           }
           block
         })),
-    )
-    .child(
-      view().flex_row().items_center().gap_2()
-        .child(dynamic(move || mica_icons::info_icon(palette(dm.get()).text_faint_hex)))
-        .child(text("提示：可从页面菜单（▾）导出单个页面，或从工作区的 ⋯ 菜单导出整个工作区。").flex_1().text_size(px(12.0)).text_color(move || palette(dm.get()).text_faint)),
-    )
+    );
+  }
+  col.child(
+    view().flex_row().items_center().gap_2()
+      .child(dynamic(move || mica_icons::info_icon(palette(dm.get()).text_faint_hex)))
+      .child(text("提示：可从页面菜单（▾）导出单个页面，或从工作区的 ⋯ 菜单导出整个工作区。").flex_1().text_size(px(12.0)).text_color(move || palette(dm.get()).text_faint)),
+  )
 }
 
 fn spawn_zip_import_preview(notion_mode: bool, preview: Signal<String>) {
@@ -2282,23 +2544,23 @@ fn ai_tab(
   status_err: Signal<bool>,
 ) -> impl IntoElement {
   let dm = props.dark_mode;
+  let allow_local = props.allow_local;
   let providers = props.ai_providers;
+  let is_compact = use_context::<SettingsCompact>().is_some_and(|c| c.0.get_untracked());
   let (on_save, on_del, on_fetch) = (
     props.on_save_ai_provider.clone(),
     props.on_delete_ai_provider.clone(),
     props.on_fetch_ai_models.clone(),
   );
 
-  view()
-    .w_full()
-    .gap_4()
-    .child(switch_row("settings-ai-enable-switch", "启用 AI 功能", "显示「Ask AI」按钮和 /ai 命令。仅当开启此项且下方配置了服务商时才会出现。", props.ai_enabled, dm))
-    .child(
-      view().w_full().flex_row().items_start().gap_4()
-        .child(
-          view().w(px(172.0)).flex_shrink_0().gap_2()
-            .child(text("服务商").text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_faint))
-            .child(dynamic(move || {
+  let mut layout = view().w_full().items_start().gap_4();
+  layout = if is_compact { layout.flex_col().items_stretch() } else { layout.flex_row() };
+  let left_list = {
+    let mut box_v = view().gap_2();
+    box_v = if is_compact { box_v.w_full() } else { box_v.w(px(172.0)).flex_shrink_0() };
+    box_v
+      .child(text("服务商").text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_faint))
+      .child(dynamic(move || {
               let list = providers.get();
               let cur = selected_id.get();
               let is_add = adding.get();
@@ -2348,21 +2610,27 @@ fn ai_tab(
               }
               col
             }))
-            .child(action_pill("ai-add-provider-open", "+ 添加供应商", dm, move || {
-              adding.set(true);
-              add_err.set(String::new());
-            })),
-        )
-        .child(
-          view().flex_1()
-            .child(when(move || adding.get(), move || {
-              ai_add_provider_form(dm, providers, selected_id, adding, add_preset, add_custom_name, add_base_url, add_err)
-            }))
-            .child(when(move || !adding.get(), move || {
-              ai_provider_detail_form(dm, providers, selected_id, api_key_draft, fetched_models, status_msg, status_err, on_save.clone(), on_del.clone(), on_fetch.clone())
-            })),
-        ),
-    )
+      .child(action_pill("ai-add-provider-open", "+ 添加供应商", dm, move || {
+        adding.set(true);
+        add_err.set(String::new());
+      }))
+  };
+
+  let mut right_pane = view().min_w(px(0.0));
+  right_pane = if is_compact { right_pane.w_full() } else { right_pane.flex_1() };
+  let right_pane = right_pane
+    .child(when(move || adding.get(), move || {
+      ai_add_provider_form(dm, providers, selected_id, adding, add_preset, add_custom_name, add_base_url, add_err)
+    }))
+    .child(when(move || !adding.get(), move || {
+      ai_provider_detail_form(dm, allow_local, providers, selected_id, api_key_draft, fetched_models, status_msg, status_err, on_save.clone(), on_del.clone(), on_fetch.clone())
+    }));
+
+  view()
+    .w_full()
+    .gap_4()
+    .child(switch_row("settings-ai-enable-switch", "启用 AI 功能", "显示「Ask AI」按钮和 /ai 命令。仅当开启此项且下方配置了服务商时才会出现。", props.ai_enabled, dm))
+    .child(layout.child(left_list).child(right_pane))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2456,15 +2724,16 @@ fn ai_add_provider_form(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn ai_provider_detail_form(
   dm: Signal<bool>,
+  allow_local: bool,
   providers: Signal<Vec<AiProviderEntry>>,
   selected_id: Signal<String>,
   api_key_draft: Signal<String>,
   fetched_models: Signal<Vec<String>>,
   status_msg: Signal<String>,
   status_err: Signal<bool>,
-  on_save: Option<Rc<dyn Fn(AiProviderEntry, Option<String>) -> Result<(), String>>>,
-  on_delete: Option<Rc<dyn Fn(String) -> Result<(), String>>>,
-  on_fetch: Option<Rc<dyn Fn(String, String, String, Option<String>) -> Result<Vec<String>, String>>>,
+  on_save: Option<Rc<dyn Fn(AiProviderEntry, Option<String>, SettingsResultCb)>>,
+  on_delete: Option<Rc<dyn Fn(String, SettingsResultCb)>>,
+  on_fetch: Option<Rc<dyn Fn(String, String, String, Option<String>, SettingsModelsCb)>>,
 ) -> impl IntoElement {
   dynamic(move || {
     let cur = selected_id.get();
@@ -2524,14 +2793,22 @@ fn ai_provider_detail_form(
               .child(action_pill("ai-fetch-models-btn", "拉取模型", dm, move || {
                 if let Some(cb) = &ft {
                   let k = api_key_draft.get_untracked().trim().to_string();
-                  match cb(proto.get_untracked(), id_f.clone(), base_url.get_untracked().trim().into(), (!k.is_empty()).then_some(k)) {
-                    Ok(ms) => {
-                      status_err.set(ms.is_empty());
-                      status_msg.set(if ms.is_empty() { "服务商没有返回任何模型。".into() } else { format!("已拉取 {} 个可用模型", ms.len()) });
-                      fetched_models.set(ms);
-                    }
-                    Err(e) => { status_msg.set(e); status_err.set(true); }
-                  }
+                  status_msg.set("正在拉取模型列表…".into());
+                  status_err.set(false);
+                  cb(
+                    proto.get_untracked(),
+                    id_f.clone(),
+                    base_url.get_untracked().trim().into(),
+                    (!k.is_empty()).then_some(k),
+                    Rc::new(move |res| match res {
+                      Ok(ms) => {
+                        status_err.set(ms.is_empty());
+                        status_msg.set(if ms.is_empty() { "服务商没有返回任何模型。".into() } else { format!("已拉取 {} 个可用模型", ms.len()) });
+                        fetched_models.set(ms);
+                      }
+                      Err(e) => { status_msg.set(e); status_err.set(true); }
+                    }),
+                  );
                 } else {
                   status_msg.set("请先连接云端服务或手动输入模型 ID".into());
                   status_err.set(false);
@@ -2570,22 +2847,45 @@ fn ai_provider_detail_form(
               key_hint: tail,
               active: true,
             };
-            let res = if let Some(cb) = &sv { cb(upd.clone(), (!k.is_empty()).then_some(k)) } else { Ok(()) };
-            match res {
-              Ok(()) => {
-                let mut list = providers.get_untracked();
-                for it in &mut list { if it.id == upd.id { *it = upd.clone(); } else { it.active = false; } }
-                providers.set(list);
-                api_key_draft.set(String::new());
-                status_msg.set(format!("已保存 {} 配置（{}）", upd.id, upd.base_url));
-                status_err.set(false);
-              }
-              Err(e) => { status_msg.set(e); status_err.set(true); }
+            if let Some(cb) = &sv {
+              let upd_done = upd.clone();
+              status_msg.set("正在保存配置…".into());
+              status_err.set(false);
+              cb(upd, (!k.is_empty()).then_some(k), Rc::new(move |res| match res {
+                Ok(()) => {
+                  let mut list = providers.get_untracked();
+                  for it in &mut list { if it.id == upd_done.id { *it = upd_done.clone(); } else { it.active = false; } }
+                  providers.set(list);
+                  api_key_draft.set(String::new());
+                  status_msg.set(format!("已保存 {} 配置（{}）", upd_done.id, upd_done.base_url));
+                  status_err.set(false);
+                }
+                Err(e) => { status_msg.set(e); status_err.set(true); }
+              }));
+            } else {
+              let mut list = providers.get_untracked();
+              for it in &mut list { if it.id == upd.id { *it = upd.clone(); } else { it.active = false; } }
+              providers.set(list);
+              api_key_draft.set(String::new());
+              status_msg.set(format!("已保存 {} 配置（{}）", upd.id, upd.base_url));
+              status_err.set(false);
             }
           }))
           .child(danger_outline_btn("ai-delete-provider-btn", "删除供应商", dm, move || {
-            let ok = if let Some(cb) = &dl { cb(id_d.clone()).is_ok() } else { true };
-            if ok {
+            if let Some(cb) = &dl {
+              let id_done = id_d.clone();
+              cb(id_d.clone(), Rc::new(move |res| match res {
+                Ok(()) => {
+                  let mut list = providers.get_untracked();
+                  list.retain(|x| x.id != id_done);
+                  selected_id.set(list.first().map(|x| x.id.clone()).unwrap_or_default());
+                  providers.set(list);
+                  status_msg.set("已删除供应商".into());
+                  status_err.set(false);
+                }
+                Err(e) => { status_msg.set(e); status_err.set(true); }
+              }));
+            } else {
               let mut list = providers.get_untracked();
               list.retain(|x| x.id != id_d);
               selected_id.set(list.first().map(|x| x.id.clone()).unwrap_or_default());
@@ -2601,7 +2901,11 @@ fn ai_provider_detail_form(
           if status_err.get() { pal.danger } else { pal.text_muted }
         })
       }))
-      .child(text("本地模型（Ollama、LM Studio）通常无需密钥。每家服务商各自保存自己的地址、密钥和模型。").text_size(px(11.5)).text_color(p.text_faint))
+      .child(when(move || allow_local, move || {
+        text("本地模型（Ollama、LM Studio）通常无需密钥。每家服务商各自保存自己的地址、密钥和模型。")
+          .text_size(px(11.5))
+          .text_color(palette(dm.get()).text_faint)
+      }))
   })
 }
 
@@ -2687,15 +2991,33 @@ fn pref_group_heading(label: &'static str, dm: Signal<bool>) -> impl IntoElement
 }
 
 fn pref_row(label: &'static str, dm: Signal<bool>, control: impl IntoElement) -> impl IntoElement {
-  view().w_full().py_1().flex_row().items_center().gap_4()
-    .child(
-      view().w(px(112.0)).flex_shrink_0().child(
+  let is_compact = use_context::<SettingsCompact>().is_some_and(|c| c.0.get_untracked());
+  let row = view().w_full().py_1();
+  if is_compact {
+    row
+      .flex_col()
+      .items_stretch()
+      .gap_2()
+      .child(
         text(move || tr_setting(label))
           .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
           .text_color(move || palette(dm.get()).text_primary),
-      ),
-    )
-    .child(view().flex_1().child(control))
+      )
+      .child(view().w_full().min_w(px(0.0)).child(control))
+  } else {
+    row
+      .flex_row()
+      .items_center()
+      .gap_4()
+      .child(
+        view().w(px(112.0)).flex_shrink_0().child(
+          text(move || tr_setting(label))
+            .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
+            .text_color(move || palette(dm.get()).text_primary),
+        ),
+      )
+      .child(view().flex_1().min_w(px(0.0)).child(control))
+  }
 }
 
 fn labeled_box(label: &'static str, dm: Signal<bool>, child: impl IntoElement) -> impl IntoElement {

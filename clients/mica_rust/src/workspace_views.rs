@@ -36,6 +36,7 @@ pub struct WorkspaceMemberEntry {
   pub display_name: String,
   pub email: String,
   pub role: String,
+  pub avatar_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -576,14 +577,6 @@ fn ws_members_section(
       col = col.child(text("未加载成员。").text_size(px(12.5)).text_color(p.text_faint));
     } else {
       for (i, m) in members.into_iter().enumerate() {
-        let initial = m
-          .display_name
-          .chars()
-          .next()
-          .or_else(|| m.email.chars().next())
-          .unwrap_or('U')
-          .to_uppercase()
-          .to_string();
         let can_edit_member = can_manage && m.role != "owner";
         let on_cycle_role = state.on_change_member_role.clone();
         let on_rm = state.on_remove_member.clone();
@@ -612,22 +605,15 @@ fn ws_members_section(
           .border_1()
           .border_color(p.border_subtle)
           .bg(p.surface_base)
-          .child(
-            view()
-              .w(px(28.0))
-              .h(px(28.0))
-              .rounded_full()
-              .bg(p.surface_sunken)
-              .items_center()
-              .justify_center()
-              .flex_shrink_0()
-              .child(
-                text(initial)
-                  .text_size(px(12.0))
-                  .font_weight(FontWeight::MEDIUM)
-                  .text_color(p.text_primary),
-              ),
-          )
+          .child(crate::user_avatar::user_avatar_static(
+            dark_mode,
+            m.avatar_url.clone(),
+            &m.display_name,
+            &m.email,
+            28.0,
+            12.0,
+            Some(p.surface_sunken),
+          ))
           .child(
             view()
               .flex_1()

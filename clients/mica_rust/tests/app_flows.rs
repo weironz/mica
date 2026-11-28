@@ -1055,6 +1055,7 @@ fn regression_web_cloud_only_hides_local_workspace_controls() {
         show_cloud_signin: signal(true),
         display_name: signal("demo@mica.dev".to_string()),
         email: signal("demo@mica.dev".to_string()),
+        avatar_url: signal(None),
         active_origin: signal("https://mica.example.com".to_string()),
         signed_in_origins: signal(vec![(
           "https://mica.example.com".to_string(),
@@ -2928,4 +2929,162 @@ fn regression_page_more_menu_dismisses_on_outside_click_anchor_and_escape() {
   app
     .wait_for_gone("id:page-more-menu", std::time::Duration::from_millis(800))
     .unwrap();
+}
+
+mod wave2_settings_tests {
+  use std::rc::Rc;
+
+  use nsh_core::geometry::{px, size};
+  use nsh_core::prelude::*;
+  use nsh_engine::{EngineConfig, Root};
+  use nsh_testing::Headless;
+
+  fn build_settings_view(signed_in: bool) -> impl IntoElement {
+    let dark = signal(false);
+    let legacy = Rc::new(mica_rust::settings_view::SettingsCallbacks {
+      dark_mode: dark,
+      locale_zh: signal(true),
+      server_url: signal("https://mica.example.com".to_string()),
+      cloud_status: signal(String::new()),
+      export_preview: signal(String::new()),
+      account_email: signal("user@mica.dev".to_string()),
+      is_cloud_signed_in: signal(signed_in),
+      on_toggle_theme: Rc::new(|| {}),
+      on_toggle_locale: Rc::new(|| {}),
+      on_check_server: Rc::new(|_| {}),
+      on_cloud_login: Rc::new(|_, _, _| {}),
+      on_cloud_logout: Rc::new(|| {}),
+      on_sync_now: Rc::new(|| {}),
+      on_export_markdown: Rc::new(|| {}),
+      on_export_html: Rc::new(|| {}),
+      on_export_bundle: Rc::new(|| {}),
+      on_import_markdown: Rc::new(|_| {}),
+      on_save_snapshot: Rc::new(|| {}),
+      on_close: Rc::new(|| {}),
+    });
+    let mut props = mica_rust::settings_view::SettingsViewProps::from_legacy(legacy);
+    props.allow_local = false;
+    if signed_in {
+      props.avatar_url.set(Some(
+        "https://mica.example.com/api/users/u1/avatar?v=1".to_string(),
+      ));
+    }
+    view()
+      .w_full()
+      .h_full()
+      .relative()
+      .child(mica_rust::settings_view::settings_modal_view_with_props(
+        Rc::new(props),
+      ))
+  }
+
+  #[derive(Default)]
+  struct Wave2SettingsSignedOut;
+
+  impl Component for Wave2SettingsSignedOut {
+    type Props = ();
+    type Event = NoEvent;
+
+    fn view(_props: Self::Props, _scope: Scope<Self::Event>) -> impl IntoElement {
+      build_settings_view(false)
+    }
+  }
+
+  #[derive(Default)]
+  struct Wave2SettingsSignedIn;
+
+  impl Component for Wave2SettingsSignedIn {
+    type Props = ();
+    type Event = NoEvent;
+
+    fn view(_props: Self::Props, _scope: Scope<Self::Event>) -> impl IntoElement {
+      build_settings_view(true)
+    }
+  }
+
+  #[test]
+  fn regression_settings_mobile_responsive_layout_shows_full_width_detail_pane() {
+    let mut config = EngineConfig::new(Root::of::<Wave2SettingsSignedOut>());
+    config.viewport = size(px(390.0), px(844.0));
+    config.environment.os = nsh_core::platform::Os::Windows;
+    let mut app = Headless::start(config).unwrap();
+
+    app.wait_for("id:settings-mobile-nav").unwrap();
+    app.wait_for("id:settings-detail-scroll").unwrap();
+
+    let screen = app.screen();
+    let nodes = screen.layout_nodes();
+    let panel = nodes
+      .iter()
+      .find(|n| n.test_id.as_deref() == Some("settings-panel"))
+      .expect("settings-panel missing");
+    let detail = nodes
+      .iter()
+      .find(|n| n.test_id.as_deref() == Some("settings-detail-scroll"))
+      .expect("settings-detail-scroll missing");
+    assert!(
+      panel.bounds.size.width.0 <= 390.0,
+      "settings-panel overflowed 390px: {}",
+      panel.bounds.size.width.0
+    );
+    assert!(
+      detail.bounds.size.width.0 >= panel.bounds.size.width.0 - 12.0,
+      "detail pane cut off on mobile: panel_w={}, detail_w={}",
+      panel.bounds.size.width.0,
+      detail.bounds.size.width.0
+    );
+    assert!(
+      (detail.bounds.origin.x.0 - panel.bounds.origin.x.0).abs() < 12.0,
+      "detail pane offset horizontally on mobile: panel_x={}, detail_x={}",
+      panel.bounds.origin.x.0,
+      detail.bounds.origin.x.0
+    );
+
+    app.press("id:settings-tab-account").unwrap();
+    app.wait_for("id:settings-server-url-readonly").unwrap();
+  }
+
+  #[test]
+  fn regression_settings_web_mode_hides_desktop_only_controls_and_exposes_avatar_actions() {
+    let mut config = EngineConfig::new(Root::of::<Wave2SettingsSignedIn>());
+    config.viewport = size(px(1200.0), px(840.0));
+    config.environment.os = nsh_core::platform::Os::Windows;
+    let mut app = Headless::start(config).unwrap();
+
+    app.wait_for("id:settings-panel").unwrap();
+    assert!(
+      !app
+        .screen()
+        .layout_nodes()
+        .iter()
+        .any(|n| n.test_id.as_deref() == Some("settings-tab-diagnostics")),
+      "Diagnostics tab must stay hidden when allow_local == false"
+    );
+    assert!(
+      !app
+        .screen()
+        .layout_nodes()
+        .iter()
+        .any(|n| n.test_id.as_deref() == Some("close-behavior-quit")),
+      "Desktop window close behavior must stay hidden on Web"
+    );
+
+    app.press("id:settings-tab-account").unwrap();
+    app.wait_for("id:settings-change-avatar-btn").unwrap();
+    app.wait_for("id:settings-remove-avatar-btn").unwrap();
+
+    app.press("id:settings-tab-data").unwrap();
+    app.wait_for("id:settings-upload-md-web-btn").unwrap();
+    let nodes = app.screen().layout_nodes().to_vec();
+    for hidden_id in [
+      "settings-import-folder-btn",
+      "settings-import-path-input",
+      "settings-clear-cache-btn",
+    ] {
+      assert!(
+        nodes.iter().all(|n| n.test_id.as_deref() != Some(hidden_id)),
+        "Desktop-only Data control {hidden_id} should be hidden on Web"
+      );
+    }
+  }
 }

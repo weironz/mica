@@ -49,6 +49,7 @@ pub mod property_panel;
 pub mod responsive_shell;
 pub mod right_sidebar;
 pub mod search_view;
+mod settings_cloud_ops;
 pub mod settings_view;
 pub mod share_dialog;
 pub mod sidebar;
@@ -62,6 +63,7 @@ pub mod transfer_dialog;
 pub mod tree_dnd;
 pub mod updater;
 pub mod usage_stats_view;
+pub mod user_avatar;
 pub mod version_history;
 pub mod workspace_views;
 pub mod world_switcher;
@@ -76,7 +78,7 @@ use std::{
   rc::Rc,
 };
 
-use chrono::{Local, Utc};
+use chrono::Utc;
 use mica_board::BoardSession;
 use mica_client::PageTreeModel;
 use nsh_core::{
@@ -113,7 +115,6 @@ use crate::{
   net::{CloudConfig, CloudConnector},
   right_sidebar::{BacklinkEntry, RightSidebarExtras, RightSidebarProps, ToolsTab},
   search_view::{SearchRecentItem, SearchViewProps, SearchWorkspaceChip},
-  settings_view::{SettingsCallbacks, SettingsViewProps},
   sidebar::{SidebarCallbacks, WorkspaceSwitcherItem},
   storage::{DEFAULT_ORIGIN, VaultStore},
   transfer::{ArchiveExportFormat, ImportedPageSpec},
@@ -340,6 +341,14 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let account_name = signal(if allow_local { "本地工作区" } else { "未登录" }.to_string());
   let account_email = signal(if allow_local { "这台设备" } else { "" }.to_string());
   let is_cloud_signed_in = signal(false);
+  let account_id = signal(String::new());
+  let account_avatar_version: Signal<Option<String>> = signal(None);
+  let avatar_cache_bust_rev = signal(0u64);
+  let account_avatar_url: Signal<Option<String>> = signal(None);
+  provide_context(user_avatar::AccountAvatarSignal {
+    url: account_avatar_url,
+    email: account_email,
+  });
   let active_mode = signal(MODE_DOC);
   let sidebar_open = signal(true);
   let sidebar_width = signal(init_sidebar_width);
@@ -1231,7 +1240,29 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  let account_id = signal(String::new());
+  {
+    let sr = server_url;
+    let uid_sig = account_id;
+    let av_sig = account_avatar_version;
+    let cb_sig = avatar_cache_bust_rev;
+    let signed_sig = is_cloud_signed_in;
+    effect(move || {
+      let next = if signed_sig.get() {
+        user_avatar::effective_avatar_url(
+          &sr.get(),
+          &uid_sig.get(),
+          av_sig.get().as_deref(),
+          cb_sig.get(),
+        )
+      } else {
+        None
+      };
+      if account_avatar_url.get_untracked() != next {
+        account_avatar_url.set(next);
+      }
+    });
+  }
+
   let cloud_session = cloud_sync::CloudSessionHandles {
     app_owner,
     vault: vault.clone(),
@@ -1270,6 +1301,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     account_id,
     account_name,
     account_email,
+    account_avatar_version,
+    avatar_cache_bust_rev,
     is_cloud_signed_in,
     cloud_status,
     auth_gen,
@@ -2642,277 +2675,62 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  // Settings 1120×840 Props
-  let settings_legacy = Rc::new(SettingsCallbacks {
+  // Settings 1120×840 & Usage Stats Props (delegated to `settings_cloud_ops`)
+  let settings_cloud_ops::SettingsCloudBundle {
+    settings_props,
+    on_open_usage_stats,
+  } = settings_cloud_ops::build_settings_cloud_bundle(settings_cloud_ops::SettingsCloudOpsCtx {
+    app_owner,
+    allow_local,
+    vault: vault.clone(),
+    cloud_connector: cloud_connector.clone(),
+    cloud_session: cloud_session.clone(),
     dark_mode,
     locale_zh,
+    page_width_px: page_width_px_sig,
+    ui_font_scale: ui_font_scale_sig,
+    editor_font_px: editor_font_px_sig,
+    editor_font_family: editor_font_family_sig,
+    show_format_bar,
+    show_page_title,
+    ai_enabled,
+    rehost_images: rehost_images_sig,
+    active_origin,
+    active_folder_id,
     server_url,
     cloud_status,
     export_preview,
+    account_id,
     account_email,
+    account_name,
+    account_avatar_version,
+    avatar_cache_bust_rev,
+    account_avatar_url,
     is_cloud_signed_in,
+    trashed_views: trashed_views_sig,
+    live_views: live_views_sig,
+    auth_gen,
+    check_gen,
+    settings_modal_open,
+    account_menu_open,
+    about_modal_open,
     on_toggle_theme: on_toggle_theme.clone(),
-    on_toggle_locale: {
-      let v = vault.clone();
-      Rc::new(move || {
-        let next = !locale_zh.get_untracked();
-        locale_zh.set(next);
-        let _ = v.set_bool_pref("localeZh", next);
-      })
-    },
-    on_check_server: Rc::new(move |url: String| {
-      let epoch = check_gen.get_untracked().wrapping_add(1);
-      check_gen.set(epoch);
-      cloud_status.set(format!("正在检测服务器：{url}…"));
-      let url_req = url.clone();
-      app_owner.run(move || {
-        spawn(async move {
-          let connector = CloudConnector::new(CloudConfig {
-            server_url: url_req,
-            access_token: None,
-            email: None,
-          });
-          let res = connector.check_health().await;
-          if check_gen.get_untracked() != epoch {
-            return;
-          }
-          match res {
-            Ok(ver) => cloud_status.set(format!("连接正常：{url}（{ver}）")),
-            Err(err) => cloud_status.set(format!("离线 / 无法连接：{err}")),
-          }
-        });
-      });
-    }),
     on_cloud_login: do_cloud_login.clone(),
     on_cloud_logout: do_cloud_logout.clone(),
-    on_sync_now: {
-      let cc = cloud_connector.clone();
-      let cs = cloud_session.clone();
-      Rc::new(move || {
-        let orig = active_origin.get_untracked();
-        if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() {
-          let srv = server_url.get_untracked();
-          let cs_run = cs.clone();
-          app_owner.run(move || cs_run.enter_origin(srv, false));
-          return;
-        }
-        let epoch = check_gen.get_untracked().wrapping_add(1);
-        check_gen.set(epoch);
-        let conn = cc.borrow().clone();
-        let phase = conn.sync_phase_label();
-        cloud_status.set("正在检查同步连接…".to_string());
-        app_owner.run(move || {
-          spawn(async move {
-            let res = conn.check_health().await;
-            if check_gen.get_untracked() != epoch {
-              return;
-            }
-            match res {
-              Ok(ver) => cloud_status.set(format!("同步就绪（{phase} · 服务器 {ver}）")),
-              Err(err) => cloud_status.set(format!("同步检查失败：{err}")),
-            }
-          });
-        });
-      })
-    },
-    on_export_markdown,
-    on_export_html,
-    on_export_bundle,
-    on_import_markdown,
-    on_save_snapshot,
-    on_close: Rc::new(move || settings_modal_open.set(false)),
+    on_export_markdown: on_export_markdown.clone(),
+    on_export_html: on_export_html.clone(),
+    on_export_bundle: on_export_bundle.clone(),
+    export_workspace_zip: export_workspace_zip.clone(),
+    on_import_markdown: on_import_markdown.clone(),
+    on_import_zip_picker: on_import_zip_picker.clone(),
+    on_import_folder_picker: on_import_folder_picker.clone(),
+    on_import_files_picker: on_import_files_picker.clone(),
+    on_save_snapshot: on_save_snapshot.clone(),
+    on_restore_view: on_restore_view.clone(),
+    on_purge_view: on_purge_view.clone(),
+    on_purge_all_trash: on_purge_all_trash.clone(),
+    on_refresh_trash: reload_tree_from_vault.clone(),
   });
-  let mut settings_props_val = SettingsViewProps::from_legacy(settings_legacy);
-  settings_props_val.page_width_px = page_width_px_sig;
-  settings_props_val.ui_font_scale = ui_font_scale_sig;
-  settings_props_val.editor_font_px = editor_font_px_sig;
-  settings_props_val.editor_font_family = editor_font_family_sig;
-  settings_props_val.show_format_bar = show_format_bar;
-  settings_props_val.show_page_title = show_page_title;
-  settings_props_val.account_name = account_name;
-  settings_props_val.ai_enabled = ai_enabled;
-  settings_props_val.rehost_images = rehost_images_sig;
-  settings_props_val.trashed_views = trashed_views_sig;
-  settings_props_val.live_views = live_views_sig;
-  settings_props_val.on_export_mica_zip = Some({
-    let exp = export_workspace_zip.clone();
-    Rc::new(move || exp(None, ArchiveExportFormat::BackupMicaZip))
-  });
-  settings_props_val.on_export_markdown_zip = Some({
-    let exp = export_workspace_zip.clone();
-    Rc::new(move || exp(None, ArchiveExportFormat::MarkdownZip))
-  });
-  settings_props_val.on_import_zip = Some({
-    let imp = on_import_zip_picker.clone();
-    Rc::new(move |notion: bool| imp(None, notion))
-  });
-  settings_props_val.on_import_folder = Some({
-    let imp = on_import_folder_picker.clone();
-    Rc::new(move || imp(None))
-  });
-  settings_props_val.on_restore_view = Some(on_restore_view.clone());
-  settings_props_val.on_purge_view = Some(on_purge_view);
-  settings_props_val.on_purge_all_trash = Some(on_purge_all_trash);
-  settings_props_val.on_refresh_trash = Some(reload_tree_from_vault.clone());
-  let settings_active_tab = signal(settings_view::TAB_APPEARANCE);
-  let stats_loading = signal(false);
-  let stats_error: Signal<Option<String>> = signal(None);
-  let stats_overview: Signal<Option<mica_core::UsageStatsOverview>> = signal(None);
-  let stats_activity: Signal<Option<mica_core::UsageStatsActivity>> = signal(None);
-  let stats_ws_filter: Signal<Option<String>> = signal(None);
-  let stats_range = signal("30d".to_string());
-  let stats_include_imports = signal(false);
-  let stats_fetch_gen = signal(0u64);
-  let stats_is_cloud = signal(false);
-
-  let refresh_usage_stats: Rc<dyn Fn()> = {
-    let v = vault.clone();
-    let cc = cloud_connector.clone();
-    Rc::new(move || {
-      let orig = active_origin.get_untracked();
-      let range = stats_range.get_untracked();
-      let ws_filter = stats_ws_filter.get_untracked();
-      let inc_imp = stats_include_imports.get_untracked();
-      let tz_offset = Local::now().offset().local_minus_utc() / 60;
-      let epoch = stats_fetch_gen.get_untracked().wrapping_add(1);
-      stats_fetch_gen.set(epoch);
-      let is_cloud = cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked();
-      stats_is_cloud.set(is_cloud);
-      stats_error.set(None);
-
-      if !is_cloud {
-        stats_loading.set(false);
-        match (
-          v.usage_overview(&orig),
-          v.usage_activity(&orig, &range, tz_offset, ws_filter.as_deref(), inc_imp),
-        ) {
-          (Ok(ov), Ok(act)) => {
-            stats_overview.set(Some(ov));
-            stats_activity.set(Some(act));
-          }
-          (Err(e), _) | (_, Err(e)) => stats_error.set(Some(e)),
-        }
-        return;
-      }
-
-      stats_loading.set(true);
-      let mut conn = cc.borrow().clone();
-      let cc_write = cc.clone();
-      let v_save = v.clone();
-      let orig_expect = orig.clone();
-      let srv_url = server_url.get_untracked();
-      let email_cur = account_email.get_untracked();
-      let uid_cur = account_id.get_untracked();
-      app_owner.run(move || {
-        spawn(async move {
-          let mut rotated_tokens: Option<(String, String)> = None;
-          let ov_res =
-            cloud_sync::with_auto_refresh(&mut conn, |c| async move { c.get_usage_overview().await })
-              .await;
-          let res = match ov_res {
-            Ok((ov, rot1)) => {
-              if rot1.is_some() {
-                rotated_tokens = rot1;
-              }
-              match cloud_sync::with_auto_refresh(&mut conn, |c| {
-                let r = range.clone();
-                let wf = ws_filter.clone();
-                async move { c.get_usage_activity(&r, tz_offset, wf.as_deref(), inc_imp).await }
-              })
-              .await
-              {
-                Ok((act, rot2)) => {
-                  if rot2.is_some() {
-                    rotated_tokens = rot2;
-                  }
-                  Ok((ov, act))
-                }
-                Err(e) => Err(e),
-              }
-            }
-            Err(e) => Err(e),
-          };
-          if stats_fetch_gen.get_untracked() != epoch
-            || active_origin.get_untracked() != orig_expect
-          {
-            return;
-          }
-          if let Some((ref new_tok, ref new_refresh)) = rotated_tokens {
-            *cc_write.borrow_mut() = conn.clone();
-            if allow_local && !new_tok.is_empty() {
-              let _ = v_save.save_server_credential_full(
-                &srv_url,
-                &email_cur,
-                &uid_cur,
-                new_tok,
-                new_refresh,
-              );
-            }
-          }
-          stats_loading.set(false);
-          match res {
-            Ok((ov, act)) => {
-              stats_overview.set(Some(ov));
-              stats_activity.set(Some(act));
-            }
-            Err(e) => stats_error.set(Some(e)),
-          }
-        });
-      });
-    })
-  };
-
-  let usage_stats_props = usage_stats_view::UsageStatsProps {
-    dark_mode,
-    is_cloud: stats_is_cloud,
-    loading: stats_loading,
-    error: stats_error,
-    overview: stats_overview,
-    activity: stats_activity,
-    selected_workspace_id: stats_ws_filter,
-    selected_range: stats_range,
-    include_imports: stats_include_imports,
-    on_refresh: refresh_usage_stats.clone(),
-    on_select_workspace: {
-      let r = refresh_usage_stats.clone();
-      Rc::new(move |ws_id| {
-        stats_ws_filter.set(ws_id);
-        r();
-      })
-    },
-    on_select_range: {
-      let r = refresh_usage_stats.clone();
-      Rc::new(move |range| {
-        stats_range.set(range);
-        r();
-      })
-    },
-    on_toggle_imports: {
-      let r = refresh_usage_stats.clone();
-      Rc::new(move |inc| {
-        stats_include_imports.set(inc);
-        r();
-      })
-    },
-  };
-
-  let on_open_usage_stats: Rc<dyn Fn()> = {
-    let r = refresh_usage_stats.clone();
-    Rc::new(move || {
-      account_menu_open.set(false);
-      settings_active_tab.set(settings_view::TAB_USAGE_STATS);
-      settings_modal_open.set(true);
-      r();
-    })
-  };
-
-  settings_props_val.on_open_about = Some(Rc::new(move || {
-    settings_modal_open.set(false);
-    about_modal_open.set(true);
-  }));
-  settings_props_val.active_tab = Some(settings_active_tab);
-  settings_props_val.usage_stats = Some(usage_stats_props);
-  let settings_props = Rc::new(settings_props_val);
 
   // Desktop auto-updater state + callbacks (Web reports server-managed updates)
   let available_update: Signal<Option<updater::UpdateInfo>> = signal(None);
@@ -3091,6 +2909,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     show_cloud_signin: signal(true),
     display_name: account_name,
     email: account_email,
+    avatar_url: account_avatar_url,
     active_origin: world_active_origin,
     signed_in_origins: signed_in_origins_sig,
     app_version: APP_VERSION,

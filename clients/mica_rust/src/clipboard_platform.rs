@@ -467,6 +467,12 @@ pub fn mime_for_image(bytes: &[u8], name: &str) -> &'static str {
   if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
     return "image/webp";
   }
+  if bytes.len() >= 12
+    && &bytes[4..8] == b"ftyp"
+    && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+  {
+    return "image/avif";
+  }
   if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
     return "image/bmp";
   }
@@ -481,6 +487,8 @@ pub fn mime_for_image(bytes: &[u8], name: &str) -> &'static str {
     "image/gif"
   } else if lower.ends_with(".webp") {
     "image/webp"
+  } else if lower.ends_with(".avif") {
+    "image/avif"
   } else if lower.ends_with(".bmp") {
     "image/bmp"
   } else if lower.ends_with(".svg") {

@@ -1780,6 +1780,12 @@ pub(crate) fn format_footer_account_label(raw: &str) -> String {
 fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<SidebarCallbacks>) -> impl IntoElement {
   let cb_acct = cb.clone();
   let cb_set = cb;
+  let avatar_ctx = use_context::<crate::user_avatar::AccountAvatarSignal>().unwrap_or_else(|| {
+    crate::user_avatar::AccountAvatarSignal {
+      url: signal(None),
+      email: signal(String::new()),
+    }
+  });
   view()
     .h(px(44.0)).px_2().flex_row().items_center().justify_between().gap_1()
     .border_t_1().border_color(move || palette(dark_mode.get()).border_subtle)
@@ -1789,25 +1795,15 @@ fn account_footer(account_name: Signal<String>, dark_mode: Signal<bool>, cb: Rc<
         .flex_1().min_w(px(0.0)).h(px(34.0)).px_1().flex_row().items_center().gap_2().rounded(px(6.0))
         .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
         .on_press(move || (cb_acct.on_toggle_account_menu)())
-        .child(
-          view()
-            .w(px(28.0)).h(px(28.0)).flex_shrink_0().rounded_full().items_center().justify_center()
-            .bg(move || palette(dark_mode.get()).surface_hover)
-            .child(
-              text(move || {
-                let label = format_footer_account_label(&account_name.get());
-                if label == "未登录" {
-                  "M".to_string()
-                } else if label == "本地工作区" {
-                  if crate::web_runtime::is_web() { "M".to_string() } else { "本".to_string() }
-                } else {
-                  label.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "M".to_string())
-                }
-              })
-              .text_size(px(12.0)).font_weight(FontWeight::MEDIUM)
-              .text_color(move || palette(dark_mode.get()).text_primary),
-            ),
-        )
+        .child(crate::user_avatar::user_avatar(
+          dark_mode,
+          avatar_ctx.url,
+          account_name,
+          avatar_ctx.email,
+          28.0,
+          12.0,
+          None,
+        ))
         .child(
           text(move || format_footer_account_label(&account_name.get()))
           .text_size(px(14.0)).font_weight(FontWeight::MEDIUM)

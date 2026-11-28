@@ -560,6 +560,7 @@ pub fn about_modal_view(props: AboutModalProps) -> impl IntoElement {
           view()
             .test_id("about-modal")
             .w(px(420.0))
+            .max_w(relative(0.92))
             .rounded(px(12.0))
             .p(px(24.0))
             .gap(px(16.0))
@@ -755,6 +756,7 @@ pub struct AccountMenuState {
   pub show_cloud_signin: Signal<bool>,
   pub display_name: Signal<String>,
   pub email: Signal<String>,
+  pub avatar_url: Signal<Option<String>>,
   pub active_origin: Signal<String>,
   pub signed_in_origins: Signal<Vec<(String, String)>>,
   pub app_version: &'static str,
@@ -775,6 +777,7 @@ enum SessionAction {
   SignInCloud,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn account_avatar_initial(is_local: bool, display_name: &str, email: &str) -> String {
   if is_local {
     return "本".to_string();
@@ -853,6 +856,7 @@ pub fn account_menu_popover(
       let show_cloud_signin = st.show_cloud_signin;
       let display_name = st.display_name;
       let email = st.email;
+      let avatar_url = st.avatar_url;
       let active_origin = st.active_origin;
       let signed_in_origins = st.signed_in_origins;
       let app_version = st.app_version;
@@ -904,28 +908,15 @@ pub fn account_menu_popover(
                   .flex_row()
                   .items_center()
                   .gap(px(12.0))
-                  .child(
-                    view()
-                      .w(px(40.0))
-                      .h(px(40.0))
-                      .rounded_full()
-                      .flex_shrink_0()
-                      .items_center()
-                      .justify_center()
-                      .bg(move || palette(dark_mode.get()).surface_hover)
-                      .child(
-                        text(move || {
-                          account_avatar_initial(
-                            is_local.get(),
-                            &display_name.get(),
-                            &email.get(),
-                          )
-                        })
-                        .text_size(px(15.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(move || palette(dark_mode.get()).text_primary),
-                      ),
-                  )
+                  .child(crate::user_avatar::user_avatar(
+                    dark_mode,
+                    avatar_url,
+                    display_name,
+                    email,
+                    40.0,
+                    15.0,
+                    None,
+                  ))
                   .child(
                     view()
                       .flex_1()

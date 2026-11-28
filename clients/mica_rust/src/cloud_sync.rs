@@ -71,6 +71,7 @@ pub fn canonicalize_cloud_url(raw: &str) -> String {
 pub struct CloudBootstrapPayload {
   pub account_id: String,
   pub display_name: Option<String>,
+  pub avatar_version: Option<String>,
   pub workspaces: Vec<Workspace>,
   pub active_workspace_id: Option<Uuid>,
   pub views: Vec<View>,
@@ -461,25 +462,35 @@ pub async fn fetch_cloud_bootstrap(
   preferred_ws: Option<Uuid>,
 ) -> Result<CloudBootstrapPayload, String> {
   let mut refreshed_tokens: Option<(String, String)> = None;
-  let (account_id, display_name) = if let (Some(uid), Some(dname)) = (conn.user_id(), conn.display_name()) {
-    (uid.to_string(), Some(dname.to_string()))
-  } else {
-    let (me, rot) = with_auto_refresh(conn, |c| async move { c.fetch_me().await }).await?;
-    if rot.is_some() {
-      refreshed_tokens = rot;
-    }
-    let uid = me
-      .id
-      .filter(|s| !s.trim().is_empty())
-      .or_else(|| conn.user_id().map(str::to_string))
-      .ok_or_else(|| "server /api/auth/me returned empty user id".to_string())?;
-    let dname = (!me.display_name.trim().is_empty()).then(|| me.display_name.trim().to_string());
-    *conn = conn
-      .clone()
-      .with_user_id(Some(uid.clone()))
-      .with_display_name(dname.clone());
-    (uid, dname)
-  };
+  let (account_id, display_name, avatar_version) =
+    if let (Some(uid), Some(dname)) = (conn.user_id(), conn.display_name()) {
+      (
+        uid.to_string(),
+        Some(dname.to_string()),
+        conn.avatar_version().map(str::to_string),
+      )
+    } else {
+      let (me, rot) = with_auto_refresh(conn, |c| async move { c.fetch_me().await }).await?;
+      if rot.is_some() {
+        refreshed_tokens = rot;
+      }
+      let uid = me
+        .id
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| conn.user_id().map(str::to_string))
+        .ok_or_else(|| "server /api/auth/me returned empty user id".to_string())?;
+      let dname = (!me.display_name.trim().is_empty()).then(|| me.display_name.trim().to_string());
+      let av = me
+        .avatar_version
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+      *conn = conn
+        .clone()
+        .with_user_id(Some(uid.clone()))
+        .with_display_name(dname.clone())
+        .with_avatar_version(av.clone());
+      (uid, dname, av)
+    };
 
   let (workspaces, rot_ws) =
     with_auto_refresh(conn, |c| async move { c.list_workspaces().await }).await?;
@@ -504,6 +515,7 @@ pub async fn fetch_cloud_bootstrap(
   Ok(CloudBootstrapPayload {
     account_id,
     display_name,
+    avatar_version,
     workspaces,
     active_workspace_id: target_ws_id,
     views,
@@ -723,6 +735,8 @@ pub(crate) struct CloudSessionHandles {
   pub account_id: Signal<String>,
   pub account_name: Signal<String>,
   pub account_email: Signal<String>,
+  pub account_avatar_version: Signal<Option<String>>,
+  pub avatar_cache_bust_rev: Signal<u64>,
   pub is_cloud_signed_in: Signal<bool>,
   pub cloud_status: Signal<String>,
   pub auth_gen: Signal<u64>,
@@ -1345,6 +1359,8 @@ impl CloudSessionHandles {
       .map(str::to_string)
       .unwrap_or_else(|| crate::sidebar::format_footer_account_label(&email));
     self.account_name.set(resolved_name);
+    self.avatar_cache_bust_rev.set(0);
+    self.account_avatar_version.set(payload.avatar_version);
     self.is_cloud_signed_in.set(true);
     self.world_can_close.set(true);
     self.world_switcher_open.set(false);
@@ -1691,6 +1707,8 @@ impl CloudSessionHandles {
         h.account_id.set(String::new());
         h.account_email.set(String::new());
         h.account_name.set("未登录".to_string());
+        h.account_avatar_version.set(None);
+        h.avatar_cache_bust_rev.set(0);
         h.cloud_status.set("请登录云端账户".to_string());
         h.world_error.set(String::new());
         h.world_info.set(String::new());
@@ -1717,6 +1735,8 @@ impl CloudSessionHandles {
     self.account_id.set(String::new());
     self.account_email.set("这台设备".to_string());
     self.account_name.set("本地工作区".to_string());
+    self.account_avatar_version.set(None);
+    self.avatar_cache_bust_rev.set(0);
     self.cloud_status.set("已切换回本地离线 SQLite Vault".to_string());
 
     let local_all = self.vault.list_views(DEFAULT_ORIGIN);
@@ -2348,6 +2368,11 @@ impl CloudSessionHandles {
         members
           .into_iter()
           .map(|m| WorkspaceMemberEntry {
+            avatar_url: mica_client::build_avatar_url(
+              &srv_url,
+              &m.user_id,
+              m.avatar_version.as_deref(),
+            ),
             user_id: m.user_id,
             display_name: m.display_name,
             email: m.email,
